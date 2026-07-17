@@ -1,5 +1,11 @@
 import { type Database, createDb } from '@flytrace/db';
-import { type Clock, type Logger, createLogger, systemClock } from '@flytrace/shared';
+import {
+  type Clock,
+  type Logger,
+  createLogger,
+  redisKeyPrefix,
+  systemClock,
+} from '@flytrace/shared';
 import { Redis } from 'ioredis';
 import type { ApiConfig } from './config.ts';
 
@@ -13,6 +19,8 @@ export interface AppContext {
   clock: Clock;
   db: Database;
   redis: Redis;
+  /** Redis key namespace for this environment (docs/09 §9.2). */
+  redisPrefix: string;
   close: () => Promise<void>;
 }
 
@@ -37,6 +45,7 @@ export function createContext(config: ApiConfig): AppContext {
     clock: systemClock,
     db,
     redis,
+    redisPrefix: redisKeyPrefix(config.APP_ENV),
     close: async () => {
       redis.disconnect();
       await closeDb();

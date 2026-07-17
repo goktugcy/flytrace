@@ -29,6 +29,15 @@ export const streamKeys = {
   flight: (flightId: string): string => `stream:flight:${flightId}`,
 } as const;
 
+/**
+ * Redis key namespace for an environment (docs/09 §9.2), e.g. `flytrace:prod:`.
+ * Shared so every app (tracker publisher, api subscriber) agrees on the prefix.
+ */
+export function redisKeyPrefix(appEnv: 'local' | 'staging' | 'production'): string {
+  const env = appEnv === 'production' ? 'prod' : appEnv === 'staging' ? 'stg' : 'local';
+  return `flytrace:${env}:`;
+}
+
 export type EventHandler = (event: EventEnvelope) => void | Promise<void>;
 
 export interface EventBus {

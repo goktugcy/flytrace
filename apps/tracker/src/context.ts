@@ -1,4 +1,10 @@
-import { type Clock, type Logger, createLogger, systemClock } from '@flytrace/shared';
+import {
+  type Clock,
+  type Logger,
+  createLogger,
+  redisKeyPrefix,
+  systemClock,
+} from '@flytrace/shared';
 import { Redis } from 'ioredis';
 import { RedisEventBus } from './bus/redis-bus.ts';
 import type { TrackerConfig } from './config.ts';
@@ -8,11 +14,6 @@ import { FixturePositionSource } from './source/fixture-source.ts';
 import { OpenSkyPositionSource } from './source/opensky-source.ts';
 import type { PositionSource } from './source/port.ts';
 import { RedisFlightRegistry, RedisFlightStateStore, RedisLock } from './state/redis.ts';
-
-function keyPrefix(appEnv: TrackerConfig['APP_ENV']): string {
-  const env = appEnv === 'production' ? 'prod' : appEnv === 'staging' ? 'stg' : 'local';
-  return `flytrace:${env}:`;
-}
 
 export interface TrackerContext {
   config: TrackerConfig;
@@ -29,7 +30,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     base: { app: 'tracker', env: config.APP_ENV },
   });
   const clock = systemClock;
-  const prefix = keyPrefix(config.APP_ENV);
+  const prefix = redisKeyPrefix(config.APP_ENV);
 
   const redis = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: 3,

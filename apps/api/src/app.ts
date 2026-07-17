@@ -1,9 +1,10 @@
 import { sql } from '@flytrace/db';
-import { AppError, correlationId, isAppError } from '@flytrace/shared';
+import { AppError, correlationId, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppContext } from './context.ts';
+import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 export interface AppEnv {
   Variables: { requestId: string; ctx: AppContext };
@@ -66,6 +67,28 @@ export function createApp(ctx: AppContext) {
       meta: { requestId: c.get('requestId') },
     }),
   );
+
+  // ── WebSocket ticket (docs/12 §12.7) ──
+  // Short-lived, single-use handshake credential. Guests get a public-channel
+  // ticket; once Better Auth lands (Phase 1), an authenticated session upgrades
+  // this to a user/admin ticket bound to the session's userId.
+  app.post('/api/v1/ws/ticket', async (c) => {
+    const now = ctx.clock.now();
+    const ttlMs = 60_000;
+    const payload: TicketPayload = {
+      uid: null,
+      role: 'guest',
+      iat: now,
+      exp: now + ttlMs,
+      jti: uuidv7(now),
+      bind: '',
+    };
+    const token = await signTicket(payload, ctx.config.AUTH_SECRET);
+    return c.json({
+      data: { token, expiresInMs: ttlMs },
+      meta: { requestId: c.get('requestId') },
+    });
+  });
 
   // ── Fallbacks & error mapping ──
   app.notFound((c) =>

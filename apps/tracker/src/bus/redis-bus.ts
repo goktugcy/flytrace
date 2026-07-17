@@ -39,20 +39,24 @@ export class RedisEventBus implements EventBus {
   async publish(event: EventEnvelope): Promise<void> {
     const body = JSON.stringify(event);
     const flightId = event.partitionKey;
+    // XADD the per-flight stream first so its entry id can travel with the
+    // pub/sub message as `sid` — the WS layer uses it as the reconnect cursor
+    // (XRANGE replay), so live `event.id` and replayed ids share one space.
+    const sid = await this.redis.xadd(
+      this.k(streamKeys.flight(flightId)),
+      'MAXLEN',
+      '~',
+      this.opts.flightMaxLen,
+      '*',
+      'e',
+      body,
+    );
+    const message = JSON.stringify({ sid, e: event });
     await this.redis
       .multi()
       .xadd(this.k(streamKeys.events), 'MAXLEN', '~', this.opts.eventsMaxLen, '*', 'e', body)
-      .xadd(
-        this.k(streamKeys.flight(flightId)),
-        'MAXLEN',
-        '~',
-        this.opts.flightMaxLen,
-        '*',
-        'e',
-        body,
-      )
-      .publish(this.k(busChannels.events), body)
-      .publish(this.k(busChannels.flight(flightId)), body)
+      .publish(this.k(busChannels.events), message)
+      .publish(this.k(busChannels.flight(flightId)), message)
       .exec();
   }
 
@@ -71,7 +75,8 @@ export class RedisEventBus implements EventBus {
     this.subscriber = this.redis.duplicate();
     await this.subscriber.subscribe(this.k(busChannels.events));
     this.subscriber.on('message', (_channel, message) => {
-      const parsed = baseEnvelopeSchema.safeParse(JSON.parse(message));
+      const outer = JSON.parse(message) as { sid?: string; e?: unknown };
+      const parsed = baseEnvelopeSchema.safeParse(outer.e);
       if (!parsed.success) return;
       const event = parsed.data as EventEnvelope;
       for (const h of [
