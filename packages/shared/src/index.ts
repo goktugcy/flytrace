@@ -4,3 +4,4 @@ export * from './errors/index.ts';
 export * from './ids/index.ts';
 export * from './clock/index.ts';
 export * from './events/index.ts';
+export * from './bus/index.ts';
