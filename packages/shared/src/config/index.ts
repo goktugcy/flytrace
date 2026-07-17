@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -5,6 +7,47 @@ import { z } from 'zod';
  * Fail-fast: throws on boot if required vars are missing/invalid.
  * Never read process.env anywhere else — import `loadConfig()` instead.
  */
+
+/** Locate the monorepo root (the dir containing turbo.json), walking up. */
+function findRepoRoot(start: string): string | null {
+  let dir = start;
+  for (let i = 0; i < 12; i += 1) {
+    if (existsSync(join(dir, 'turbo.json'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+let rootEnvLoaded = false;
+
+/**
+ * Load the single root `.env` into process.env, regardless of the app's cwd, so
+ * the monorepo has ONE env file instead of a copy per app. Real environment
+ * variables (shell/CI/Docker) always win — file values only fill gaps. Inline
+ * `# comments` and surrounding quotes are stripped. Idempotent.
+ */
+export function loadRootEnv(): void {
+  if (rootEnvLoaded) return;
+  rootEnvLoaded = true;
+  const root = findRepoRoot(process.cwd());
+  if (!root) return;
+  const file = join(root, '.env');
+  if (!existsSync(file)) return;
+
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    const key = match[1] as string;
+    let value = (match[2] ?? '').trim();
+    const quoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+    value = quoted ? value.slice(1, -1) : value.replace(/\s+#.*$/, '').trim();
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
 
 const boolish = z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1');
 
@@ -81,10 +124,13 @@ export type Config = z.infer<typeof fullSchema>;
  */
 export function loadConfig<S extends z.ZodTypeAny = typeof fullSchema>(
   schema?: S,
-  source: Record<string, unknown> = process.env,
+  source?: Record<string, unknown>,
 ): z.infer<S> {
+  // Fill process.env from the single root .env (missing keys only) before read.
+  loadRootEnv();
+  const effectiveSource = source ?? process.env;
   const effective = (schema ?? fullSchema) as z.ZodTypeAny;
-  const parsed = effective.safeParse(source);
+  const parsed = effective.safeParse(effectiveSource);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
