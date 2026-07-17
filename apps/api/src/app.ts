@@ -1,18 +1,35 @@
-import { sql } from '@flytrace/db';
+import { type AuthUser, createAuthRepo, sql } from '@flytrace/db';
 import { AppError, correlationId, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
+import { attachSession, createAuthRoutes } from './auth/routes.ts';
+import { AuthService, bunHasher } from './auth/service.ts';
 import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 export interface AppEnv {
-  Variables: { requestId: string; ctx: AppContext };
+  Variables: {
+    requestId: string;
+    ctx: AppContext;
+    user: AuthUser | null;
+    sessionToken: string | undefined;
+  };
 }
 
 export function createApp(ctx: AppContext) {
   const app = new Hono<AppEnv>();
+
+  const authService = new AuthService({
+    repo: createAuthRepo(ctx.db),
+    clock: ctx.clock,
+    hasher: bunHasher,
+    sessionTtlMs: SESSION_TTL_MS,
+  });
+  const cookieSecure = ctx.config.APP_ENV !== 'local';
 
   // ── Middleware chain (see docs/11-api.md §11.10) ──
   app.use('*', async (c, next) => {
@@ -39,6 +56,15 @@ export function createApp(ctx: AppContext) {
       credentials: true,
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
+  );
+
+  // Populate c.var.user from the session cookie (best-effort; skips DB when absent).
+  app.use('*', attachSession(authService));
+
+  // ── Auth (credentials + server sessions; docs/15 §15.1) ──
+  app.route(
+    '/api/auth',
+    createAuthRoutes(authService, { allowedOrigins: ctx.config.CORS_ORIGINS, cookieSecure }),
   );
 
   // ── System routes ──
@@ -76,9 +102,10 @@ export function createApp(ctx: AppContext) {
   app.post('/api/v1/ws/ticket', async (c) => {
     const now = ctx.clock.now();
     const ttlMs = 60_000;
+    const user = c.get('user');
     const payload: TicketPayload = {
-      uid: null,
-      role: 'guest',
+      uid: user?.id ?? null,
+      role: user ? (user.role === 'admin' ? 'admin' : 'user') : 'guest',
       iat: now,
       exp: now + ttlMs,
       jti: uuidv7(now),
@@ -89,6 +116,13 @@ export function createApp(ctx: AppContext) {
       data: { token, expiresInMs: ttlMs },
       meta: { requestId: c.get('requestId') },
     });
+  });
+
+  // Current authenticated user.
+  app.get('/api/v1/me', (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'not signed in');
+    return c.json({ data: { user }, meta: { requestId: c.get('requestId') } });
   });
 
   // ── Public flight read endpoints (docs/11 §11.6) ──
