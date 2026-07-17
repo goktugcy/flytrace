@@ -5,7 +5,11 @@ import {
   createFlightRepo,
   createFlightStatusRepo,
 } from '@flytrace/db';
-import { ProviderRegistry, fixtureProviderFactory } from '@flytrace/providers';
+import {
+  ProviderRegistry,
+  concreteProviderFactories,
+  fixtureProviderFactory,
+} from '@flytrace/providers';
 import {
   type EventEnvelope,
   type Logger,
@@ -94,15 +98,21 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     }),
     logger,
     clock: { now: Date.now, nowIso: () => new Date().toISOString() },
-    config: {},
+    // Per-provider base URLs (compliance/legal basis; docs/08 §8.9), keyed by provider key.
+    config: { statusUrls: config.WORKER_PROVIDER_STATUS_URLS },
   };
   const fixtureIatas = config.WORKER_FIXTURE_PROVIDER_IATAS;
-  const registry = await ProviderRegistry.build(
-    fixtureIatas.length > 0
+  // Every real provider is registered; only keys in `enabled` are instantiated.
+  // Concrete providers ship disabled — enable via WORKER_ENABLED_PROVIDERS (§8.6).
+  const factories = [
+    ...concreteProviderFactories(),
+    ...(fixtureIatas.length > 0
       ? [fixtureProviderFactory({ key: 'fixture', airlineIata: fixtureIatas })]
-      : [],
-    { enabled: new Set(fixtureIatas.length > 0 ? ['fixture'] : []), ctx: providerCtx },
-  );
+      : []),
+  ];
+  const enabled = new Set<string>(config.WORKER_ENABLED_PROVIDERS);
+  if (fixtureIatas.length > 0) enabled.add('fixture');
+  const registry = await ProviderRegistry.build(factories, { enabled, ctx: providerCtx });
 
   // Publish domain events on the bus (durable stream + pub/sub), like the tracker.
   const emit = async (env: EventEnvelope): Promise<void> => {

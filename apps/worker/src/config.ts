@@ -17,6 +17,33 @@ const workerSchema = z.object({
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean),
     ),
+  /**
+   * Concrete provider keys to enable (e.g. "thy,pegasus"). Every real provider
+   * is registered but ships disabled (docs/08 §8.6/§8.9) — enable per compliance
+   * clearance without a redeploy.
+   */
+  WORKER_ENABLED_PROVIDERS: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  /** Base URL per provider key, JSON map (compliance/legal basis; §8.9). */
+  WORKER_PROVIDER_STATUS_URLS: z
+    .string()
+    .default('{}')
+    .transform((v, ctx) => {
+      try {
+        const parsed = JSON.parse(v) as Record<string, string>;
+        return parsed;
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
+        return z.NEVER;
+      }
+    }),
 });
 
 const workerConfigSchema = configSchemas.base
