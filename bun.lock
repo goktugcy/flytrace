@@ -38,6 +38,20 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/worker": {
+      "name": "@flytrace/worker",
+      "version": "0.0.0",
+      "dependencies": {
+        "@flytrace/db": "workspace:*",
+        "@flytrace/shared": "workspace:*",
+        "ioredis": "^5.4.2",
+        "zod": "^3.24.1",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.1.14",
+        "typescript": "^5.7.3",
+      },
+    },
     "packages/db": {
       "name": "@flytrace/db",
       "version": "0.0.0",
@@ -142,6 +156,8 @@
     "@flytrace/shared": ["@flytrace/shared@workspace:packages/shared"],
 
     "@flytrace/tracker": ["@flytrace/tracker@workspace:apps/tracker"],
+
+    "@flytrace/worker": ["@flytrace/worker@workspace:apps/worker"],
 
     "@ioredis/commands": ["@ioredis/commands@1.10.0", "", {}, "sha512-UmeW7z4LfctwoQ5wkhVzgq8tXkreED2xZGpX+Bg+zA+WJFZCT6c062AfCK/Dfk81xZnnwdhJCUMkitihRaoC2Q=="],
 

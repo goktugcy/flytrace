@@ -4,6 +4,7 @@ import * as schema from './schema/index.ts';
 
 export * as schema from './schema/index.ts';
 export { sql, eq, and, or, desc, asc, inArray } from 'drizzle-orm';
+export * from './repos/flights.ts';
 
 export type Database = ReturnType<typeof createDb>['db'];
 
