@@ -55,6 +55,8 @@ const baseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_ENV: z.enum(['local', 'staging', 'production']).default('local'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
+  /** Public web app base URL (deep links in notifications). */
+  WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
 });
 
 const databaseSchema = z.object({
@@ -96,6 +98,12 @@ const webPushSchema = z.object({
   WEB_PUSH_SUBJECT: z.string().default('mailto:ops@flytrace.local'),
 });
 
+const telegramSchema = z.object({
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_BOT_USERNAME: z.string().optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
+});
+
 /** Compose the schemas an app needs; each app validates only its slice. */
 export const configSchemas = {
   base: baseSchema,
@@ -105,6 +113,7 @@ export const configSchemas = {
   auth: authSchema,
   opensky: openskySchema,
   webPush: webPushSchema,
+  telegram: telegramSchema,
   boolish,
 };
 
@@ -114,7 +123,8 @@ const fullSchema = baseSchema
   .merge(apiSchema)
   .merge(authSchema)
   .merge(openskySchema)
-  .merge(webPushSchema);
+  .merge(webPushSchema)
+  .merge(telegramSchema);
 
 export type Config = z.infer<typeof fullSchema>;
 

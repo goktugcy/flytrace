@@ -1,5 +1,11 @@
 import { type Database, createDb, createNotifyRepo } from '@flytrace/db';
 import {
+  ChannelRegistry,
+  FakeChannel,
+  TelegramChannel,
+  WebPushChannel,
+} from '@flytrace/notifications';
+import {
   type Logger,
   busChannels,
   createLogger,
@@ -10,9 +16,6 @@ import { Redis } from 'ioredis';
 import type { NotifierConfig } from './config.ts';
 import { StreamConsumer } from './consumer.ts';
 import { Notifier } from './notifier.ts';
-import { FakePushSender } from './push/fake-sender.ts';
-import type { PushSender } from './push/port.ts';
-import { WebPushSender } from './push/web-push-sender.ts';
 
 export interface NotifierContext {
   config: NotifierConfig;
@@ -37,7 +40,7 @@ export function createContext(config: NotifierConfig): NotifierContext {
   });
   redis.on('error', (err) => logger.error('redis error', { err: String(err) }));
 
-  const sender = buildSender(config, logger);
+  const channels = buildChannels(config, logger);
   const repo = createNotifyRepo(db);
 
   // On delivery, announce NotificationSent on the bus (dashboard feed; docs/10 §10.3).
@@ -48,7 +51,7 @@ export function createContext(config: NotifierConfig): NotifierContext {
         occurredAt: new Date().toISOString(),
         dedupeKey: `${notificationId}:sent`,
         partitionKey: userId,
-        payload: { notificationId, userId, channel: 'webpush', status: 'sent' },
+        payload: { notificationId, userId, status: 'sent' },
       },
       { producer: 'notifier' },
     );
@@ -60,7 +63,7 @@ export function createContext(config: NotifierConfig): NotifierContext {
       .exec();
   };
 
-  const notifier = new Notifier({ repo, sender, logger, onDelivered });
+  const notifier = new Notifier({ repo, channels, logger, onDelivered });
   const consumer = new StreamConsumer(redis, prefix, notifier, logger, {
     group: config.NOTIFIER_GROUP,
     consumer: config.NOTIFIER_CONSUMER,
@@ -82,17 +85,28 @@ export function createContext(config: NotifierConfig): NotifierContext {
   };
 }
 
-function buildSender(config: NotifierConfig, logger: Logger): PushSender {
-  const haveVapid = Boolean(config.WEB_PUSH_PUBLIC_KEY && config.WEB_PUSH_PRIVATE_KEY);
-  if (config.NOTIFIER_FAKE_PUSH || !haveVapid) {
-    logger.warn('using fake push sender', {
-      reason: config.NOTIFIER_FAKE_PUSH ? 'flag' : 'no VAPID keys',
-    });
-    return new FakePushSender();
+/** Build the channel registry from config (docs/10 §10.1). Fake channels power
+ * offline dev / the pipeline smoke; real adapters activate when configured. */
+function buildChannels(config: NotifierConfig, logger: Logger): ChannelRegistry {
+  const registry = new ChannelRegistry();
+  if (config.NOTIFIER_FAKE_PUSH) {
+    logger.warn('using fake channels (NOTIFIER_FAKE_PUSH)');
+    return registry.register(new FakeChannel('webpush')).register(new FakeChannel('telegram'));
   }
-  return new WebPushSender({
-    publicKey: config.WEB_PUSH_PUBLIC_KEY as string,
-    privateKey: config.WEB_PUSH_PRIVATE_KEY as string,
-    subject: config.WEB_PUSH_SUBJECT,
-  });
+  if (config.WEB_PUSH_PUBLIC_KEY && config.WEB_PUSH_PRIVATE_KEY) {
+    registry.register(
+      new WebPushChannel({
+        publicKey: config.WEB_PUSH_PUBLIC_KEY,
+        privateKey: config.WEB_PUSH_PRIVATE_KEY,
+        subject: config.WEB_PUSH_SUBJECT,
+      }),
+    );
+  }
+  if (config.TELEGRAM_BOT_TOKEN) {
+    registry.register(
+      new TelegramChannel({ token: config.TELEGRAM_BOT_TOKEN, webBaseUrl: config.WEB_BASE_URL }),
+    );
+  }
+  logger.info('channels enabled', { channels: registry.keys() });
+  return registry;
 }

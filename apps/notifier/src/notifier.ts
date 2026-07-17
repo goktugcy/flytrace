@@ -1,4 +1,5 @@
-import type { ChannelKey, WatchlistItem, WebPushSubscription } from '@flytrace/db';
+import type { ChannelEndpoint, ChannelKey, WatchlistItem } from '@flytrace/db';
+import type { ChannelRegistry, RenderedMessage } from '@flytrace/notifications';
 import {
   type DbEventTypeName,
   type EventEnvelope,
@@ -6,7 +7,6 @@ import {
   type ProviderUpdatedPayload,
   domainToDbEventType,
 } from '@flytrace/shared';
-import type { PushMessage, PushSender } from './push/port.ts';
 import { renderPush } from './render.ts';
 
 /** The slice of the notify repo the core needs (full NotifyRepo satisfies it). */
@@ -22,7 +22,7 @@ export interface NotifierRepo {
     payload: unknown;
     dedupeKey: string;
   }): Promise<{ id: string } | null>;
-  webPushSubscriptions(userId: string): Promise<WebPushSubscription[]>;
+  channelEndpoints(userId: string, channel: ChannelKey): Promise<ChannelEndpoint[]>;
   markSent(id: string): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
   disableChannel(channelId: string): Promise<void>;
@@ -30,7 +30,7 @@ export interface NotifierRepo {
 
 export interface NotifierDeps {
   repo: NotifierRepo;
-  sender: PushSender;
+  channels: ChannelRegistry;
   logger: Logger;
   /** Called after a notification is delivered (wired to a WS/bus publish). */
   onDelivered?: (userId: string, notificationId: string) => Promise<void>;
@@ -38,10 +38,10 @@ export interface NotifierDeps {
 
 /**
  * The notification core (docs/10 §10.3): matches a domain event against active
- * watchlist items, then for each (user, event, webpush) delivers exactly once —
- * the unique dedupe key on the notifications ledger makes a redelivered event a
- * no-op. Dead subscriptions (410/404) are pruned. Pure of transport: the Redis
- * consumer drives it, and tests drive it with fakes.
+ * watchlist items, then for each (user, event, channel) the user subscribed to,
+ * delivers exactly once — the unique dedupe key makes a redelivered event a
+ * no-op. Channel-agnostic: it only looks up adapters in the registry. Dead
+ * endpoints (410/403) are pruned. Transport-free; tests drive it with fakes.
  */
 export class Notifier {
   constructor(private readonly deps: NotifierDeps) {}
@@ -60,53 +60,69 @@ export class Notifier {
     await this.deliver(env, dbType, renderPush(env, dbType));
   }
 
-  /** Deliver one notifiable (event, type, message) to all matching watchers. */
+  /** Deliver a notifiable (event, type, message) to every matching watcher/channel. */
   private async deliver(
     env: EventEnvelope,
     dbType: DbEventTypeName,
-    message: PushMessage,
+    message: RenderedMessage,
   ): Promise<void> {
-    const flightId = env.partitionKey;
-    const items = await this.deps.repo.watchesForFlight(flightId);
+    const items = await this.deps.repo.watchesForFlight(env.partitionKey);
     for (const item of items) {
       if (!item.eventTypes.includes(dbType)) continue;
-      if (!item.channels.includes('webpush')) continue; // v1: Web Push only
-
-      const dedupeKey = `${item.userId}:${env.dedupeKey}:${dbType}:webpush`;
-      const row = await this.deps.repo.insertQueued({
-        userId: item.userId,
-        watchlistItemId: item.id,
-        flightId,
-        channel: 'webpush',
-        title: message.title,
-        body: message.body,
-        payload: env.payload,
-        dedupeKey,
-      });
-      if (!row) continue; // duplicate → exactly-once guarantee
-
-      const subs = await this.deps.repo.webPushSubscriptions(item.userId);
-      if (subs.length === 0) {
-        await this.deps.repo.markFailed(row.id, 'no active web push subscription');
-        continue;
+      for (const channelKey of item.channels) {
+        if (!this.deps.channels.has(channelKey)) continue; // adapter not enabled
+        await this.deliverChannel(env, dbType, message, item, channelKey);
       }
+    }
+  }
 
-      let anyOk = false;
-      for (const sub of subs) {
-        const res = await this.deps.sender.send(sub.address, message);
-        if (res.ok) anyOk = true;
-        else if (res.gone) {
-          this.deps.logger.info('pruning dead web push subscription', { channelId: sub.channelId });
-          await this.deps.repo.disableChannel(sub.channelId);
-        }
-      }
+  private async deliverChannel(
+    env: EventEnvelope,
+    dbType: DbEventTypeName,
+    message: RenderedMessage,
+    item: WatchlistItem,
+    channelKey: ChannelKey,
+  ): Promise<void> {
+    const dedupeKey = `${item.userId}:${env.dedupeKey}:${dbType}:${channelKey}`;
+    const row = await this.deps.repo.insertQueued({
+      userId: item.userId,
+      watchlistItemId: item.id,
+      flightId: env.partitionKey,
+      channel: channelKey,
+      title: message.title,
+      body: message.body,
+      payload: env.payload,
+      dedupeKey,
+    });
+    if (!row) return; // duplicate → exactly-once guarantee
 
-      if (anyOk) {
-        await this.deps.repo.markSent(row.id);
-        await this.deps.onDelivered?.(item.userId, row.id);
-      } else {
-        await this.deps.repo.markFailed(row.id, 'all web push sends failed');
+    const endpoints = await this.deps.repo.channelEndpoints(item.userId, channelKey);
+    if (endpoints.length === 0) {
+      await this.deps.repo.markFailed(row.id, `no active ${channelKey} endpoint`);
+      return;
+    }
+
+    const channel = this.deps.channels.get(channelKey);
+    if (!channel) return;
+
+    let anyOk = false;
+    for (const ep of endpoints) {
+      const res = await channel.send(ep.address, message);
+      if (res.ok) anyOk = true;
+      else if (res.gone) {
+        this.deps.logger.info('pruning dead endpoint', {
+          channel: channelKey,
+          channelId: ep.channelId,
+        });
+        await this.deps.repo.disableChannel(ep.channelId);
       }
+    }
+
+    if (anyOk) {
+      await this.deps.repo.markSent(row.id);
+      await this.deps.onDelivered?.(item.userId, row.id);
+    } else {
+      await this.deps.repo.markFailed(row.id, `all ${channelKey} sends failed`);
     }
   }
 }
@@ -114,8 +130,8 @@ export class Notifier {
 /** Derive notifiable sub-events from a provider status change (docs/07 §7.4). */
 export function deriveFromProviderUpdated(
   p: ProviderUpdatedPayload,
-): { dbType: DbEventTypeName; message: PushMessage }[] {
-  const out: { dbType: DbEventTypeName; message: PushMessage }[] = [];
+): { dbType: DbEventTypeName; message: RenderedMessage }[] {
+  const out: { dbType: DbEventTypeName; message: RenderedMessage }[] = [];
   const url = `/flights/id/${p.flightId}`;
   for (const field of p.changed) {
     if (field === 'gate' && p.after.gate) {

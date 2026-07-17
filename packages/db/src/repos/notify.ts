@@ -27,6 +27,13 @@ export interface WebPushSubscription {
   address: { endpoint: string; keys: { p256dh: string; auth: string } };
 }
 
+/** A verified, enabled delivery endpoint for any channel. */
+export interface ChannelEndpoint {
+  channelId: string;
+  userId: string;
+  address: Record<string, unknown>;
+}
+
 export function createNotifyRepo(db: Database) {
   return {
     // ── watchlist ──
@@ -97,12 +104,46 @@ export function createNotifyRepo(db: Database) {
       });
     },
 
-    async webPushSubscriptions(userId: string): Promise<WebPushSubscription[]> {
+    /** Verified + enabled endpoints for a user on one channel (delivery). */
+    async channelEndpoints(userId: string, channel: ChannelKey): Promise<ChannelEndpoint[]> {
       return db.execute(sql`
         select id as "channelId", user_id as "userId", address
         from notification_channels
-        where user_id = ${userId} and channel = 'webpush' and enabled = true and verified = true
-      `) as unknown as Promise<WebPushSubscription[]>;
+        where user_id = ${userId} and channel = ${channel} and enabled = true and verified = true
+      `) as unknown as Promise<ChannelEndpoint[]>;
+    },
+
+    // ── Telegram deep-link linking (docs/10 §10.6) ──
+    /** Create a pending, unverified telegram channel holding a one-time token. */
+    async createTelegramLink(userId: string, token: string): Promise<void> {
+      await db.insert(notificationChannels).values({
+        userId,
+        channel: 'telegram',
+        address: {},
+        verified: false,
+        enabled: true,
+        linkToken: token,
+      });
+    },
+
+    /** Bind a chat to the token's user; returns the userId, or null if unknown. */
+    async consumeTelegramLink(token: string, chatId: number | string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        update notification_channels
+        set address = ${JSON.stringify({ chatId })}::jsonb, verified = true,
+            link_token = null, updated_at = now()
+        where link_token = ${token} and channel = 'telegram'
+        returning user_id as "userId"
+      `)) as unknown as { userId: string }[];
+      return rows[0]?.userId ?? null;
+    },
+
+    /** Disable all telegram channels for a chat (the /stop command). */
+    async disableTelegramByChat(chatId: number | string): Promise<void> {
+      await db.execute(sql`
+        update notification_channels set enabled = false, updated_at = now()
+        where channel = 'telegram' and address->>'chatId' = ${String(chatId)}
+      `);
     },
 
     async disableChannel(channelId: string): Promise<void> {

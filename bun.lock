@@ -15,6 +15,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@flytrace/db": "workspace:*",
+        "@flytrace/notifications": "workspace:*",
         "@flytrace/shared": "workspace:*",
         "hono": "^4.6.14",
         "ioredis": "^5.4.2",
@@ -30,14 +31,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@flytrace/db": "workspace:*",
+        "@flytrace/notifications": "workspace:*",
         "@flytrace/shared": "workspace:*",
         "ioredis": "^5.4.2",
-        "web-push": "^3.6.7",
         "zod": "^3.24.1",
       },
       "devDependencies": {
         "@types/bun": "^1.1.14",
-        "@types/web-push": "^3.6.4",
         "typescript": "^5.7.3",
       },
     },
@@ -99,6 +99,18 @@
       "devDependencies": {
         "@types/bun": "^1.1.14",
         "drizzle-kit": "^0.30.1",
+        "typescript": "^5.7.3",
+      },
+    },
+    "packages/notifications": {
+      "name": "@flytrace/notifications",
+      "version": "0.0.0",
+      "dependencies": {
+        "web-push": "^3.6.7",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.1.14",
+        "@types/web-push": "^3.6.4",
         "typescript": "^5.7.3",
       },
     },
@@ -202,6 +214,8 @@
     "@flytrace/api": ["@flytrace/api@workspace:apps/api"],
 
     "@flytrace/db": ["@flytrace/db@workspace:packages/db"],
+
+    "@flytrace/notifications": ["@flytrace/notifications@workspace:packages/notifications"],
 
     "@flytrace/notifier": ["@flytrace/notifier@workspace:apps/notifier"],
 

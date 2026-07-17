@@ -9,6 +9,7 @@ import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
 import { createApiMetrics } from './metrics.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
+import { createTelegramRoutes } from './notify/telegram.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -141,6 +142,9 @@ export function createApp(ctx: AppContext) {
 
   // ── Watchlist / channels / notifications (docs/10) ──
   app.route('/api/v1', createNotifyRoutes(ctx));
+
+  // ── Telegram linking + webhook (docs/10 §10.6) ──
+  app.route('/', createTelegramRoutes(ctx));
 
   // ── Fallbacks & error mapping ──
   app.notFound((c) =>

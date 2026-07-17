@@ -7,7 +7,8 @@ const apiConfigSchema = configSchemas.base
   .merge(configSchemas.redis)
   .merge(configSchemas.api)
   .merge(configSchemas.auth)
-  .merge(configSchemas.webPush);
+  .merge(configSchemas.webPush)
+  .merge(configSchemas.telegram);
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
 
