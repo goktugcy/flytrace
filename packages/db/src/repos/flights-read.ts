@@ -29,6 +29,14 @@ export interface PositionRow {
   onGround: boolean;
 }
 
+export interface SearchResultRow {
+  flightId: string;
+  callsign: string;
+  flightNumber: string | null;
+  status: string;
+  flightDate: string;
+}
+
 export interface EventRow {
   type: string;
   occurredAt: string;
@@ -100,6 +108,18 @@ function createReadRepo(db: Database) {
         where flight_id = ${flightId}
         order by occurred_at asc
       `)) as unknown as EventRow[];
+    },
+
+    async search(term: string, limit: number): Promise<SearchResultRow[]> {
+      const q = `%${term}%`;
+      return (await db.execute(sql`
+        select id as "flightId", callsign, flight_number as "flightNumber", status,
+               to_char(flight_date, 'YYYY-MM-DD') as "flightDate"
+        from flights
+        where callsign ilike ${q} or flight_number ilike ${q}
+        order by last_seen_at desc nulls last
+        limit ${limit}
+      `)) as unknown as SearchResultRow[];
     },
 
     async countEventsToday(): Promise<number> {

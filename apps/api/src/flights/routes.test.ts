@@ -85,6 +85,17 @@ describe('flight read routes', () => {
     expect(body.error.code).toBe('BAD_REQUEST');
   });
 
+  test('GET /flights/search returns results (empty query → [])', async () => {
+    const empty = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/search');
+    expect(empty.status).toBe(200);
+    expect(((await empty.json()) as { data: { results: unknown[] } }).data.results).toEqual([]);
+
+    const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/search?q=TK');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { results: unknown[] } };
+    expect(Array.isArray(body.data.results)).toBe(true);
+  });
+
   test('GET /stats/live returns counters', async () => {
     const r = new FakeRedis();
     seed(r, 'F1', 41, 29);

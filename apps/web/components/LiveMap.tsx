@@ -5,6 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
+import { SearchBox } from './SearchBox';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
@@ -141,15 +142,25 @@ export function LiveMap() {
           position: 'absolute',
           top: 12,
           left: 12,
-          padding: '8px 12px',
-          borderRadius: 8,
-          background: 'rgba(18,24,38,0.85)',
-          color: 'var(--fg)',
-          font: '600 13px/1.2 ui-sans-serif, system-ui',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
           zIndex: 1,
         }}
       >
-        ✈ {count} live aircraft
+        <div
+          style={{
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: 'rgba(18,24,38,0.85)',
+            color: 'var(--fg)',
+            font: '600 13px/1.2 ui-sans-serif, system-ui',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ✈ {count} live
+        </div>
+        <SearchBox />
       </div>
     </div>
   );

@@ -45,6 +45,14 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { flights, count: flights.length }, true);
   });
 
+  // Typeahead search over flights (callsign / flight number).
+  app.get('/flights/search', async (c) => {
+    const q = (c.req.query('q') ?? '').trim();
+    if (q.length < 1) return ok(c, { results: [] });
+    const limit = Math.min(Number(c.req.query('limit') ?? 20) || 20, 50);
+    return ok(c, { results: await read.search(q, limit) });
+  });
+
   // Landing-page live counters.
   app.get('/stats/live', async (c) => {
     const [flightsLive, eventsToday] = await Promise.all([hot.count(), read.countEventsToday()]);
