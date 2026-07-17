@@ -118,9 +118,13 @@ export const flightEvents = pgTable(
   ],
 );
 
-/** Flight status — latest normalized provider status (1:1 with flight). */
+/**
+ * Flight status — latest normalized provider status (1:1 with flight).
+ * Table is named `flight_status_snapshots` to avoid colliding with the
+ * `flight_status` enum type (Postgres tables create a rowtype of the same name).
+ */
 export const flightStatusSnapshot = pgTable(
-  'flight_status',
+  'flight_status_snapshots',
   {
     flightId: uuid('flight_id')
       .primaryKey()
@@ -139,5 +143,5 @@ export const flightStatusSnapshot = pgTable(
     raw: jsonb('raw'),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_flight_status_provider').on(t.providerKey, t.fetchedAt)],
+  (t) => [index('idx_flight_status_snapshots_provider').on(t.providerKey, t.fetchedAt)],
 );

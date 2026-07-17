@@ -1,5 +1,5 @@
 {
-  "id": "8f9c4b3b-6fc0-432c-a9d6-d1dd4ab8c72f",
+  "id": "c0680b5c-7872-4e60-8b7f-218c306a47ea",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1046,8 +1046,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.flight_status": {
-      "name": "flight_status",
+    "public.flight_status_snapshots": {
+      "name": "flight_status_snapshots",
       "schema": "",
       "columns": {
         "flight_id": {
@@ -1138,8 +1138,8 @@
         }
       },
       "indexes": {
-        "idx_flight_status_provider": {
-          "name": "idx_flight_status_provider",
+        "idx_flight_status_snapshots_provider": {
+          "name": "idx_flight_status_snapshots_provider",
           "columns": [
             {
               "expression": "provider_key",
@@ -1161,9 +1161,9 @@
         }
       },
       "foreignKeys": {
-        "flight_status_flight_id_flights_id_fk": {
-          "name": "flight_status_flight_id_flights_id_fk",
-          "tableFrom": "flight_status",
+        "flight_status_snapshots_flight_id_flights_id_fk": {
+          "name": "flight_status_snapshots_flight_id_flights_id_fk",
+          "tableFrom": "flight_status_snapshots",
           "tableTo": "flights",
           "columnsFrom": [
             "flight_id"

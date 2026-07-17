@@ -44,7 +44,7 @@ CREATE TABLE "airports" (
 	"name" text NOT NULL,
 	"city" text,
 	"country" text,
-	"location" "geography(Point,4326)",
+	"location" geography(Point,4326),
 	"elevation_ft" integer,
 	"timezone" text,
 	"runways" jsonb,
@@ -117,7 +117,7 @@ CREATE TABLE "flight_positions" (
 	"flight_id" uuid NOT NULL,
 	"ts" timestamp with time zone NOT NULL,
 	"icao24" char(6),
-	"location" "geography(Point,4326)",
+	"location" geography(Point,4326),
 	"altitude_ft" integer,
 	"geo_altitude_ft" integer,
 	"heading_deg" real,
@@ -129,7 +129,7 @@ CREATE TABLE "flight_positions" (
 	CONSTRAINT "flight_positions_flight_id_ts_pk" PRIMARY KEY("flight_id","ts")
 );
 --> statement-breakpoint
-CREATE TABLE "flight_status" (
+CREATE TABLE "flight_status_snapshots" (
 	"flight_id" uuid PRIMARY KEY NOT NULL,
 	"provider_key" text NOT NULL,
 	"status" "flight_status" NOT NULL,
@@ -149,7 +149,7 @@ CREATE TABLE "flight_status" (
 CREATE TABLE "flight_tracks_downsampled" (
 	"flight_id" uuid NOT NULL,
 	"ts" timestamp with time zone NOT NULL,
-	"location" "geography(Point,4326)",
+	"location" geography(Point,4326),
 	"altitude_ft" integer,
 	"heading_deg" real,
 	"ground_speed_kt" real,
@@ -308,7 +308,7 @@ ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY
 ALTER TABLE "user_settings" ADD CONSTRAINT "user_settings_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "flight_events" ADD CONSTRAINT "flight_events_flight_id_flights_id_fk" FOREIGN KEY ("flight_id") REFERENCES "public"."flights"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "flight_positions" ADD CONSTRAINT "flight_positions_flight_id_flights_id_fk" FOREIGN KEY ("flight_id") REFERENCES "public"."flights"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "flight_status" ADD CONSTRAINT "flight_status_flight_id_flights_id_fk" FOREIGN KEY ("flight_id") REFERENCES "public"."flights"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "flight_status_snapshots" ADD CONSTRAINT "flight_status_snapshots_flight_id_flights_id_fk" FOREIGN KEY ("flight_id") REFERENCES "public"."flights"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "flight_tracks_downsampled" ADD CONSTRAINT "flight_tracks_downsampled_flight_id_flights_id_fk" FOREIGN KEY ("flight_id") REFERENCES "public"."flights"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "flights" ADD CONSTRAINT "flights_airline_id_airlines_id_fk" FOREIGN KEY ("airline_id") REFERENCES "public"."airlines"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "flights" ADD CONSTRAINT "flights_aircraft_id_aircraft_id_fk" FOREIGN KEY ("aircraft_id") REFERENCES "public"."aircraft"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
@@ -334,7 +334,7 @@ CREATE INDEX "idx_events_flight_time" ON "flight_events" USING btree ("flight_id
 CREATE INDEX "idx_events_type_time" ON "flight_events" USING btree ("type","occurred_at");--> statement-breakpoint
 CREATE INDEX "idx_positions_location" ON "flight_positions" USING gist ("location");--> statement-breakpoint
 CREATE INDEX "idx_positions_icao24_ts" ON "flight_positions" USING btree ("icao24","ts");--> statement-breakpoint
-CREATE INDEX "idx_flight_status_provider" ON "flight_status" USING btree ("provider_key","fetched_at");--> statement-breakpoint
+CREATE INDEX "idx_flight_status_snapshots_provider" ON "flight_status_snapshots" USING btree ("provider_key","fetched_at");--> statement-breakpoint
 CREATE INDEX "uq_flights_callsign_date" ON "flights" USING btree ("callsign","flight_date");--> statement-breakpoint
 CREATE INDEX "idx_flights_flight_number" ON "flights" USING btree ("flight_number");--> statement-breakpoint
 CREATE INDEX "idx_flights_status" ON "flights" USING btree ("status");--> statement-breakpoint
