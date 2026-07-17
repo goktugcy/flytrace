@@ -1,0 +1,15 @@
+import { configSchemas, loadConfig } from '@flytrace/shared/config';
+import type { z } from 'zod';
+
+/** API needs base + database + redis + api + auth env slices. */
+const apiConfigSchema = configSchemas.base
+  .merge(configSchemas.database)
+  .merge(configSchemas.redis)
+  .merge(configSchemas.api)
+  .merge(configSchemas.auth);
+
+export type ApiConfig = z.infer<typeof apiConfigSchema>;
+
+export function loadApiConfig(): ApiConfig {
+  return loadConfig(apiConfigSchema);
+}

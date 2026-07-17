@@ -1,0 +1,32 @@
+# deps
+node_modules/
+.pnp*
+# builds
+dist/
+.next/
+out/
+build/
+.turbo/
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+# logs
+*.log
+npm-debug.log*
+logs/
+# os / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+# test / coverage
+coverage/
+*.tsbuildinfo
+# data
+pgdata/
+redisdata/
+# misc
+*.pid
+.cache/
