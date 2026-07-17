@@ -8,6 +8,8 @@ const notifierSchema = z.object({
   NOTIFIER_BLOCK_MS: z.coerce.number().int().positive().default(5000),
   /** Use an in-memory push sender (offline dev / pipeline smoke). */
   NOTIFIER_FAKE_PUSH: configSchemas.boolish.default('false'),
+  /** Max non-critical notifications per flight per hour (docs/10 §10.7). */
+  NOTIFIER_FREQUENCY_CAP: z.coerce.number().int().positive().default(5),
 });
 
 const notifierConfigSchema = configSchemas.base

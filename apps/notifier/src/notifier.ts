@@ -1,13 +1,18 @@
 import type { ChannelEndpoint, ChannelKey, WatchlistItem } from '@flytrace/db';
 import type { ChannelRegistry, RenderedMessage } from '@flytrace/notifications';
 import {
+  type Clock,
   type DbEventTypeName,
   type EventEnvelope,
   type Logger,
   type ProviderUpdatedPayload,
   domainToDbEventType,
+  systemClock,
 } from '@flytrace/shared';
 import { renderPush } from './render.ts';
+import { type QuietHours, evaluate } from './rules.ts';
+
+const HOUR_MS = 60 * 60 * 1000;
 
 /** The slice of the notify repo the core needs (full NotifyRepo satisfies it). */
 export interface NotifierRepo {
@@ -23,8 +28,11 @@ export interface NotifierRepo {
     dedupeKey: string;
   }): Promise<{ id: string } | null>;
   channelEndpoints(userId: string, channel: ChannelKey): Promise<ChannelEndpoint[]>;
+  getQuietHours(userId: string): Promise<QuietHours | null>;
+  countRecentNotifications(userId: string, flightId: string, sinceIso: string): Promise<number>;
   markSent(id: string): Promise<void>;
   markFailed(id: string, error: string): Promise<void>;
+  markSuppressed(id: string, reason: string): Promise<void>;
   disableChannel(channelId: string): Promise<void>;
 }
 
@@ -32,6 +40,9 @@ export interface NotifierDeps {
   repo: NotifierRepo;
   channels: ChannelRegistry;
   logger: Logger;
+  clock?: Clock;
+  /** Max non-critical notifications per flight per hour (docs/10 §10.7). */
+  frequencyCap?: number;
   /** Called after a notification is delivered (wired to a WS/bus publish). */
   onDelivered?: (userId: string, notificationId: string) => Promise<void>;
 }
@@ -95,6 +106,24 @@ export class Notifier {
       dedupeKey,
     });
     if (!row) return; // duplicate → exactly-once guarantee
+
+    // Quiet hours + frequency cap (critical events bypass both; docs/10 §10.7).
+    const nowMs = (this.deps.clock ?? systemClock).now();
+    const decision = evaluate({
+      dbType,
+      nowMs,
+      quietHours: await this.deps.repo.getQuietHours(item.userId),
+      recentCount: await this.deps.repo.countRecentNotifications(
+        item.userId,
+        env.partitionKey,
+        new Date(nowMs - HOUR_MS).toISOString(),
+      ),
+      cap: this.deps.frequencyCap ?? 5,
+    });
+    if (!decision.deliver) {
+      await this.deps.repo.markSuppressed(row.id, decision.reason);
+      return;
+    }
 
     const endpoints = await this.deps.repo.channelEndpoints(item.userId, channelKey);
     if (endpoints.length === 0) {

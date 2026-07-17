@@ -39,9 +39,12 @@ function takeoff(dedupe = `${FLIGHT}:takeoff`): EventEnvelope {
 class FakeRepo implements NotifierRepo {
   watches: WatchlistItem[] = [];
   endpoints: ChannelEndpoint[] = [];
+  quietHours: { tz: string; start: string; end: string } | null = null;
+  recentCount = 0;
   inserted = new Set<string>();
   sent: string[] = [];
   failed: { id: string; error: string }[] = [];
+  suppressed: { id: string; reason: string }[] = [];
   disabled: string[] = [];
   private seq = 0;
 
@@ -57,11 +60,20 @@ class FakeRepo implements NotifierRepo {
   async channelEndpoints(_userId: string, _channel: ChannelKey) {
     return this.endpoints;
   }
+  async getQuietHours() {
+    return this.quietHours;
+  }
+  async countRecentNotifications() {
+    return this.recentCount;
+  }
   async markSent(id: string) {
     this.sent.push(id);
   }
   async markFailed(id: string, error: string) {
     this.failed.push({ id, error });
+  }
+  async markSuppressed(id: string, reason: string) {
+    this.suppressed.push({ id, reason });
   }
   async disableChannel(channelId: string) {
     this.disabled.push(channelId);
@@ -90,11 +102,35 @@ function make(webpush = new FakeChannel('webpush')) {
     repo,
     channels,
     logger: createLogger({ level: 'error', base: {} }),
+    clock,
+    frequencyCap: 5,
     onDelivered: async (_u, id) => {
       delivered.push(id);
     },
   });
   return { repo, webpush, notifier, delivered };
+}
+
+const ALWAYS_QUIET = { tz: 'UTC', start: '00:00', end: '23:59' };
+
+function providerGate(): EventEnvelope {
+  return makeEnvelope(
+    {
+      type: 'ProviderUpdated',
+      occurredAt: '2023-11-14T22:20:00.000Z',
+      dedupeKey: `${FLIGHT}:provider:2023-11-14T22:20`,
+      partitionKey: FLIGHT,
+      payload: {
+        flightId: FLIGHT,
+        providerKey: 'fixture',
+        before: { gate: 'A12' },
+        after: { gate: 'B7' },
+        changed: ['gate'],
+        fetchedAt: '2023-11-14T22:20:00.000Z',
+      } satisfies ProviderUpdatedPayload,
+    },
+    { producer: 'worker', clock },
+  );
 }
 
 describe('Notifier', () => {
@@ -172,6 +208,35 @@ describe('Notifier', () => {
     expect(webpush.sent).toHaveLength(1);
     expect(webpush.sent[0]?.message.title).toBe('Gate changed');
     expect(webpush.sent[0]?.message.body).toContain('B7');
+  });
+
+  test('suppresses a non-critical alert during quiet hours', async () => {
+    const { repo, webpush, notifier } = make();
+    repo.watches = [watch()];
+    repo.endpoints = [endpoint('c1')];
+    repo.quietHours = ALWAYS_QUIET;
+    await notifier.handle(takeoff());
+    expect(webpush.sent).toHaveLength(0);
+    expect(repo.suppressed[0]?.reason).toBe('quiet_hours');
+  });
+
+  test('delivers a critical alert (gate change) despite quiet hours', async () => {
+    const { repo, webpush, notifier } = make();
+    repo.watches = [watch({ eventTypes: ['gate_change'] })];
+    repo.endpoints = [endpoint('c1')];
+    repo.quietHours = ALWAYS_QUIET;
+    await notifier.handle(providerGate());
+    expect(webpush.sent).toHaveLength(1); // critical bypasses quiet hours
+  });
+
+  test('suppresses non-critical over the frequency cap', async () => {
+    const { repo, webpush, notifier } = make();
+    repo.watches = [watch()];
+    repo.endpoints = [endpoint('c1')];
+    repo.recentCount = 5; // == cap
+    await notifier.handle(takeoff());
+    expect(webpush.sent).toHaveLength(0);
+    expect(repo.suppressed[0]?.reason).toBe('frequency_cap');
   });
 
   test('does nothing for a non-notifiable event (position)', async () => {

@@ -205,6 +205,37 @@ export function createNotifyRepo(db: Database) {
       return rows[0] ?? null;
     },
 
+    /** User quiet-hours preference (docs/10 §10.7), or null if unset. */
+    async getQuietHours(
+      userId: string,
+    ): Promise<{ tz: string; start: string; end: string } | null> {
+      const rows = (await db.execute(sql`
+        select quiet_hours as "quietHours" from user_settings where user_id = ${userId} limit 1
+      `)) as unknown as { quietHours: { tz: string; start: string; end: string } | null }[];
+      return rows[0]?.quietHours ?? null;
+    },
+
+    /** Count a flight's sent notifications since `sinceIso` (frequency cap). */
+    async countRecentNotifications(
+      userId: string,
+      flightId: string,
+      sinceIso: string,
+    ): Promise<number> {
+      const rows = (await db.execute(sql`
+        select count(*)::int as n from notifications
+        where user_id = ${userId} and flight_id = ${flightId}
+          and status = 'sent' and created_at >= ${sinceIso}
+      `)) as unknown as { n: number }[];
+      return rows[0]?.n ?? 0;
+    },
+
+    async markSuppressed(id: string, reason: string): Promise<void> {
+      await db
+        .update(notifications)
+        .set({ status: 'suppressed', error: reason })
+        .where(eq(notifications.id, id));
+    },
+
     async markSent(id: string): Promise<void> {
       await db
         .update(notifications)

@@ -65,7 +65,13 @@ export function createContext(config: NotifierConfig): NotifierContext {
       .exec();
   };
 
-  const notifier = new Notifier({ repo, channels, logger, onDelivered });
+  const notifier = new Notifier({
+    repo,
+    channels,
+    logger,
+    onDelivered,
+    frequencyCap: config.NOTIFIER_FREQUENCY_CAP,
+  });
   const consumer = new StreamConsumer(redis, prefix, notifier, logger, {
     group: config.NOTIFIER_GROUP,
     consumer: config.NOTIFIER_CONSUMER,
