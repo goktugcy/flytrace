@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Hero } from '../components/Hero';
 import { LiveCounters } from '../components/LiveCounters';
 
 const FEATURES = [
@@ -65,6 +66,7 @@ export default function HomePage() {
           <Cta href="/signin">Create account</Cta>
         </div>
         <LiveCounters />
+        <Hero />
       </section>
 
       <section
