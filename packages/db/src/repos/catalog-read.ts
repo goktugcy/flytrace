@@ -18,6 +18,34 @@ export interface AirportDetail {
   elevationFt: number | null;
   lat: number | null;
   lon: number | null;
+  runways: unknown;
+}
+
+/** A row on an airport's departures/arrivals board. */
+export interface BoardRow {
+  flightId: string;
+  callsign: string;
+  flightNumber: string | null;
+  status: string;
+  counterpartIata: string | null;
+  counterpartCity: string | null;
+  scheduled: string | null;
+  estimated: string | null;
+  gate: string | null;
+  terminal: string | null;
+}
+
+export interface AirportStats {
+  departures: number;
+  arrivals: number;
+  active: number;
+}
+
+export interface AircraftStats {
+  totalFlights: number;
+  activeFlights: number;
+  distinctRoutes: number;
+  lastSeenAt: string | null;
 }
 
 export interface AircraftDetail {
@@ -48,24 +76,56 @@ function createCatalogReadRepo(db: Database) {
     async getAirportByIata(iata: string): Promise<AirportDetail | null> {
       const rows = (await db.execute(sql`
         select id, iata, icao, name, city, country, timezone,
-               elevation_ft as "elevationFt",
+               elevation_ft as "elevationFt", runways,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
         from airports where iata = ${iata.toUpperCase()} limit 1
       `)) as unknown as AirportDetail[];
       return rows[0] ?? null;
     },
 
-    /** Recent flights touching this airport, tagged as departure/arrival. */
-    async getAirportFlights(airportId: string, limit: number): Promise<CatalogFlightRow[]> {
+    /**
+     * Departures/arrivals board for an airport: the counterpart endpoint, gate/
+     * terminal (from the latest provider snapshot) and scheduled/estimated
+     * times, ordered by scheduled time. `dir` selects departures (origin match)
+     * or arrivals (destination match).
+     */
+    async getAirportBoard(
+      airportId: string,
+      dir: 'departure' | 'arrival',
+      limit: number,
+    ): Promise<BoardRow[]> {
+      const isDep = dir === 'departure';
+      const matchCol = isDep ? sql`origin_airport_id` : sql`destination_airport_id`;
+      const otherCol = isDep ? sql`destination_airport_id` : sql`origin_airport_id`;
+      const schedCol = isDep ? sql`f.scheduled_departure` : sql`f.scheduled_arrival`;
+      const estCol = isDep ? sql`f.estimated_departure` : sql`f.estimated_arrival`;
       return (await db.execute(sql`
-        select id as "flightId", callsign, flight_number as "flightNumber", status,
-               to_char(flight_date, 'YYYY-MM-DD') as "flightDate",
-               case when origin_airport_id = ${airportId} then 'departure' else 'arrival' end as role
+        select f.id as "flightId", f.callsign, f.flight_number as "flightNumber", f.status,
+               other.iata as "counterpartIata", other.city as "counterpartCity",
+               ${schedCol} as scheduled, ${estCol} as estimated,
+               s.gate, s.terminal
+        from flights f
+        left join airports other on other.id = f.${otherCol}
+        left join flight_status_snapshots s on s.flight_id = f.id
+        where f.${matchCol} = ${airportId}
+        order by ${schedCol} desc nulls last, f.last_seen_at desc nulls last
+        limit ${limit}
+      `)) as unknown as BoardRow[];
+    },
+
+    async getAirportStats(airportId: string): Promise<AirportStats> {
+      const rows = (await db.execute(sql`
+        select
+          count(*) filter (where origin_airport_id = ${airportId})::int      as departures,
+          count(*) filter (where destination_airport_id = ${airportId})::int as arrivals,
+          count(*) filter (
+            where (origin_airport_id = ${airportId} or destination_airport_id = ${airportId})
+              and status = 'active'
+          )::int as active
         from flights
         where origin_airport_id = ${airportId} or destination_airport_id = ${airportId}
-        order by last_seen_at desc nulls last
-        limit ${limit}
-      `)) as unknown as CatalogFlightRow[];
+      `)) as unknown as AirportStats[];
+      return rows[0] ?? { departures: 0, arrivals: 0, active: 0 };
     },
 
     async getAircraftByRegistration(registration: string): Promise<AircraftDetail | null> {
@@ -89,6 +149,19 @@ function createCatalogReadRepo(db: Database) {
         order by last_seen_at desc nulls last
         limit ${limit}
       `)) as unknown as CatalogFlightRow[];
+    },
+
+    /** Utilization stats for an aircraft page (total legs, active, distinct routes). */
+    async getAircraftStats(aircraftId: string): Promise<AircraftStats> {
+      const rows = (await db.execute(sql`
+        select
+          count(*)::int                                          as "totalFlights",
+          count(*) filter (where status = 'active')::int         as "activeFlights",
+          count(distinct (origin_airport_id, destination_airport_id))::int as "distinctRoutes",
+          max(last_seen_at) as "lastSeenAt"
+        from flights where aircraft_id = ${aircraftId}
+      `)) as unknown as AircraftStats[];
+      return rows[0] ?? { totalFlights: 0, activeFlights: 0, distinctRoutes: 0, lastSeenAt: null };
     },
   };
 }

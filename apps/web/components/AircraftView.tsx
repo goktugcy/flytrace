@@ -18,9 +18,17 @@ interface Aircraft {
   airlineIata: string | null;
 }
 
+interface Stats {
+  totalFlights: number;
+  activeFlights: number;
+  distinctRoutes: number;
+  lastSeenAt: string | null;
+}
+
 export function AircraftView({ registration }: { registration: string }) {
   const [aircraft, setAircraft] = useState<Aircraft | null>(null);
   const [flights, setFlights] = useState<CatalogFlight[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
   const [state, setState] = useState<'loading' | 'missing' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
@@ -30,11 +38,15 @@ export function AircraftView({ registration }: { registration: string }) {
         const res = await fetch(`${API_BASE}/api/v1/aircraft/${registration}`);
         if (res.status === 404) return void (!cancelled && setState('missing'));
         if (!res.ok) return void (!cancelled && setState('error'));
-        const d = ((await res.json()) as { data: { aircraft: Aircraft; flights: CatalogFlight[] } })
-          .data;
+        const d = (
+          (await res.json()) as {
+            data: { aircraft: Aircraft; flights: CatalogFlight[]; stats: Stats };
+          }
+        ).data;
         if (cancelled) return;
         setAircraft(d.aircraft);
         setFlights(d.flights);
+        setStats(d.stats);
         setState('ready');
       } catch {
         if (!cancelled) setState('error');
@@ -90,6 +102,27 @@ export function AircraftView({ registration }: { registration: string }) {
               <Metric label="Seats" value={aircraft.seats != null ? String(aircraft.seats) : '—'} />
             </div>
           </section>
+
+          {stats && (
+            <section style={panel}>
+              <h2 style={h2}>Utilization</h2>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))',
+                  gap: 12,
+                }}
+              >
+                <Metric label="Total legs" value={stats.totalFlights.toLocaleString()} />
+                <Metric label="Active now" value={stats.activeFlights.toLocaleString()} />
+                <Metric label="Distinct routes" value={stats.distinctRoutes.toLocaleString()} />
+                <Metric
+                  label="Last seen"
+                  value={stats.lastSeenAt ? new Date(stats.lastSeenAt).toLocaleDateString() : '—'}
+                />
+              </div>
+            </section>
+          )}
 
           <section style={panel}>
             <h2 style={h2}>Recent flights ({flights.length})</h2>
