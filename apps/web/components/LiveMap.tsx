@@ -2,6 +2,7 @@
 
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
 
@@ -18,6 +19,7 @@ interface Rendered {
 export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [count, setCount] = useState(0);
+  const router = useRouter();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -48,6 +50,7 @@ export function LiveMap() {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
           properties: {
+            flightId: f.flightId,
             callsign: f.callsign ?? f.icao24,
             onGround: f.onGround ? 1 : 0,
           },
@@ -103,6 +106,18 @@ export function LiveMap() {
         paint: { 'text-color': '#e6edf7', 'text-halo-color': '#04122b', 'text-halo-width': 1 },
       });
 
+      // Click a plane → open its flight page.
+      map.on('click', 'flights-dot', (e) => {
+        const id = e.features?.[0]?.properties?.flightId as string | undefined;
+        if (id) router.push(`/flights/id/${id}`);
+      });
+      map.on('mouseenter', 'flights-dot', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'flights-dot', () => {
+        map.getCanvas().style.cursor = '';
+      });
+
       void client.connect().then(sendViewport);
       raf = requestAnimationFrame(tick);
     });
@@ -116,7 +131,7 @@ export function LiveMap() {
       client.close();
       map.remove();
     };
-  }, []);
+  }, [router]);
 
   return (
     <div style={{ position: 'fixed', inset: 0 }}>

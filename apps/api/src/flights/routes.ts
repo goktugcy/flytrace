@@ -1,4 +1,4 @@
-import { createFlightReadRepo } from '@flytrace/db';
+import { type FlightRow, createFlightReadRepo } from '@flytrace/db';
 import { AppError, type FlightDetail } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -51,14 +51,12 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { flightsLive, eventsToday }, true);
   });
 
-  // Full flight detail: DB flight + latest position + derived timeline.
-  app.get('/flights/:callsign/:date', async (c) => {
-    const { flight } = await requireFlight(c, read);
+  const detailFor = async (flight: FlightRow): Promise<FlightDetail> => {
     const [live, events] = await Promise.all([
       read.getLatestPosition(flight.id),
       read.getEvents(flight.id),
     ]);
-    const detail: FlightDetail = {
+    return {
       flight: {
         flightId: flight.id,
         callsign: flight.callsign,
@@ -86,7 +84,33 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
         source: e.source,
       })),
     };
-    return ok(c, detail);
+  };
+
+  // By flightId (map/WS use uuids) — static `id` segment precedes :callsign.
+  app.get('/flights/id/:flightId', async (c) => {
+    const flight = await read.getFlightById(c.req.param('flightId'));
+    if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
+    return ok(c, await detailFor(flight));
+  });
+
+  app.get('/flights/id/:flightId/track', async (c) => {
+    const flight = await read.getFlightById(c.req.param('flightId'));
+    if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
+    const limit = Math.min(Number(c.req.query('limit') ?? 5000) || 5000, 10_000);
+    const points = await read.getTrack(flight.id, limit);
+    return ok(c, { flightId: flight.id, points, count: points.length });
+  });
+
+  app.get('/flights/id/:flightId/events', async (c) => {
+    const flight = await read.getFlightById(c.req.param('flightId'));
+    if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
+    return ok(c, { flightId: flight.id, events: await read.getEvents(flight.id) });
+  });
+
+  // Full flight detail by natural key.
+  app.get('/flights/:callsign/:date', async (c) => {
+    const { flight } = await requireFlight(c, read);
+    return ok(c, await detailFor(flight));
   });
 
   // Position track (ascending). Downsampling is a later optimization.

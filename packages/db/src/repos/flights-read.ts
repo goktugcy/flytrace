@@ -53,6 +53,16 @@ function createReadRepo(db: Database) {
       return rows[0] ?? null;
     },
 
+    async getFlightById(id: string): Promise<FlightRow | null> {
+      const rows = (await db.execute(sql`
+        select id, callsign, flight_number as "flightNumber", status,
+               to_char(flight_date, 'YYYY-MM-DD') as "flightDate",
+               source, last_seen_at as "lastSeenAt", created_at as "createdAt"
+        from flights where id = ${id} limit 1
+      `)) as unknown as FlightRow[];
+      return rows[0] ?? null;
+    },
+
     async getLatestPosition(flightId: string): Promise<PositionRow | null> {
       const rows = (await db.execute(sql`
         select ts,

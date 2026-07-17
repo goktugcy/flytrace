@@ -94,6 +94,15 @@ describe('flight read routes', () => {
     expect(body.data.eventsToday).toBe(0);
   });
 
+  test('GET /flights/id/:flightId → 404 when unknown', async () => {
+    const res = await createApp(fakeCtx(new FakeRedis())).request(
+      '/api/v1/flights/id/00000000-0000-7000-8000-000000000009',
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('FLIGHT_NOT_FOUND');
+  });
+
   test('GET /flights/:callsign/:date → 404 when unknown', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/TK1/2023-11-14');
     expect(res.status).toBe(404);

@@ -20,6 +20,8 @@ export class RealtimeClient {
   private bbox: Bbox | null = null;
   private backoffMs = 500;
   private closed = false;
+  private readonly channels = new Set<string>();
+  private readonly listeners = new Set<(msg: unknown) => void>();
 
   constructor(private readonly opts: RealtimeOptions) {}
 
@@ -33,6 +35,22 @@ export class RealtimeClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ t: 'viewport', bbox }));
     }
+  }
+
+  /** Subscribe to a channel (e.g. `flight:<id>`); resent on reconnect. */
+  subscribe(channel: string): void {
+    this.channels.add(channel);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ t: 'subscribe', channel }));
+    }
+  }
+
+  /** Observe every decoded server message (in addition to the flight store). */
+  onMessage(fn: (msg: unknown) => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
   }
 
   close(): void {
@@ -57,10 +75,13 @@ export class RealtimeClient {
     ws.onopen = () => {
       this.backoffMs = 500;
       if (this.bbox) ws.send(JSON.stringify({ t: 'viewport', bbox: this.bbox }));
+      for (const channel of this.channels) ws.send(JSON.stringify({ t: 'subscribe', channel }));
     };
     ws.onmessage = (ev) => {
       try {
-        applyServerMessage(this.store, JSON.parse(ev.data as string));
+        const msg = JSON.parse(ev.data as string);
+        applyServerMessage(this.store, msg);
+        for (const fn of this.listeners) fn(msg);
       } catch {
         /* ignore malformed frame */
       }
