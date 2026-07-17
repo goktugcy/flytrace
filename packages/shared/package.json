@@ -10,6 +10,7 @@
     "./errors": "./src/errors/index.ts",
     "./events": "./src/events/index.ts",
     "./bus": "./src/bus/index.ts",
+    "./contracts": "./src/contracts/index.ts",
     "./ids": "./src/ids/index.ts",
     "./clock": "./src/clock/index.ts"
   },

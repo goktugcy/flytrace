@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppContext } from './context.ts';
+import { createFlightsRoutes } from './flights/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 export interface AppEnv {
@@ -89,6 +90,9 @@ export function createApp(ctx: AppContext) {
       meta: { requestId: c.get('requestId') },
     });
   });
+
+  // ── Public flight read endpoints (docs/11 §11.6) ──
+  app.route('/api/v1', createFlightsRoutes(ctx));
 
   // ── Fallbacks & error mapping ──
   app.notFound((c) =>
