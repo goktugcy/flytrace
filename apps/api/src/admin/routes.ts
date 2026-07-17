@@ -1,4 +1,5 @@
 import { sql } from '@flytrace/db';
+import { AppError } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { requireRole } from '../auth/routes.ts';
@@ -59,6 +60,46 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
       from flights order by last_seen_at desc nulls last limit 50
     `)) as unknown as unknown[];
     return ok(c, { flights: rows });
+  });
+
+  const requireQueue = () => {
+    if (!ctx.providerQueue) throw new AppError('INTERNAL', 'queue not available');
+    return ctx.providerQueue;
+  };
+
+  // Dead-letter browser: failed provider.fetch jobs (docs/03 §3.4.7, docs/17 §17.4).
+  app.get('/admin/dlq', async (c) => {
+    const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200);
+    const jobs = await requireQueue().getFailed(0, limit - 1);
+    return ok(c, {
+      jobs: jobs.map((j) => ({
+        id: j.id,
+        name: j.name,
+        data: j.data,
+        failedReason: j.failedReason,
+        attemptsMade: j.attemptsMade,
+        timestamp: j.timestamp,
+        processedOn: j.processedOn ?? null,
+      })),
+    });
+  });
+
+  // Retry a single failed job.
+  app.post('/admin/dlq/:jobId/retry', async (c) => {
+    const jobId = c.req.param('jobId');
+    const job = await requireQueue().getJob(jobId);
+    if (!job) throw new AppError('NOT_FOUND', `job ${jobId} not found`);
+    await job.retry();
+    return ok(c, { retried: jobId });
+  });
+
+  // Retry every failed job (bounded batch).
+  app.post('/admin/dlq/retry-all', async (c) => {
+    const queue = requireQueue();
+    const jobs = await queue.getFailed(0, 499);
+    const results = await Promise.allSettled(jobs.map((j) => j.retry()));
+    const retried = results.filter((r) => r.status === 'fulfilled').length;
+    return ok(c, { retried, failed: results.length - retried });
   });
 
   return app;

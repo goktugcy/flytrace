@@ -23,6 +23,16 @@ interface AdminData {
     circuitState: string;
   }[];
   flights: { flightId: string; callsign: string; status: string; flightDate: string }[];
+  dlq: DlqJob[];
+}
+
+interface DlqJob {
+  id: string;
+  name: string;
+  failedReason: string | null;
+  attemptsMade: number;
+  timestamp: number;
+  data: { flightId?: string; flightNumber?: string };
 }
 
 export function AdminConsole() {
@@ -31,32 +41,43 @@ export function AdminConsole() {
     'loading',
   );
 
+  const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
+
+  async function load() {
+    try {
+      const first = await get('stats');
+      if (first.status === 401) return setState('unauth');
+      if (first.status === 403) return setState('forbidden');
+      if (!first.ok) return setState('error');
+      const [stats, queues, providers, flights, dlq] = await Promise.all([
+        first.json(),
+        get('queues').then((r) => r.json()),
+        get('providers').then((r) => r.json()),
+        get('flights').then((r) => r.json()),
+        get('dlq').then((r) => r.json()),
+      ]);
+      setData({
+        stats: stats.data.stats,
+        queues: queues.data.queues,
+        providers: providers.data.providers,
+        flights: flights.data.flights,
+        dlq: dlq.data.jobs,
+      });
+      setState('ready');
+    } catch {
+      setState('error');
+    }
+  }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
   useEffect(() => {
-    (async () => {
-      const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
-      try {
-        const first = await get('stats');
-        if (first.status === 401) return setState('unauth');
-        if (first.status === 403) return setState('forbidden');
-        if (!first.ok) return setState('error');
-        const [stats, queues, providers, flights] = await Promise.all([
-          first.json(),
-          get('queues').then((r) => r.json()),
-          get('providers').then((r) => r.json()),
-          get('flights').then((r) => r.json()),
-        ]);
-        setData({
-          stats: stats.data.stats,
-          queues: queues.data.queues,
-          providers: providers.data.providers,
-          flights: flights.data.flights,
-        });
-        setState('ready');
-      } catch {
-        setState('error');
-      }
-    })();
+    void load();
   }, []);
+
+  async function retry(path: string) {
+    await fetch(`${API_BASE}/api/v1/admin/${path}`, { method: 'POST', credentials: 'include' });
+    await load();
+  }
 
   if (state === 'unauth')
     return (
@@ -118,6 +139,43 @@ export function AdminConsole() {
         )}
       </Section>
 
+      <Section title={`Dead-letter queue (${data.dlq.length})`}>
+        {data.dlq.length === 0 ? (
+          <Empty>No failed jobs 🎉</Empty>
+        ) : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <button type="button" onClick={() => retry('dlq/retry-all')} style={retryBtn}>
+                Retry all
+              </button>
+            </div>
+            {data.dlq.map((j) => (
+              <Row key={j.id}>
+                <span style={{ fontWeight: 600 }}>{j.data.flightNumber ?? j.name}</span>
+                <span
+                  style={{
+                    color: '#ff7b7b',
+                    fontSize: 13,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    maxWidth: 360,
+                  }}
+                >
+                  {j.failedReason ?? 'unknown error'}
+                </span>
+                <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
+                  {j.attemptsMade} attempts
+                </span>
+                <button type="button" onClick={() => retry(`dlq/${j.id}/retry`)} style={retryBtn}>
+                  Retry
+                </button>
+              </Row>
+            ))}
+          </>
+        )}
+      </Section>
+
       <Section title={`Recent flights (${data.flights.length})`}>
         {data.flights.map((f) => (
           <Row key={f.flightId}>
@@ -130,6 +188,17 @@ export function AdminConsole() {
     </Shell>
   );
 }
+
+const retryBtn: React.CSSProperties = {
+  padding: '4px 12px',
+  borderRadius: 6,
+  border: 'none',
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 13,
+  background: 'var(--accent)',
+  color: '#04122b',
+};
 
 function healthColor(h: string): string {
   return h === 'up' ? '#2e9e6b' : h === 'degraded' ? '#c9a227' : '#ff7b7b';

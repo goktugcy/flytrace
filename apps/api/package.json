@@ -13,6 +13,7 @@
     "@flytrace/db": "workspace:*",
     "@flytrace/notifications": "workspace:*",
     "@flytrace/shared": "workspace:*",
+    "bullmq": "^5.34.0",
     "hono": "^4.6.14",
     "ioredis": "^5.4.2",
     "zod": "^3.24.1"

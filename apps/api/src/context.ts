@@ -2,10 +2,12 @@ import { type Database, createDb } from '@flytrace/db';
 import {
   type Clock,
   type Logger,
+  QUEUES,
   createLogger,
   redisKeyPrefix,
   systemClock,
 } from '@flytrace/shared';
+import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import type { ApiConfig } from './config.ts';
 import { type ApiMetrics, createApiMetrics } from './metrics.ts';
@@ -22,6 +24,8 @@ export interface AppContext {
   redis: Redis;
   /** Redis key namespace for this environment (docs/09 §9.2). */
   redisPrefix: string;
+  /** BullMQ handle to the provider-fetch queue for admin DLQ browse/retry. */
+  providerQueue?: Queue;
   metrics: ApiMetrics;
   close: () => Promise<void>;
 }
@@ -41,6 +45,12 @@ export function createContext(config: ApiConfig): AppContext {
   });
   redis.on('error', (err) => logger.error('redis error', { err: String(err) }));
 
+  // Dedicated connection for BullMQ management ops (getFailed/retry); BullMQ
+  // requires maxRetriesPerRequest=null on its connections.
+  const queueConn = redis.duplicate({ maxRetriesPerRequest: null });
+  queueConn.on('error', (err) => logger.error('redis(queue) error', { err: String(err) }));
+  const providerQueue = new Queue(QUEUES.providerFetch, { connection: queueConn });
+
   return {
     config,
     logger,
@@ -48,8 +58,11 @@ export function createContext(config: ApiConfig): AppContext {
     db,
     redis,
     redisPrefix: redisKeyPrefix(config.APP_ENV),
+    providerQueue,
     metrics: createApiMetrics(),
     close: async () => {
+      await providerQueue.close();
+      queueConn.disconnect();
       redis.disconnect();
       await closeDb();
     },
