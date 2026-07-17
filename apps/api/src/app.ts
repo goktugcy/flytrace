@@ -7,6 +7,7 @@ import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
 import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
+import { createNotifyRoutes } from './notify/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -127,6 +128,9 @@ export function createApp(ctx: AppContext) {
 
   // ── Public flight read endpoints (docs/11 §11.6) ──
   app.route('/api/v1', createFlightsRoutes(ctx));
+
+  // ── Watchlist / channels / notifications (docs/10) ──
+  app.route('/api/v1', createNotifyRoutes(ctx));
 
   // ── Fallbacks & error mapping ──
   app.notFound((c) =>

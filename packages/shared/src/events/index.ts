@@ -144,6 +144,63 @@ export interface DomainEventInput<T = unknown> {
   causationId?: string;
 }
 
+/** The DB `event_type` enum values (mirrors packages/db `_enums`). */
+export const DB_EVENT_TYPES = [
+  'flight_detected',
+  'flight_updated',
+  'takeoff',
+  'landing',
+  'climb',
+  'descent',
+  'top_of_climb',
+  'top_of_descent',
+  'gate_change',
+  'delay',
+  'cancelled',
+  'entered_airspace',
+  'arrived',
+  'flight_ended',
+  'aircraft_changed',
+] as const;
+export type DbEventTypeName = (typeof DB_EVENT_TYPES)[number];
+
+/**
+ * Map a domain event → its persisted `event_type` value (null = not a timeline
+ * event, e.g. positions). Shared so the worker (persistence) and notifier (rule
+ * matching) agree on the mapping. Climb/Descent carry the precise phase.
+ */
+export function domainToDbEventType(env: EventEnvelope): DbEventTypeName | null {
+  switch (env.type) {
+    case 'FlightDetected':
+      return 'flight_detected';
+    case 'FlightUpdated':
+      return 'flight_updated';
+    case 'TakeoffDetected':
+      return 'takeoff';
+    case 'LandingDetected':
+      return 'landing';
+    case 'FlightEnded':
+      return 'flight_ended';
+    case 'ClimbDetected':
+    case 'DescentDetected':
+      return (env.payload as PhaseEventPayload).phase;
+    case 'GateChanged':
+      return 'gate_change';
+    case 'DelayDetected':
+      return 'delay';
+    case 'FlightCancelled':
+      return 'cancelled';
+    case 'ArrivedAtGate':
+      return 'arrived';
+    case 'EnteredAirspace':
+      return 'entered_airspace';
+    case 'AircraftChanged':
+      return 'aircraft_changed';
+    default:
+      return null; // PositionUpdated + notification lifecycle events
+  }
+}
+
 /** Wrap a {@link DomainEventInput} into a validated, transport-ready envelope. */
 export function makeEnvelope<T>(
   input: DomainEventInput<T>,

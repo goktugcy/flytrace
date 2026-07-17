@@ -1,5 +1,13 @@
-import type { EventInput, FlightRepo, PositionInput } from '@flytrace/db';
-import type { EventEnvelope, Logger, PhaseEventPayload, PositionPayload } from '@flytrace/shared';
+import type { FlightRepo, PositionInput } from '@flytrace/db';
+import {
+  type EventEnvelope,
+  type Logger,
+  type PositionPayload,
+  domainToDbEventType,
+} from '@flytrace/shared';
+
+/** Re-exported for tests; the mapping itself is shared (docs/07). */
+export const dbEventType = domainToDbEventType;
 
 /**
  * Projects tracker domain events into Postgres (docs/06 §6.7). Positions are
@@ -13,27 +21,6 @@ export interface PersisterOptions {
 }
 
 const FLIGHT_END_REASONS = new Set(['landed', 'arrived', 'timeout', 'diverted']);
-
-/** Map a domain event type → the DB `event_type` enum value (null = not stored). */
-export function dbEventType(env: EventEnvelope): EventInput['type'] | null {
-  switch (env.type) {
-    case 'FlightDetected':
-      return 'flight_detected';
-    case 'FlightUpdated':
-      return 'flight_updated';
-    case 'TakeoffDetected':
-      return 'takeoff';
-    case 'LandingDetected':
-      return 'landing';
-    case 'FlightEnded':
-      return 'flight_ended';
-    case 'ClimbDetected':
-    case 'DescentDetected':
-      return (env.payload as PhaseEventPayload).phase; // climb|descent|top_of_climb|top_of_descent
-    default:
-      return null; // PositionUpdated (→ positions) + provider/notification events
-  }
-}
 
 function utcDate(iso: string): string {
   return iso.slice(0, 10); // YYYY-MM-DD

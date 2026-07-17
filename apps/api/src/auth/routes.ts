@@ -29,6 +29,14 @@ export function attachSession(service: AuthService): MiddlewareHandler<AppEnv> {
   };
 }
 
+/** Require an authenticated session; 401 otherwise. For owner-scoped routes. */
+export function requireUser(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    if (!c.get('user')) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    await next();
+  };
+}
+
 /** Reject state-changing requests whose Origin is present but not allow-listed. */
 function csrfGuard(allowedOrigins: string[]): MiddlewareHandler<AppEnv> {
   return async (c, next) => {

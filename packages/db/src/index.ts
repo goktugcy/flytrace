@@ -7,6 +7,7 @@ export { sql, eq, and, or, desc, asc, inArray } from 'drizzle-orm';
 export * from './repos/flights.ts';
 export * from './repos/flights-read.ts';
 export * from './repos/auth.ts';
+export * from './repos/notify.ts';
 
 export type Database = ReturnType<typeof createDb>['db'];
 
