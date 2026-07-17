@@ -128,6 +128,8 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   const providerFetch = new ProviderFetchService({
     registry,
     statusRepo: createFlightStatusRepo(db),
+    catalog: createCatalogRepo(db),
+    flightRepo: createFlightRepo(db),
     emit,
     clock: providerCtx.clock,
     logger,

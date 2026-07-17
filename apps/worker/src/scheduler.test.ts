@@ -39,6 +39,9 @@ function catalog(map: Record<string, string>): CatalogRepo {
       const iata = map[icao.toUpperCase()];
       return iata ? { id: 'a', iata, icao, name: icao, providerKey: null } : null;
     },
+    getAirlineIdByIata: async () => null,
+    getAirportIdByIata: async () => null,
+    getAircraftIdByRegistration: async () => null,
   };
 }
 

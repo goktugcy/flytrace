@@ -1,4 +1,10 @@
-import type { FlightStatusRepo, SnapshotStatus } from '@flytrace/db';
+import type {
+  CatalogRepo,
+  FlightEnrichment,
+  FlightRepo,
+  FlightStatusRepo,
+  SnapshotStatus,
+} from '@flytrace/db';
 import type { NormalizedFlightStatus, ProviderRegistry } from '@flytrace/providers';
 import {
   type Clock,
@@ -51,9 +57,15 @@ export function diffStatus(before: SnapshotStatus | null, after: ProviderStatusF
 export interface ProviderFetchDeps {
   registry: ProviderRegistry;
   statusRepo: FlightStatusRepo;
+  catalog: CatalogRepo;
+  flightRepo: Pick<FlightRepo, 'enrichFlight'>;
   emit: (env: ReturnType<typeof makeEnvelope>) => Promise<void>;
   clock: Clock;
   logger: Logger;
+}
+
+function optDate(iso: string | undefined): Date | undefined {
+  return iso ? new Date(iso) : undefined;
 }
 
 /**
@@ -101,6 +113,8 @@ export class ProviderFetchService {
       fetchedAt: new Date(fetchedAt),
     });
 
+    await this.enrich(job.flightId, result.status);
+
     if (changed.length === 0) return; // nothing new → no event
 
     const payload: ProviderUpdatedPayload = {
@@ -124,6 +138,44 @@ export class ProviderFetchService {
         { producer: 'worker', clock: this.deps.clock },
       ),
     );
+  }
+
+  /**
+   * Resolve identity/route/schedule from the normalized status into catalog FKs
+   * and attach them to the flight row (docs/08 §8.8). Best-effort: unresolved
+   * codes (unknown airline/airport/tail) are simply left off the patch.
+   */
+  private async enrich(flightId: string, s: NormalizedFlightStatus): Promise<void> {
+    const patch: FlightEnrichment = { flightNumber: s.flightNumber };
+
+    const [airlineId, originId, destinationId, aircraftId] = await Promise.all([
+      this.deps.catalog.getAirlineIdByIata(s.airlineIata),
+      this.deps.catalog.getAirportIdByIata(s.origin),
+      this.deps.catalog.getAirportIdByIata(s.destination),
+      s.registration
+        ? this.deps.catalog.getAircraftIdByRegistration(s.registration)
+        : Promise.resolve(null),
+    ]);
+
+    if (airlineId) patch.airlineId = airlineId;
+    if (originId) patch.originAirportId = originId;
+    if (destinationId) patch.destinationAirportId = destinationId;
+    if (aircraftId) patch.aircraftId = aircraftId;
+
+    const sd = optDate(s.scheduledDeparture);
+    const ed = optDate(s.estimatedDeparture);
+    const ad = optDate(s.actualDeparture);
+    const sa = optDate(s.scheduledArrival);
+    const ea = optDate(s.estimatedArrival);
+    const aa = optDate(s.actualArrival);
+    if (sd) patch.scheduledDeparture = sd;
+    if (ed) patch.estimatedDeparture = ed;
+    if (ad) patch.actualDeparture = ad;
+    if (sa) patch.scheduledArrival = sa;
+    if (ea) patch.estimatedArrival = ea;
+    if (aa) patch.actualArrival = aa;
+
+    await this.deps.flightRepo.enrichFlight(flightId, patch);
   }
 }
 

@@ -44,6 +44,25 @@ export interface EventInput {
 
 export type EndReason = 'landed' | 'arrived' | 'timeout' | 'diverted';
 
+/**
+ * Enrichment patch applied to a flight once a provider resolves its schedule/
+ * route/identity. Every field is optional; only provided keys are written, and
+ * an already-set FK/value is never clobbered with null (COALESCE in SQL).
+ */
+export interface FlightEnrichment {
+  flightNumber?: string;
+  airlineId?: string;
+  aircraftId?: string;
+  originAirportId?: string;
+  destinationAirportId?: string;
+  scheduledDeparture?: Date;
+  estimatedDeparture?: Date;
+  actualDeparture?: Date;
+  scheduledArrival?: Date;
+  estimatedArrival?: Date;
+  actualArrival?: Date;
+}
+
 export function createFlightRepo(db: Database) {
   return {
     /** Create the flight-leg row on first sight; refresh liveness thereafter. */
@@ -97,6 +116,30 @@ export function createFlightRepo(db: Database) {
           dedupeKey: e.dedupeKey,
         })
         .onConflictDoNothing({ target: flightEvents.dedupeKey });
+    },
+
+    /**
+     * Attach resolved identity/route/schedule to a flight (docs/08 §8.8). Only
+     * the keys present in `patch` are written; unresolved fields are left as-is,
+     * so a later fetch can fill gaps without erasing earlier enrichment.
+     */
+    async enrichFlight(flightId: string, patch: FlightEnrichment): Promise<void> {
+      const set: Record<string, unknown> = {};
+      if (patch.flightNumber !== undefined) set.flightNumber = patch.flightNumber;
+      if (patch.airlineId !== undefined) set.airlineId = patch.airlineId;
+      if (patch.aircraftId !== undefined) set.aircraftId = patch.aircraftId;
+      if (patch.originAirportId !== undefined) set.originAirportId = patch.originAirportId;
+      if (patch.destinationAirportId !== undefined)
+        set.destinationAirportId = patch.destinationAirportId;
+      if (patch.scheduledDeparture !== undefined) set.scheduledDeparture = patch.scheduledDeparture;
+      if (patch.estimatedDeparture !== undefined) set.estimatedDeparture = patch.estimatedDeparture;
+      if (patch.actualDeparture !== undefined) set.actualDeparture = patch.actualDeparture;
+      if (patch.scheduledArrival !== undefined) set.scheduledArrival = patch.scheduledArrival;
+      if (patch.estimatedArrival !== undefined) set.estimatedArrival = patch.estimatedArrival;
+      if (patch.actualArrival !== undefined) set.actualArrival = patch.actualArrival;
+      if (Object.keys(set).length === 0) return;
+      set.updatedAt = new Date();
+      await db.update(flights).set(set).where(sql`${flights.id} = ${flightId}`);
     },
 
     /** Finalize a leg when it lands / times out. */

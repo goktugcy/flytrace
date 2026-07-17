@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import type { FlightStatusRepo, SnapshotStatus, SnapshotUpsert } from '@flytrace/db';
+import type {
+  CatalogRepo,
+  FlightEnrichment,
+  FlightStatusRepo,
+  SnapshotStatus,
+  SnapshotUpsert,
+} from '@flytrace/db';
 import { ProviderRegistry, fixtureProviderFactory } from '@flytrace/providers';
 import type { ProviderContext } from '@flytrace/providers';
 import {
@@ -56,8 +62,17 @@ class FakeStatusRepo implements FlightStatusRepo {
   }
 }
 
+/** Catalog fake: resolves a couple of known codes, everything else misses. */
+const fakeCatalog = {
+  getAirlineByIcao: async () => null,
+  getAirlineIdByIata: async (iata: string) => (iata === 'XX' ? 'airline-xx' : null),
+  getAirportIdByIata: async (iata: string) => ({ IST: 'ap-ist', ESB: 'ap-esb' })[iata] ?? null,
+  getAircraftIdByRegistration: async (reg: string) => (reg === 'TC-XXX' ? 'ac-1' : null),
+} as unknown as CatalogRepo;
+
 async function makeService(statusRepo: FakeStatusRepo) {
   const emitted: EventEnvelope[] = [];
+  const enriched: { flightId: string; patch: FlightEnrichment }[] = [];
   const registry = await ProviderRegistry.build(
     [fixtureProviderFactory({ key: 'fixture', airlineIata: ['XX'] })],
     { enabled: new Set(['fixture']), ctx: providerCtx() },
@@ -65,13 +80,19 @@ async function makeService(statusRepo: FakeStatusRepo) {
   const service = new ProviderFetchService({
     registry,
     statusRepo,
+    catalog: fakeCatalog,
+    flightRepo: {
+      enrichFlight: async (flightId, patch) => {
+        enriched.push({ flightId, patch });
+      },
+    },
     emit: async (e) => {
       emitted.push(e);
     },
     clock,
     logger: createLogger({ level: 'error', base: {} }),
   });
-  return { service, emitted };
+  return { service, emitted, enriched };
 }
 
 describe('diffStatus', () => {
@@ -123,5 +144,20 @@ describe('ProviderFetchService', () => {
     await service.process({ ...job, airlineIata: 'ZZ' });
     expect(repo.upserts).toHaveLength(0);
     expect(emitted).toHaveLength(0);
+  });
+
+  test('enriches the flight with resolved catalog FKs', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, enriched } = await makeService(repo);
+    await service.process(job);
+
+    expect(enriched).toHaveLength(1);
+    const { flightId, patch } = enriched[0] ?? { flightId: '', patch: {} };
+    expect(flightId).toBe(FLIGHT);
+    expect(patch.flightNumber).toBe('XX100');
+    expect(patch.airlineId).toBe('airline-xx');
+    expect(patch.originAirportId).toBe('ap-ist'); // IST resolves
+    expect(patch.destinationAirportId).toBeUndefined(); // LHR uncatalogued → omitted
+    expect(patch.aircraftId).toBeUndefined(); // no registration in fixture
   });
 });

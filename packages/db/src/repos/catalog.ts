@@ -20,6 +20,34 @@ export function createCatalogRepo(db: Database) {
       `)) as unknown as AirlineRow[];
       return rows[0] ?? null;
     },
+
+    /** Resolve an IATA airline designator → airline id (enrichment). */
+    async getAirlineIdByIata(iata: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select id from airlines where iata = ${iata.toUpperCase()} limit 1
+      `)) as unknown as { id: string }[];
+      return rows[0]?.id ?? null;
+    },
+
+    /** Resolve an IATA airport code → airport id (origin/destination FKs). */
+    async getAirportIdByIata(iata: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select id from airports where iata = ${iata.toUpperCase()} limit 1
+      `)) as unknown as { id: string }[];
+      return rows[0]?.id ?? null;
+    },
+
+    /**
+     * Resolve an aircraft by registration → aircraft id. Link-only (does not
+     * insert): the aircraft table is keyed by icao24, which provider status
+     * doesn't carry, so we only attach when the tail is already catalogued.
+     */
+    async getAircraftIdByRegistration(registration: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select id from aircraft where registration = ${registration.toUpperCase()} limit 1
+      `)) as unknown as { id: string }[];
+      return rows[0]?.id ?? null;
+    },
   };
 }
 

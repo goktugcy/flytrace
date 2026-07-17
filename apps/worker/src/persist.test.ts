@@ -25,6 +25,7 @@ class FakeRepo implements FlightRepo {
   async insertEvent(e: EventInput): Promise<void> {
     this.events.push(e);
   }
+  async enrichFlight(): Promise<void> {}
   async endFlight(
     flightId: string,
     _at: Date,
