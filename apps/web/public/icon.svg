@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FlyTrace">
+  <rect width="512" height="512" rx="96" fill="#0b0f1a"/>
+  <path fill="#4ea1ff" d="M256 96l24 128 128 40-128 24-24 128-24-128-128-24 128-40z"/>
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#1e2636" stroke-width="12"/>
+</svg>
