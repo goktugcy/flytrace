@@ -25,6 +25,8 @@ export class StreamConsumer {
     private readonly persister: Persister,
     private readonly logger: Logger,
     private readonly options: ConsumerOptions,
+    /** Best-effort side-effect per event (e.g. schedule provider fetches). */
+    private readonly onEvent?: (env: EventEnvelope) => Promise<void>,
   ) {}
 
   private get streamKey(): string {
@@ -68,6 +70,13 @@ export class StreamConsumer {
         } catch (err) {
           this.logger.error('persist failed', { id, err: String(err) });
           continue; // leave un-acked → redelivered later (PEL)
+        }
+        if (this.onEvent) {
+          try {
+            await this.onEvent(env); // best-effort; must not block the ack
+          } catch (err) {
+            this.logger.error('onEvent failed', { id, err: String(err) });
+          }
         }
       }
       ackIds.push(id); // ack malformed (poison) too, so it doesn't loop forever

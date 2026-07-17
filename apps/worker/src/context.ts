@@ -1,4 +1,10 @@
-import { type Database, createDb, createFlightRepo, createFlightStatusRepo } from '@flytrace/db';
+import {
+  type Database,
+  createCatalogRepo,
+  createDb,
+  createFlightRepo,
+  createFlightStatusRepo,
+} from '@flytrace/db';
 import { ProviderRegistry, fixtureProviderFactory } from '@flytrace/providers';
 import {
   type EventEnvelope,
@@ -16,6 +22,7 @@ import { Persister } from './persist.ts';
 import { FetchHttpClient, RedisProviderCache, RedisRateLimiter } from './provider-adapters.ts';
 import { ProviderFetchService } from './provider-fetch.ts';
 import { createProviderFetchQueue, startProviderFetchWorker } from './queues.ts';
+import { ProviderScheduler } from './scheduler.ts';
 
 export interface WorkerContext {
   config: WorkerConfig;
@@ -48,16 +55,34 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   const cmdRedis = redis.duplicate();
   cmdRedis.on('error', (err) => logger.error('redis(cmd) error', { err: String(err) }));
 
+  // ── BullMQ provider-fetch queue (dedicated connection) ──
+  const bullConnection = redis.duplicate();
+  const providerQueue = createProviderFetchQueue(bullConnection);
+
+  // Schedule a provider fetch when a flight of a known airline is detected.
+  const scheduler = new ProviderScheduler({
+    queue: providerQueue,
+    catalog: createCatalogRepo(db),
+    logger,
+  });
+
   // ── Persistence pipeline (stream consumer) ──
   const persister = new Persister(createFlightRepo(db), logger, {
     maxPositionBatch: config.WORKER_MAX_POSITION_BATCH,
   });
-  const consumer = new StreamConsumer(redis, prefix, persister, logger, {
-    group: config.WORKER_GROUP,
-    consumer: config.WORKER_CONSUMER,
-    batchSize: config.WORKER_BATCH_SIZE,
-    blockMs: config.WORKER_BLOCK_MS,
-  });
+  const consumer = new StreamConsumer(
+    redis,
+    prefix,
+    persister,
+    logger,
+    {
+      group: config.WORKER_GROUP,
+      consumer: config.WORKER_CONSUMER,
+      batchSize: config.WORKER_BATCH_SIZE,
+      blockMs: config.WORKER_BLOCK_MS,
+    },
+    (env) => scheduler.onEvent(env),
+  );
 
   // ── Provider registry (docs/08) ──
   const providerCtx = {
@@ -108,9 +133,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     logger,
   });
 
-  // ── BullMQ provider-fetch queue + worker (dedicated connection) ──
-  const bullConnection = redis.duplicate();
-  const providerQueue = createProviderFetchQueue(bullConnection);
+  // ── BullMQ provider-fetch worker (queue built above; dedicated connection) ──
   const providerWorker = startProviderFetchWorker(bullConnection, providerFetch, logger);
 
   return {
