@@ -138,6 +138,29 @@ export function createNotifyRepo(db: Database) {
       return rows[0]?.userId ?? null;
     },
 
+    // ── Email double opt-in ──
+    /** Create a pending, unverified email channel holding a verification token. */
+    async createEmailChannel(userId: string, email: string, token: string): Promise<void> {
+      await db.insert(notificationChannels).values({
+        userId,
+        channel: 'email',
+        address: { email },
+        verified: false,
+        enabled: true,
+        linkToken: token,
+      });
+    },
+
+    /** Verify an email channel by its token; returns the userId, or null. */
+    async verifyEmailToken(token: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        update notification_channels set verified = true, link_token = null, updated_at = now()
+        where link_token = ${token} and channel = 'email'
+        returning user_id as "userId"
+      `)) as unknown as { userId: string }[];
+      return rows[0]?.userId ?? null;
+    },
+
     /** Disable all telegram channels for a chat (the /stop command). */
     async disableTelegramByChat(chatId: number | string): Promise<void> {
       await db.execute(sql`

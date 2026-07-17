@@ -1,7 +1,9 @@
 import { type Database, createDb, createNotifyRepo } from '@flytrace/db';
 import {
   ChannelRegistry,
+  EmailChannel,
   FakeChannel,
+  HttpEmailTransport,
   TelegramChannel,
   WebPushChannel,
 } from '@flytrace/notifications';
@@ -91,7 +93,10 @@ function buildChannels(config: NotifierConfig, logger: Logger): ChannelRegistry 
   const registry = new ChannelRegistry();
   if (config.NOTIFIER_FAKE_PUSH) {
     logger.warn('using fake channels (NOTIFIER_FAKE_PUSH)');
-    return registry.register(new FakeChannel('webpush')).register(new FakeChannel('telegram'));
+    return registry
+      .register(new FakeChannel('webpush'))
+      .register(new FakeChannel('telegram'))
+      .register(new FakeChannel('email'));
   }
   if (config.WEB_PUSH_PUBLIC_KEY && config.WEB_PUSH_PRIVATE_KEY) {
     registry.register(
@@ -105,6 +110,18 @@ function buildChannels(config: NotifierConfig, logger: Logger): ChannelRegistry 
   if (config.TELEGRAM_BOT_TOKEN) {
     registry.register(
       new TelegramChannel({ token: config.TELEGRAM_BOT_TOKEN, webBaseUrl: config.WEB_BASE_URL }),
+    );
+  }
+  if (config.EMAIL_API_KEY) {
+    registry.register(
+      new EmailChannel({
+        from: config.EMAIL_FROM,
+        webBaseUrl: config.WEB_BASE_URL,
+        transport: new HttpEmailTransport({
+          apiKey: config.EMAIL_API_KEY,
+          apiUrl: config.EMAIL_API_URL,
+        }),
+      }),
     );
   }
   logger.info('channels enabled', { channels: registry.keys() });

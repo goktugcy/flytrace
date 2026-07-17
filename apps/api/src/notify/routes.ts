@@ -1,9 +1,11 @@
 import { createNotifyRepo } from '@flytrace/db';
+import { HttpEmailTransport } from '@flytrace/notifications';
 import { AppError, DB_EVENT_TYPES } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
 import { requireUser } from '../auth/routes.ts';
+import { randomToken } from '../auth/service.ts';
 import type { AppContext } from '../context.ts';
 
 const createWatchSchema = z.object({
@@ -17,6 +19,9 @@ const webPushSchema = z.object({
   endpoint: z.string().url(),
   keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
 });
+
+const emailSchema = z.object({ email: z.string().email() });
+const emailVerifySchema = z.object({ token: z.string().min(1) });
 
 /**
  * User notification endpoints (docs/11 §11.6, docs/10 §10.2): watchlist CRUD +
@@ -35,7 +40,7 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
   app.use('/watchlist', requireUser());
   app.use('/watchlist/*', requireUser());
   app.use('/notifications', requireUser());
-  app.use('/channels/*', requireUser());
+  // /channels/* handlers self-check auth so email verification can stay public.
 
   app.get('/watchlist', async (c) => {
     const user = c.get('user');
@@ -82,6 +87,45 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     const user = c.get('user');
     const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200);
     return ok(c, { items: await repo.listForUser(user?.id ?? '', limit) });
+  });
+
+  // Email double opt-in: register an address (unverified) + send a verify link.
+  app.post('/channels/email', async (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    const parsed = emailSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid email', { details: parsed.error.issues });
+    const token = randomToken().slice(0, 24);
+    await repo.createEmailChannel(user.id, parsed.data.email, token);
+
+    let sent = false;
+    if (ctx.config.EMAIL_API_KEY) {
+      const link = `${ctx.config.WEB_BASE_URL}/verify-email?token=${token}`;
+      const transport = new HttpEmailTransport({
+        apiKey: ctx.config.EMAIL_API_KEY,
+        apiUrl: ctx.config.EMAIL_API_URL,
+      });
+      const res = await transport.send({
+        from: ctx.config.EMAIL_FROM,
+        to: parsed.data.email,
+        subject: 'Verify your FlyTrace email',
+        html: `<p>Confirm this address to receive flight alerts.</p><p><a href="${link}">Verify email</a></p>`,
+        text: `Verify your email: ${link}`,
+      });
+      sent = res.ok;
+    }
+    // In local dev without an email provider, return the token so the flow is testable.
+    return ok(c, { sent, ...(ctx.config.APP_ENV === 'local' ? { token } : {}) }, 201);
+  });
+
+  app.post('/channels/email/verify', async (c) => {
+    const parsed = emailVerifySchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid token', { details: parsed.error.issues });
+    const userId = await repo.verifyEmailToken(parsed.data.token);
+    if (!userId) throw new AppError('NOT_FOUND', 'invalid or expired token');
+    return ok(c, { ok: true });
   });
 
   return app;

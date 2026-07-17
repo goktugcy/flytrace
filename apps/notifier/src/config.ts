@@ -15,6 +15,7 @@ const notifierConfigSchema = configSchemas.base
   .merge(configSchemas.redis)
   .merge(configSchemas.webPush)
   .merge(configSchemas.telegram)
+  .merge(configSchemas.email)
   .merge(notifierSchema);
 
 export type NotifierConfig = z.infer<typeof notifierConfigSchema>;

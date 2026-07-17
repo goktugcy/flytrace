@@ -104,6 +104,12 @@ const telegramSchema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
 });
 
+const emailSchema = z.object({
+  EMAIL_FROM: z.string().default('FlyTrace <alerts@flytrace.local>'),
+  EMAIL_API_KEY: z.string().optional(),
+  EMAIL_API_URL: z.string().url().default('https://api.resend.com/emails'),
+});
+
 /** Compose the schemas an app needs; each app validates only its slice. */
 export const configSchemas = {
   base: baseSchema,
@@ -114,6 +120,7 @@ export const configSchemas = {
   opensky: openskySchema,
   webPush: webPushSchema,
   telegram: telegramSchema,
+  email: emailSchema,
   boolish,
 };
 
@@ -124,7 +131,8 @@ const fullSchema = baseSchema
   .merge(authSchema)
   .merge(openskySchema)
   .merge(webPushSchema)
-  .merge(telegramSchema);
+  .merge(telegramSchema)
+  .merge(emailSchema);
 
 export type Config = z.infer<typeof fullSchema>;
 
