@@ -69,12 +69,13 @@ export default function HomePage() {
         <Hero />
       </section>
 
+      <h2 style={{ fontSize: '1.5rem', marginTop: '4rem', marginBottom: 0 }}>What you get</h2>
       <section
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))',
           gap: 16,
-          marginTop: '4rem',
+          marginTop: '1.25rem',
         }}
       >
         {FEATURES.map((f) => (

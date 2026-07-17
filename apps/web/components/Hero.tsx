@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // The WebGL scene never renders on the server (no canvas/GL there).
 const Hero3DScene = dynamic(() => import('./Hero3DScene').then((m) => m.Hero3DScene), {
@@ -32,13 +32,34 @@ function detectMode(): Exclude<Mode, 'pending'> {
  */
 export function Hero() {
   const [mode, setMode] = useState<Mode>('pending');
+  const [visible, setVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMode(detectMode());
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
   }, []);
+
+  const show3d = visible && (mode === 'animated' || mode === 'still');
 
   return (
     <div
+      ref={ref}
       aria-hidden="true"
       style={{
         position: 'relative',
@@ -51,8 +72,7 @@ export function Hero() {
         border: '1px solid #1e2636',
       }}
     >
-      {(mode === 'animated' || mode === 'still') && <Hero3DScene animate={mode === 'animated'} />}
-      {(mode === 'pending' || mode === 'fallback') && <CssSky />}
+      {show3d ? <Hero3DScene animate={mode === 'animated'} /> : <CssSky />}
     </div>
   );
 }
