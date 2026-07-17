@@ -37,6 +37,16 @@ export function requireUser(): MiddlewareHandler<AppEnv> {
   };
 }
 
+/** Require an authenticated session with a specific role (admin console). */
+export function requireRole(role: string): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    if (user.role !== role) throw new AppError('FORBIDDEN', 'insufficient role');
+    await next();
+  };
+}
+
 /** Reject state-changing requests whose Origin is present but not allow-listed. */
 function csrfGuard(allowedOrigins: string[]): MiddlewareHandler<AppEnv> {
   return async (c, next) => {

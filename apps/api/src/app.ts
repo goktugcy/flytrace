@@ -3,6 +3,7 @@ import { AppError, correlationId, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
+import { createAdminRoutes } from './admin/routes.ts';
 import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
 import type { AppContext } from './context.ts';
@@ -149,6 +150,9 @@ export function createApp(ctx: AppContext) {
 
   // ── User: favorites / settings / channels / dashboard (docs/11 §11.6) ──
   app.route('/api/v1', createUserRoutes(ctx));
+
+  // ── Admin console (role=admin; docs/11 §11.6) ──
+  app.route('/api/v1', createAdminRoutes(ctx));
 
   // ── Fallbacks & error mapping ──
   app.notFound((c) =>
