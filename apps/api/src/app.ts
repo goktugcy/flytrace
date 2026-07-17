@@ -7,6 +7,7 @@ import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
 import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
+import { createApiMetrics } from './metrics.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
@@ -31,6 +32,7 @@ export function createApp(ctx: AppContext) {
     sessionTtlMs: SESSION_TTL_MS,
   });
   const cookieSecure = ctx.config.APP_ENV !== 'local';
+  const metrics = ctx.metrics ?? createApiMetrics();
 
   // ── Middleware chain (see docs/11-api.md §11.10) ──
   app.use('*', async (c, next) => {
@@ -40,12 +42,15 @@ export function createApp(ctx: AppContext) {
     c.header('x-request-id', requestId);
     const start = Date.now();
     await next();
+    const ms = Date.now() - start;
+    metrics.httpRequests.inc({ method: c.req.method, status: String(c.res.status) });
+    metrics.httpDuration.observe(ms / 1000, { method: c.req.method });
     ctx.logger.info('request', {
       requestId,
       method: c.req.method,
       path: c.req.path,
       status: c.res.status,
-      ms: Date.now() - start,
+      ms,
     });
   });
 
@@ -88,6 +93,11 @@ export function createApp(ctx: AppContext) {
     const ready = Object.values(checks).every((v) => v === 'ok');
     return c.json({ ready, checks }, ready ? 200 : 503);
   });
+
+  // Prometheus metrics (internal network only in prod; docs/11 §11.6, docs/14).
+  app.get('/metrics', (c) =>
+    c.text(metrics.registry.render(), 200, { 'content-type': 'text/plain; version=0.0.4' }),
+  );
 
   app.get('/api/v1', (c) =>
     c.json({

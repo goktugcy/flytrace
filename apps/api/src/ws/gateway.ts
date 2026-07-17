@@ -85,6 +85,7 @@ export class WsGateway {
         const socket = new BunSocket(ws.data.connId, ws);
         ws.data.socket = socket;
         this.hub.add(socket, ws.data.ticket);
+        this.ctx.metrics?.wsConnections.set(this.hub.size);
       },
       message: (ws, raw) => {
         const msg = parseClientMessage(typeof raw === 'string' ? raw : raw.toString());
@@ -96,6 +97,7 @@ export class WsGateway {
       },
       close: (ws) => {
         this.hub.remove(ws.data.connId);
+        this.ctx.metrics?.wsConnections.set(this.hub.size);
       },
     };
   }

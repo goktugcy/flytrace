@@ -35,6 +35,14 @@ describe('api app', () => {
     expect(body.meta.requestId).toBeTruthy();
   });
 
+  test('GET /metrics → Prometheus text', async () => {
+    const res = await app.request('/metrics');
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('http_requests_total');
+    expect(res.headers.get('content-type')).toContain('text/plain');
+  });
+
   test('unknown route → 404 error envelope', async () => {
     const res = await app.request('/nope');
     expect(res.status).toBe(404);

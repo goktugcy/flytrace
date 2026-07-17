@@ -8,6 +8,7 @@ import {
 } from '@flytrace/shared';
 import { Redis } from 'ioredis';
 import type { ApiConfig } from './config.ts';
+import { type ApiMetrics, createApiMetrics } from './metrics.ts';
 
 /**
  * The typed dependency container injected throughout the app (see docs/06 §6.5).
@@ -21,6 +22,7 @@ export interface AppContext {
   redis: Redis;
   /** Redis key namespace for this environment (docs/09 §9.2). */
   redisPrefix: string;
+  metrics: ApiMetrics;
   close: () => Promise<void>;
 }
 
@@ -46,6 +48,7 @@ export function createContext(config: ApiConfig): AppContext {
     db,
     redis,
     redisPrefix: redisKeyPrefix(config.APP_ENV),
+    metrics: createApiMetrics(),
     close: async () => {
       redis.disconnect();
       await closeDb();

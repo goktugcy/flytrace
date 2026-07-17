@@ -6,3 +6,4 @@ export * from './clock/index.ts';
 export * from './events/index.ts';
 export * from './bus/index.ts';
 export * from './contracts/index.ts';
+export * from './metrics/index.ts';
