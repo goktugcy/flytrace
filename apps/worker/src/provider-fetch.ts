@@ -54,6 +54,16 @@ export function diffStatus(before: SnapshotStatus | null, after: ProviderStatusF
   return changed;
 }
 
+/** Audit record of one provider fetch (docs/08 §8.9). */
+export interface ProviderLogEntry {
+  providerKey: string;
+  operation: string;
+  request: unknown;
+  latencyMs: number;
+  success: boolean;
+  error?: string | null;
+}
+
 export interface ProviderFetchDeps {
   registry: ProviderRegistry;
   statusRepo: FlightStatusRepo;
@@ -62,6 +72,8 @@ export interface ProviderFetchDeps {
   emit: (env: ReturnType<typeof makeEnvelope>) => Promise<void>;
   clock: Clock;
   logger: Logger;
+  /** Optional provider-traffic sink (provider_logs); best-effort, never blocks. */
+  logProvider?: (entry: ProviderLogEntry) => Promise<void>;
 }
 
 function optDate(iso: string | undefined): Date | undefined {
@@ -84,10 +96,19 @@ export class ProviderFetchService {
       return;
     }
 
+    const startedAt = this.deps.clock.now();
     const result = await provider.getFlightStatus({
       by: 'flightNumber',
       flightNumber: job.flightNumber,
       date: job.date,
+    });
+    await this.log({
+      providerKey: provider.key,
+      operation: 'getFlightStatus',
+      request: { flightNumber: job.flightNumber, date: job.date },
+      latencyMs: this.deps.clock.now() - startedAt,
+      success: result !== null,
+      error: result === null ? 'no result (miss/rate-limit/circuit)' : null,
     });
     if (!result) return;
 
@@ -138,6 +159,16 @@ export class ProviderFetchService {
         { producer: 'worker', clock: this.deps.clock },
       ),
     );
+  }
+
+  /** Best-effort provider-traffic log; a logging failure never fails the job. */
+  private async log(entry: ProviderLogEntry): Promise<void> {
+    if (!this.deps.logProvider) return;
+    try {
+      await this.deps.logProvider(entry);
+    } catch (err) {
+      this.deps.logger.warn('provider log write failed', { err: String(err) });
+    }
   }
 
   /**

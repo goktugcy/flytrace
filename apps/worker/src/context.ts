@@ -4,6 +4,7 @@ import {
   createDb,
   createFlightRepo,
   createFlightStatusRepo,
+  createSystemRepo,
 } from '@flytrace/db';
 import {
   ProviderRegistry,
@@ -135,6 +136,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
       .exec();
   };
 
+  const systemRepo = createSystemRepo(db);
   const providerFetch = new ProviderFetchService({
     registry,
     statusRepo: createFlightStatusRepo(db),
@@ -143,6 +145,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     emit,
     clock: providerCtx.clock,
     logger,
+    logProvider: (e) => systemRepo.insertProviderLog(e),
   });
 
   // ── BullMQ provider-fetch worker (queue built above; dedicated connection) ──

@@ -24,6 +24,27 @@ interface AdminData {
   }[];
   flights: { flightId: string; callsign: string; status: string; flightDate: string }[];
   dlq: DlqJob[];
+  logs: ProviderLog[];
+  audit: AuditEntry[];
+}
+
+interface ProviderLog {
+  id: string;
+  providerKey: string;
+  operation: string;
+  latencyMs: number | null;
+  success: boolean;
+  error: string | null;
+  createdAt: string;
+}
+
+interface AuditEntry {
+  id: string;
+  actorType: string;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  createdAt: string;
 }
 
 interface DlqJob {
@@ -49,12 +70,14 @@ export function AdminConsole() {
       if (first.status === 401) return setState('unauth');
       if (first.status === 403) return setState('forbidden');
       if (!first.ok) return setState('error');
-      const [stats, queues, providers, flights, dlq] = await Promise.all([
+      const [stats, queues, providers, flights, dlq, logs, auditRes] = await Promise.all([
         first.json(),
         get('queues').then((r) => r.json()),
         get('providers').then((r) => r.json()),
         get('flights').then((r) => r.json()),
         get('dlq').then((r) => r.json()),
+        get('logs').then((r) => r.json()),
+        get('audit').then((r) => r.json()),
       ]);
       setData({
         stats: stats.data.stats,
@@ -62,6 +85,8 @@ export function AdminConsole() {
         providers: providers.data.providers,
         flights: flights.data.flights,
         dlq: dlq.data.jobs,
+        logs: logs.data.logs,
+        audit: auditRes.data.audit,
       });
       setState('ready');
     } catch {
@@ -184,6 +209,45 @@ export function AdminConsole() {
             <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{f.flightDate}</span>
           </Row>
         ))}
+      </Section>
+
+      <Section title={`Provider logs (${data.logs.length})`}>
+        {data.logs.length === 0 ? (
+          <Empty>No provider traffic yet.</Empty>
+        ) : (
+          data.logs.map((l) => (
+            <Row key={l.id}>
+              <span style={{ fontWeight: 600 }}>{l.providerKey}</span>
+              <span style={{ color: 'var(--muted)' }}>{l.operation}</span>
+              <span style={{ color: l.success ? '#2e9e6b' : '#ff7b7b' }}>
+                {l.success ? 'ok' : 'fail'}
+              </span>
+              <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
+                {l.latencyMs != null ? `${l.latencyMs}ms · ` : ''}
+                {new Date(l.createdAt).toLocaleTimeString()}
+              </span>
+            </Row>
+          ))
+        )}
+      </Section>
+
+      <Section title={`Audit log (${data.audit.length})`}>
+        {data.audit.length === 0 ? (
+          <Empty>No admin actions recorded.</Empty>
+        ) : (
+          data.audit.map((a) => (
+            <Row key={a.id}>
+              <span style={{ fontWeight: 600 }}>{a.action}</span>
+              <span style={{ color: 'var(--muted)' }}>
+                {a.entity}
+                {a.entityId ? ` · ${a.entityId}` : ''}
+              </span>
+              <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
+                {a.actorType} · {new Date(a.createdAt).toLocaleString()}
+              </span>
+            </Row>
+          ))
+        )}
       </Section>
     </Shell>
   );

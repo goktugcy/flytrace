@@ -1,4 +1,4 @@
-import { sql } from '@flytrace/db';
+import { createSystemRepo, sql } from '@flytrace/db';
 import { AppError } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
@@ -12,6 +12,7 @@ import type { AppContext } from '../context.ts';
  */
 export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const system = createSystemRepo(ctx.db);
   const ok = (c: Context<AppEnv>, data: unknown) =>
     c.json({ data, meta: { requestId: c.get('requestId') } });
 
@@ -90,6 +91,7 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
     const job = await requireQueue().getJob(jobId);
     if (!job) throw new AppError('NOT_FOUND', `job ${jobId} not found`);
     await job.retry();
+    await audit(c, 'dlq.retry', jobId);
     return ok(c, { retried: jobId });
   });
 
@@ -99,8 +101,43 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
     const jobs = await queue.getFailed(0, 499);
     const results = await Promise.allSettled(jobs.map((j) => j.retry()));
     const retried = results.filter((r) => r.status === 'fulfilled').length;
+    await audit(c, 'dlq.retry-all', null, { count: retried });
     return ok(c, { retried, failed: results.length - retried });
   });
+
+  // Provider traffic log (health scoring, ToS audit; docs/08 §8.9).
+  app.get('/admin/logs', async (c) => {
+    const limit = Math.min(Number(c.req.query('limit') ?? 100) || 100, 500);
+    return ok(c, { logs: await system.recentProviderLogs(limit) });
+  });
+
+  // Admin audit trail (who did what; docs/15).
+  app.get('/admin/audit', async (c) => {
+    const limit = Math.min(Number(c.req.query('limit') ?? 100) || 100, 500);
+    return ok(c, { audit: await system.recentAuditLogs(limit) });
+  });
+
+  /** Append an admin audit entry for a mutating action; best-effort. */
+  async function audit(
+    c: Context<AppEnv>,
+    action: string,
+    entityId: string | null,
+    after?: unknown,
+  ): Promise<void> {
+    try {
+      await system.insertAuditLog({
+        actorUserId: c.get('user')?.id ?? null,
+        actorType: 'admin',
+        action,
+        entity: 'provider.fetch',
+        entityId,
+        after: after ?? null,
+        correlationId: c.get('requestId'),
+      });
+    } catch (err) {
+      ctx.logger.warn('audit write failed', { action, err: String(err) });
+    }
+  }
 
   return app;
 }

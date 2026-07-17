@@ -11,6 +11,7 @@ export * from './repos/notify.ts';
 export * from './repos/flight-status.ts';
 export * from './repos/catalog.ts';
 export * from './repos/catalog-read.ts';
+export * from './repos/system.ts';
 export * from './repos/user.ts';
 
 export type Database = ReturnType<typeof createDb>['db'];

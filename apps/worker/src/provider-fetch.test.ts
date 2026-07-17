@@ -73,6 +73,7 @@ const fakeCatalog = {
 async function makeService(statusRepo: FakeStatusRepo) {
   const emitted: EventEnvelope[] = [];
   const enriched: { flightId: string; patch: FlightEnrichment }[] = [];
+  const logs: { providerKey: string; success: boolean }[] = [];
   const registry = await ProviderRegistry.build(
     [fixtureProviderFactory({ key: 'fixture', airlineIata: ['XX'] })],
     { enabled: new Set(['fixture']), ctx: providerCtx() },
@@ -91,8 +92,11 @@ async function makeService(statusRepo: FakeStatusRepo) {
     },
     clock,
     logger: createLogger({ level: 'error', base: {} }),
+    logProvider: async (e) => {
+      logs.push({ providerKey: e.providerKey, success: e.success });
+    },
   });
-  return { service, emitted, enriched };
+  return { service, emitted, enriched, logs };
 }
 
 describe('diffStatus', () => {
@@ -144,6 +148,14 @@ describe('ProviderFetchService', () => {
     await service.process({ ...job, airlineIata: 'ZZ' });
     expect(repo.upserts).toHaveLength(0);
     expect(emitted).toHaveLength(0);
+  });
+
+  test('records a provider log entry per fetch', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, logs } = await makeService(repo);
+    await service.process(job);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toEqual({ providerKey: 'fixture', success: true });
   });
 
   test('enriches the flight with resolved catalog FKs', async () => {
