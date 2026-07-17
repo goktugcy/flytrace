@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { WatchlistItem, WebPushSubscription } from '@flytrace/db';
 import { type EventEnvelope, createLogger, fixedClock, makeEnvelope } from '@flytrace/shared';
-import { Notifier, type NotifierRepo } from './notifier.ts';
+import type { ProviderUpdatedPayload } from '@flytrace/shared';
+import { Notifier, type NotifierRepo, deriveFromProviderUpdated } from './notifier.ts';
 import { FakePushSender } from './push/fake-sender.ts';
 
 const clock = fixedClock(1_700_000_000_000);
@@ -133,6 +134,34 @@ describe('Notifier', () => {
     expect(repo.failed).toHaveLength(1); // no successful send
   });
 
+  test('derives and delivers a gate-change from ProviderUpdated', async () => {
+    const { repo, sender, notifier } = make();
+    repo.watches = [watch({ eventTypes: ['gate_change', 'delay'] })];
+    repo.subs = [sub('c1')];
+
+    const env = makeEnvelope(
+      {
+        type: 'ProviderUpdated',
+        occurredAt: '2023-11-14T22:20:00.000Z',
+        dedupeKey: `${FLIGHT}:provider:2023-11-14T22:20`,
+        partitionKey: FLIGHT,
+        payload: {
+          flightId: FLIGHT,
+          providerKey: 'fixture',
+          before: { gate: 'A12' },
+          after: { status: 'active', gate: 'B7' },
+          changed: ['gate'],
+          fetchedAt: '2023-11-14T22:20:00.000Z',
+        } satisfies ProviderUpdatedPayload,
+      },
+      { producer: 'worker', clock },
+    );
+    await notifier.handle(env);
+    expect(sender.sent).toHaveLength(1);
+    expect(sender.sent[0]?.msg.title).toBe('Gate changed');
+    expect(sender.sent[0]?.msg.body).toContain('B7');
+  });
+
   test('does nothing for a non-notifiable event (position)', async () => {
     const { repo, sender, notifier } = make();
     repo.watches = [watch()];
@@ -149,5 +178,45 @@ describe('Notifier', () => {
     );
     await notifier.handle(pos);
     expect(sender.sent).toHaveLength(0);
+  });
+});
+
+describe('deriveFromProviderUpdated', () => {
+  const base = {
+    flightId: FLIGHT,
+    providerKey: 'fixture',
+    before: null,
+    fetchedAt: '2023-11-14T22:20:00.000Z',
+  };
+
+  test('maps changed fields to notifiable sub-events', () => {
+    expect(
+      deriveFromProviderUpdated({ ...base, after: { gate: 'B7' }, changed: ['gate'] }).map(
+        (d) => d.dbType,
+      ),
+    ).toEqual(['gate_change']);
+    expect(
+      deriveFromProviderUpdated({ ...base, after: { status: 'delayed' }, changed: ['status'] }).map(
+        (d) => d.dbType,
+      ),
+    ).toEqual(['delay']);
+    expect(
+      deriveFromProviderUpdated({
+        ...base,
+        after: { status: 'cancelled' },
+        changed: ['status'],
+      }).map((d) => d.dbType),
+    ).toEqual(['cancelled']);
+    expect(
+      deriveFromProviderUpdated({ ...base, after: { status: 'landed' }, changed: ['status'] }).map(
+        (d) => d.dbType,
+      ),
+    ).toEqual(['arrived']);
+  });
+
+  test('ignores non-notable changes (e.g. terminal only)', () => {
+    expect(
+      deriveFromProviderUpdated({ ...base, after: { terminal: '2' }, changed: ['terminal'] }),
+    ).toEqual([]);
   });
 });

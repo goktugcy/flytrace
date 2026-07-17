@@ -1,6 +1,12 @@
 import type { ChannelKey, WatchlistItem, WebPushSubscription } from '@flytrace/db';
-import { type EventEnvelope, type Logger, domainToDbEventType } from '@flytrace/shared';
-import type { PushSender } from './push/port.ts';
+import {
+  type DbEventTypeName,
+  type EventEnvelope,
+  type Logger,
+  type ProviderUpdatedPayload,
+  domainToDbEventType,
+} from '@flytrace/shared';
+import type { PushMessage, PushSender } from './push/port.ts';
 import { renderPush } from './render.ts';
 
 /** The slice of the notify repo the core needs (full NotifyRepo satisfies it). */
@@ -41,27 +47,39 @@ export class Notifier {
   constructor(private readonly deps: NotifierDeps) {}
 
   async handle(env: EventEnvelope): Promise<void> {
+    // ProviderUpdated fans out into derived sub-events (gate/delay/cancelled/
+    // arrived); everything else maps to a single notifiable type (docs/10 §10.3).
+    if (env.type === 'ProviderUpdated') {
+      for (const derived of deriveFromProviderUpdated(env.payload as ProviderUpdatedPayload)) {
+        await this.deliver(env, derived.dbType, derived.message);
+      }
+      return;
+    }
     const dbType = domainToDbEventType(env);
     if (!dbType) return; // positions + lifecycle events are not notifiable
+    await this.deliver(env, dbType, renderPush(env, dbType));
+  }
 
+  /** Deliver one notifiable (event, type, message) to all matching watchers. */
+  private async deliver(
+    env: EventEnvelope,
+    dbType: DbEventTypeName,
+    message: PushMessage,
+  ): Promise<void> {
     const flightId = env.partitionKey;
     const items = await this.deps.repo.watchesForFlight(flightId);
-    if (items.length === 0) return;
-
-    const msg = renderPush(env, dbType);
-
     for (const item of items) {
       if (!item.eventTypes.includes(dbType)) continue;
       if (!item.channels.includes('webpush')) continue; // v1: Web Push only
 
-      const dedupeKey = `${item.userId}:${env.dedupeKey}:webpush`;
+      const dedupeKey = `${item.userId}:${env.dedupeKey}:${dbType}:webpush`;
       const row = await this.deps.repo.insertQueued({
         userId: item.userId,
         watchlistItemId: item.id,
         flightId,
         channel: 'webpush',
-        title: msg.title,
-        body: msg.body,
+        title: message.title,
+        body: message.body,
         payload: env.payload,
         dedupeKey,
       });
@@ -75,7 +93,7 @@ export class Notifier {
 
       let anyOk = false;
       for (const sub of subs) {
-        const res = await this.deps.sender.send(sub.address, msg);
+        const res = await this.deps.sender.send(sub.address, message);
         if (res.ok) anyOk = true;
         else if (res.gone) {
           this.deps.logger.info('pruning dead web push subscription', { channelId: sub.channelId });
@@ -91,4 +109,38 @@ export class Notifier {
       }
     }
   }
+}
+
+/** Derive notifiable sub-events from a provider status change (docs/07 §7.4). */
+export function deriveFromProviderUpdated(
+  p: ProviderUpdatedPayload,
+): { dbType: DbEventTypeName; message: PushMessage }[] {
+  const out: { dbType: DbEventTypeName; message: PushMessage }[] = [];
+  const url = `/flights/id/${p.flightId}`;
+  for (const field of p.changed) {
+    if (field === 'gate' && p.after.gate) {
+      out.push({
+        dbType: 'gate_change',
+        message: { title: 'Gate changed', body: `Now boarding at gate ${p.after.gate}.`, url },
+      });
+    } else if (field === 'status') {
+      if (p.after.status === 'delayed') {
+        out.push({
+          dbType: 'delay',
+          message: { title: 'Delayed', body: 'Your flight is delayed.', url },
+        });
+      } else if (p.after.status === 'cancelled') {
+        out.push({
+          dbType: 'cancelled',
+          message: { title: 'Cancelled', body: 'Your flight was cancelled.', url },
+        });
+      } else if (p.after.status === 'landed') {
+        out.push({
+          dbType: 'arrived',
+          message: { title: 'Arrived', body: 'Your flight has arrived.', url },
+        });
+      }
+    }
+  }
+  return out;
 }

@@ -2,9 +2,13 @@ import { loadWorkerConfig } from './config.ts';
 import { createContext } from './context.ts';
 
 const config = loadWorkerConfig();
-const ctx = createContext(config);
+const ctx = await createContext(config);
 
-ctx.logger.info('worker booting', { group: config.WORKER_GROUP, consumer: config.WORKER_CONSUMER });
+ctx.logger.info('worker booting', {
+  group: config.WORKER_GROUP,
+  consumer: config.WORKER_CONSUMER,
+  providers: ctx.registry.all().map((p) => p.key),
+});
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {

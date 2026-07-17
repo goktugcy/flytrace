@@ -8,6 +8,7 @@ export * from './repos/flights.ts';
 export * from './repos/flights-read.ts';
 export * from './repos/auth.ts';
 export * from './repos/notify.ts';
+export * from './repos/flight-status.ts';
 
 export type Database = ReturnType<typeof createDb>['db'];
 

@@ -123,6 +123,43 @@ export const flightEndedPayloadSchema = z.object({
 });
 export type FlightEndedPayload = z.infer<typeof flightEndedPayloadSchema>;
 
+export const FLIGHT_STATUS_VALUES = [
+  'scheduled',
+  'active',
+  'landed',
+  'delayed',
+  'cancelled',
+  'diverted',
+  'unknown',
+] as const;
+export const flightStatusSchema = z.enum(FLIGHT_STATUS_VALUES);
+
+/** Normalized provider status fields carried by ProviderUpdated (docs/07 §7.4). */
+export const providerStatusSchema = z.object({
+  status: flightStatusSchema.optional(),
+  gate: z.string().nullable().optional(),
+  terminal: z.string().nullable().optional(),
+  baggageBelt: z.string().nullable().optional(),
+  scheduledDeparture: z.string().nullable().optional(),
+  estimatedDeparture: z.string().nullable().optional(),
+  actualDeparture: z.string().nullable().optional(),
+  scheduledArrival: z.string().nullable().optional(),
+  estimatedArrival: z.string().nullable().optional(),
+  actualArrival: z.string().nullable().optional(),
+});
+export type ProviderStatusFields = z.infer<typeof providerStatusSchema>;
+
+export const providerUpdatedPayloadSchema = z.object({
+  flightId: z.string().uuid(),
+  providerKey: z.string(),
+  before: providerStatusSchema.nullable(),
+  after: providerStatusSchema,
+  /** Field names that changed between before and after. */
+  changed: z.array(z.string()),
+  fetchedAt: z.string().datetime(),
+});
+export type ProviderUpdatedPayload = z.infer<typeof providerUpdatedPayloadSchema>;
+
 /** Registry mapping each event type to its current schema version. */
 export const EVENT_REGISTRY: Record<EventType, { version: number }> = Object.fromEntries(
   EVENT_TYPES.map((t) => [t, { version: 1 }]),
