@@ -23,15 +23,15 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
 const LERP = 0.18; // per-frame easing toward the latest sample (docs/12 §12.5)
 
-// Optional geographic basemap. Defaults to MapLibre's public demo tiles, but
-// that CDN is frequently blocked by ad/privacy extensions — when it fails to
-// load, the map falls back to the self-contained dark style below so aircraft
-// still render. Point NEXT_PUBLIC_MAP_STYLE at your own tile provider for a
-// full basemap.
-const REMOTE_STYLE =
-  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://tiles.openfreemap.org/styles/dark';
+// By default the map uses a self-contained dark style + a bundled, first-party
+// world-borders GeoJSON (see public/geo/world.json) so geography always renders
+// — external tile CDNs are routinely blocked by ad/privacy extensions. Set
+// NEXT_PUBLIC_MAP_STYLE to a tile provider's style URL to opt into a richer
+// basemap (at the risk of it being blocked).
+const REMOTE_STYLE = process.env.NEXT_PUBLIC_MAP_STYLE;
+const WORLD_GEOJSON_URL = '/geo/world.json';
 
-// Fully self-contained fallback style (no network) — a dark "radar" canvas.
+// Fully self-contained base style (no network) — a dark "radar" canvas.
 const DARK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {},
@@ -57,10 +57,11 @@ export function LiveMap() {
     }
 
     let map: maplibregl.Map;
+    let darkActive = !REMOTE_STYLE; // using the offline dark base (needs bundled geography)
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: REMOTE_STYLE,
+        style: REMOTE_STYLE ?? DARK_STYLE,
         center: [35, 39],
         zoom: 5,
         attributionControl: false,
@@ -117,11 +118,37 @@ export function LiveMap() {
       client.setViewport([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
     };
 
+    // First-party world geography (country fill + borders) for the dark base —
+    // served from our own origin so ad/privacy extensions can't block it.
+    const addWorldGeo = async () => {
+      if (map.getSource('world')) return;
+      try {
+        const geo = await fetch(WORLD_GEOJSON_URL).then((r) => r.json());
+        if (map.getSource('world')) return;
+        map.addSource('world', { type: 'geojson', data: geo });
+        map.addLayer({
+          id: 'world-fill',
+          type: 'fill',
+          source: 'world',
+          paint: { 'fill-color': '#161f2e' },
+        });
+        map.addLayer({
+          id: 'world-line',
+          type: 'line',
+          source: 'world',
+          paint: { 'line-color': '#2c3a52', 'line-width': 0.6 },
+        });
+      } catch {
+        /* geography is best-effort; aircraft still render on the dark canvas */
+      }
+    };
+
     // Runs once, after whichever style loads (remote basemap or the dark
-    // fallback). Adds the flight layer + starts the realtime feed.
-    const setup = () => {
+    // base/fallback). Adds geography (offline base) + the flight layer + feed.
+    const setup = async () => {
       if (didSetup) return;
       didSetup = true;
+      if (darkActive) await addWorldGeo();
       if (!map.getSource('flights')) {
         map.addSource('flights', { type: 'geojson', data: featureCollection() });
         map.addLayer({
@@ -151,13 +178,14 @@ export function LiveMap() {
     };
 
     // `style.load` fires for the initial style and after any setStyle().
-    map.on('style.load', setup);
+    map.on('style.load', () => void setup());
 
-    // If the remote basemap is blocked/slow (common with ad/privacy
-    // extensions), swap to the self-contained dark style so aircraft still show.
+    // If a remote basemap (opt-in) is blocked/slow, swap to the offline dark
+    // style + bundled geography so the map still renders.
     const fallbackTimer = setTimeout(() => {
       if (!didSetup && !map.isStyleLoaded()) {
         console.warn('basemap style did not load — using offline dark style');
+        darkActive = true;
         map.setStyle(DARK_STYLE);
       }
     }, 4000);
