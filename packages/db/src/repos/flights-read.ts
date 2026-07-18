@@ -35,6 +35,10 @@ export interface SearchResultRow {
   flightNumber: string | null;
   status: string;
   flightDate: string;
+  /** Latest-known aircraft hex + position, so the map can locate the result. */
+  icao24: string | null;
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface EventRow {
@@ -119,12 +123,21 @@ function createReadRepo(db: Database) {
       const q = `%${term}%`;
       const alt = altTerm ? `%${altTerm}%` : null;
       return (await db.execute(sql`
-        select id as "flightId", callsign, flight_number as "flightNumber", status,
-               to_char(flight_date, 'YYYY-MM-DD') as "flightDate"
-        from flights
-        where callsign ilike ${q} or flight_number ilike ${q}
-           or (${alt}::text is not null and callsign ilike ${alt})
-        order by last_seen_at desc nulls last
+        select f.id as "flightId", f.callsign, f.flight_number as "flightNumber", f.status,
+               to_char(f.flight_date, 'YYYY-MM-DD') as "flightDate",
+               p.icao24,
+               ST_Y(p.location::geometry) as lat, ST_X(p.location::geometry) as lon
+        from flights f
+        left join lateral (
+          select icao24, location
+          from flight_positions fp
+          where fp.flight_id = f.id
+          order by ts desc
+          limit 1
+        ) p on true
+        where f.callsign ilike ${q} or f.flight_number ilike ${q}
+           or (${alt}::text is not null and f.callsign ilike ${alt})
+        order by f.last_seen_at desc nulls last
         limit ${limit}
       `)) as unknown as SearchResultRow[];
     },

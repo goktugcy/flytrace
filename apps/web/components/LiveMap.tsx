@@ -7,8 +7,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
 import { ErrorState } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
+import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
-import { Plane, X } from 'lucide-react';
+import { LocateFixed, Plane, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import type { FlightSample } from '../lib/flight-store';
@@ -284,6 +285,7 @@ function buildFilter(f: { band: Band; airline: string }): maplibregl.FilterSpeci
 export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef<(id: string | null) => void>(() => {});
+  const locateRef = useRef<() => void>(() => {});
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
@@ -502,6 +504,75 @@ export function LiveMap() {
     };
     selectRef.current = select;
 
+    // ── Search → focus: fly to a searched aircraft and select it, instead of
+    // opening its detail page. Live hits are selected in place; a hit that
+    // isn't in our local feed (e.g. resolved live from adsb.lol) is injected as
+    // a store entry so the existing card/animation machinery renders it.
+    const focusTarget = (tgt: FocusTarget) => {
+      const flyTo = (lon: number, lat: number) =>
+        map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 7), duration: 1200 });
+      let f = client.store.get(tgt.flightId);
+      if (!f && tgt.icao24) f = client.store.list().find((x) => x.icao24 === tgt.icao24);
+      if (f) {
+        const r = rendered.get(f.flightId);
+        flyTo(r?.lon ?? f.lon, r?.lat ?? f.lat);
+        select(f.flightId);
+        return;
+      }
+      if (tgt.lat != null && tgt.lon != null) {
+        client.store.applySnapshotState({
+          flightId: tgt.flightId,
+          icao24: tgt.icao24 ?? tgt.flightId,
+          callsign: tgt.callsign,
+          lat: tgt.lat,
+          lon: tgt.lon,
+          altFt: null,
+          gsKt: null,
+          headingDeg: null,
+          category: null,
+          lastTs: new Date().toISOString(),
+        });
+        flyTo(tgt.lon, tgt.lat);
+        select(tgt.flightId);
+      }
+    };
+    const unregisterFocus = registerMapFocus(focusTarget);
+    const pendingFocus = readFocusFromUrl(window.location.search);
+
+    // ── Geolocation: center on the user's region (with permission). An explicit
+    // search focus always wins over auto-centering.
+    let userLoc: [number, number] | null = null;
+    let meMarker: maplibregl.Marker | null = null;
+    const showMe = (lon: number, lat: number) => {
+      if (!meMarker) {
+        const el = document.createElement('div');
+        el.style.cssText =
+          'width:14px;height:14px;border-radius:9999px;background:#38bdf8;border:2px solid #fff;box-shadow:0 0 0 4px rgba(56,189,248,0.25);';
+        meMarker = new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+      } else meMarker.setLngLat([lon, lat]);
+    };
+    const locate = (recenter: boolean) => {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          userLoc = [pos.coords.longitude, pos.coords.latitude];
+          showMe(userLoc[0], userLoc[1]);
+          if (recenter && map.loaded()) map.flyTo({ center: userLoc, zoom: 8, duration: 1200 });
+        },
+        () => {
+          /* permission denied / unavailable — keep the default view */
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300_000 },
+      );
+    };
+    locateRef.current = () => locate(true);
+    if (!pendingFocus) locate(true);
+
+    map.on('load', () => {
+      if (pendingFocus) focusTarget(pendingFocus);
+      else if (userLoc) map.flyTo({ center: userLoc, zoom: 8, duration: 1200 });
+    });
+
     const addWorldGeo = async () => {
       if (map.getSource('world')) return;
       try {
@@ -710,6 +781,8 @@ export function LiveMap() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       unsub();
+      unregisterFocus();
+      meMarker?.remove();
       client.close();
       map.remove();
     };
@@ -796,6 +869,17 @@ export function LiveMap() {
         </div>
       </div>
 
+      {/* Locate me — center on the user's region (asks for location permission) */}
+      <button
+        type="button"
+        aria-label={t('map.locate')}
+        title={t('map.locate')}
+        onClick={() => locateRef.current()}
+        className="absolute bottom-16 right-3 z-10 inline-flex size-10 items-center justify-center rounded-md border border-border bg-card/85 text-muted-foreground shadow-soft-md backdrop-blur-md transition-colors hover:text-foreground sm:bottom-14"
+      >
+        <LocateFixed className="size-5" />
+      </button>
+
       {/* Altitude legend */}
       <div className="absolute bottom-4 right-3 z-10 hidden items-center gap-2 rounded-md border border-border bg-card/85 px-3 py-2 text-xs shadow-soft-md backdrop-blur-md sm:flex">
         <span className="text-muted-foreground">{t('common.low')}</span>
@@ -874,12 +958,16 @@ export function LiveMap() {
                 />
               </div>
 
-              <Link
-                href={`/flights/id/${sel.flightId}`}
-                className="mt-4 flex h-9 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-              >
-                {t('common.details')}
-              </Link>
+              {/* Live adsb.lol hits (id `adsb:*`) aren't persisted, so they have
+                  no detail page — the on-map card is the whole experience. */}
+              {!sel.flightId.startsWith('adsb:') && (
+                <Link
+                  href={`/flights/id/${sel.flightId}`}
+                  className="mt-4 flex h-9 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  {t('common.details')}
+                </Link>
+              )}
             </div>
           </div>
         </div>

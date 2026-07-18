@@ -3,6 +3,7 @@
 import { apiBase } from '@/lib/api';
 
 import { useT } from '@/lib/i18n';
+import { type FocusTarget, focusQuery, tryFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
 import { Bell, Home, LayoutDashboard, Map as MapIcon, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -15,6 +16,9 @@ interface FlightResult {
   callsign: string;
   flightNumber: string | null;
   status: string;
+  icao24: string | null;
+  lat: number | null;
+  lon: number | null;
 }
 
 /** Global ⌘K / Ctrl+K command palette: quick nav + flight search. */
@@ -89,7 +93,19 @@ export function CommandPalette() {
     const it = items[i];
     if (!it) return;
     close();
-    router.push(it.kind === 'nav' ? it.href : `/flights/id/${it.flightId}`);
+    if (it.kind === 'nav') {
+      router.push(it.href);
+      return;
+    }
+    const target: FocusTarget = {
+      flightId: it.flightId,
+      icao24: it.icao24,
+      callsign: it.callsign,
+      lat: it.lat,
+      lon: it.lon,
+    };
+    // Locate + select on the live map instead of opening the detail page.
+    if (!tryFocus(target)) router.push(`/map?${focusQuery(target)}`);
   };
 
   function onKeyDown(e: React.KeyboardEvent) {

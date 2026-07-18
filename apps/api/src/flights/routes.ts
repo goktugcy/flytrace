@@ -1,4 +1,9 @@
-import { type FlightRow, createCatalogRepo, createFlightReadRepo } from '@flytrace/db';
+import {
+  type FlightRow,
+  type SearchResultRow,
+  createCatalogRepo,
+  createFlightReadRepo,
+} from '@flytrace/db';
 import { AppError, type FlightDetail } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -39,6 +44,16 @@ interface FlightRoute {
   destination: { iata: string; name: string; city: string | null; lat: number; lon: number };
 }
 const routeCache = new Map<string, { route: FlightRoute | null; exp: number }>();
+
+// adsb.lol callsign lookup — keyless. Used as a search fallback so a flight
+// that isn't in our DB yet is still located from the live feed.
+const ADSB_CALLSIGN_URL = 'https://api.adsb.lol/v2/callsign/';
+interface AdsbAircraft {
+  hex?: string;
+  flight?: string;
+  lat?: number;
+  lon?: number;
+}
 
 function toEndpoint(a: AdsbdbAirport): FlightRoute['origin'] | null {
   if (typeof a.latitude !== 'number' || typeof a.longitude !== 'number') return null;
@@ -172,7 +187,16 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
       const icao = await catalog.getIcaoByIata(iata[1] as string);
       if (icao) altTerm = `${icao}${iata[2]}`;
     }
-    return ok(c, { results: await read.search(q, limit, altTerm) });
+    const results = await read.search(q, limit, altTerm);
+
+    // Not in our DB yet? If the query is a plausible callsign, look it up live
+    // on adsb.lol and synthesise a result so the map can still locate it. The
+    // ADS-B feed carries the position; no persistent flight row is created.
+    if (results.length === 0) {
+      const live = await lookupLiveCallsign(altTerm ?? q.replace(/\s/g, ''));
+      if (live) results.push({ ...live, flightDate: ctx.clock.nowIso().slice(0, 10) });
+    }
+    return ok(c, { results });
   });
 
   // Landing-page live counters.
@@ -259,6 +283,39 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   return app;
+}
+
+/**
+ * Look up a callsign on the live adsb.lol feed and shape it like a search
+ * result (id prefixed `adsb:` so the client knows it's a live, unpersisted
+ * hit). Returns null when the callsign isn't currently airborne.
+ */
+async function lookupLiveCallsign(
+  callsign: string,
+): Promise<Omit<SearchResultRow, 'flightDate'> | null> {
+  const cs = callsign.trim().toUpperCase();
+  if (!/^[A-Z0-9]{3,8}$/.test(cs)) return null;
+  try {
+    const res = await fetch(`${ADSB_CALLSIGN_URL}${encodeURIComponent(cs)}`, {
+      headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const ac = ((await res.json()) as { ac?: AdsbAircraft[] }).ac ?? [];
+    const hit = ac.find((a) => typeof a.lat === 'number' && typeof a.lon === 'number');
+    if (!hit?.hex) return null;
+    return {
+      flightId: `adsb:${hit.hex.toLowerCase()}`,
+      callsign: (hit.flight ?? cs).trim(),
+      flightNumber: null,
+      status: 'active',
+      icao24: hit.hex.toLowerCase(),
+      lat: hit.lat as number,
+      lon: hit.lon as number,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function requireFlight(c: Context<AppEnv>, read: ReturnType<typeof createFlightReadRepo>) {

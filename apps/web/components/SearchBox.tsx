@@ -4,6 +4,7 @@ import { apiBase } from '@/lib/api';
 
 import { Badge } from '@/components/ui/badge';
 import { useT } from '@/lib/i18n';
+import { type FocusTarget, focusQuery, tryFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
 import { Loader2, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -16,6 +17,9 @@ interface Result {
   callsign: string;
   flightNumber: string | null;
   status: string;
+  icao24: string | null;
+  lat: number | null;
+  lon: number | null;
 }
 
 /** Debounced flight/callsign typeahead with keyboard navigation (↑/↓/Enter/Esc). */
@@ -60,7 +64,15 @@ export function SearchBox({ className, autoFocus }: { className?: string; autoFo
   function go(r: Result) {
     setOpen(false);
     setQ('');
-    router.push(`/flights/id/${r.flightId}`);
+    const target: FocusTarget = {
+      flightId: r.flightId,
+      icao24: r.icao24,
+      callsign: r.callsign,
+      lat: r.lat,
+      lon: r.lon,
+    };
+    // Locate + select on the live map instead of opening the detail page.
+    if (!tryFocus(target)) router.push(`/map?${focusQuery(target)}`);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
