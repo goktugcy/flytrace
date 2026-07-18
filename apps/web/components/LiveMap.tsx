@@ -28,7 +28,8 @@ const LERP = 0.16; // per-frame easing toward the latest sample (docs/12 §12.5)
 // Self-contained dark base + bundled first-party geography (public/geo/world.json)
 // so the map always renders — external tile CDNs are routinely blocked by
 // ad/privacy extensions. Set NEXT_PUBLIC_MAP_STYLE to opt into a tile basemap.
-const REMOTE_STYLE = process.env.NEXT_PUBLIC_MAP_STYLE;
+const REMOTE_STYLE =
+  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://tiles.openfreemap.org/styles/dark';
 const WORLD_GEOJSON_URL = '/geo/world.json';
 
 const DARK_STYLE: maplibregl.StyleSpecification = {
@@ -196,7 +197,7 @@ export function LiveMap() {
     }
 
     let map: maplibregl.Map;
-    let darkActive = !REMOTE_STYLE;
+    let usingRemote = Boolean(REMOTE_STYLE);
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
@@ -225,7 +226,9 @@ export function LiveMap() {
     const client = new RealtimeClient({ apiBase: API_BASE, wsBase: WS_BASE });
     const rendered = new Map<string, Rendered>();
     let raf = 0;
-    let didSetup = false;
+    let started = false;
+    let remoteTileOk = false;
+    const OURS = new Set(['world', 'grid', 'flights', 'trail', 'selected']);
     let selectedId: string | null = null;
     let pulse = 0;
 
@@ -365,10 +368,9 @@ export function LiveMap() {
       }
     };
 
-    const setup = async () => {
-      if (didSetup) return;
-      didSetup = true;
-      if (darkActive) await addWorldGeo();
+    // Overlays are re-added on every style load (setStyle wipes custom layers).
+    const ensureLayers = async () => {
+      if (!usingRemote) await addWorldGeo();
 
       if (!map.hasImage('plane')) {
         map.addImage('plane', makePlaneImage(64), { sdf: true, pixelRatio: 2 });
@@ -435,35 +437,54 @@ export function LiveMap() {
             'icon-opacity': ['case', ['==', ['get', 'onGround'], 1], 0.65, 1],
           },
         });
-
-        map.on('click', 'flights', (e) => {
-          const id = e.features?.[0]?.properties?.flightId as string | undefined;
-          if (id) select(id);
-        });
-        map.on('click', (e) => {
-          const hits = map.queryRenderedFeatures(e.point, { layers: ['flights'] });
-          if (hits.length === 0) select(null);
-        });
-        map.on('mouseenter', 'flights', () => {
-          map.getCanvas().style.cursor = 'pointer';
-        });
-        map.on('mouseleave', 'flights', () => {
-          map.getCanvas().style.cursor = '';
-        });
       }
+    };
 
+    // Connect the realtime feed + start the animation loop (once).
+    const startFeed = () => {
+      if (started) return;
+      started = true;
       void client.connect().then(sendViewport);
       raf = requestAnimationFrame(tick);
     };
 
-    map.on('style.load', () => void setup());
+    map.on('style.load', () => {
+      void ensureLayers().then(startFeed);
+    });
 
+    // Interaction handlers — attached once; bound by layer id they survive setStyle.
+    map.on('click', 'flights', (e) => {
+      const id = e.features?.[0]?.properties?.flightId as string | undefined;
+      if (id) select(id);
+    });
+    map.on('click', (e) => {
+      const hits = map.queryRenderedFeatures(e.point, { layers: ['flights'] });
+      if (hits.length === 0) select(null);
+    });
+    map.on('mouseenter', 'flights', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'flights', () => {
+      map.getCanvas().style.cursor = '';
+    });
+
+    // A basemap tile loading proves the remote style isn't blocked.
+    map.on('data', (e) => {
+      const ev = e as unknown as { dataType?: string; tile?: unknown; sourceId?: string };
+      if (ev.dataType === 'source' && ev.tile && ev.sourceId && !OURS.has(ev.sourceId)) {
+        remoteTileOk = true;
+      }
+    });
+
+    // Remote basemap blocked/slow (ad-blockers) → fall back to the bundled dark
+    // style + first-party geography so the map still renders (no black screen).
     const fallbackTimer = setTimeout(() => {
-      if (!didSetup && !map.isStyleLoaded()) {
-        darkActive = true;
+      if (usingRemote && !remoteTileOk) {
+        console.warn('remote basemap unavailable — using bundled offline map');
+        usingRemote = false;
         map.setStyle(DARK_STYLE);
       }
-    }, 4000);
+    }, 4500);
 
     map.on('moveend', sendViewport);
     const unsub = client.store.subscribe(() => {
