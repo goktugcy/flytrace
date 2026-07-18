@@ -28,8 +28,20 @@ const trackerSchema = z.object({
   /** Idle time after last position before a flight is force-ended (ms). */
   TRACKER_FLIGHT_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
   TRACKER_BBOX: bboxSchema,
-  /** Use the recorded fixture feed instead of live OpenSky (offline dev). */
+  /**
+   * Position source. `adsb` (default) uses a keyless community ADS-B feed
+   * (adsb.lol) with generous limits; `opensky` uses OpenSky (credit-limited);
+   * `fixture` replays a recording offline.
+   */
+  TRACKER_SOURCE: z.enum(['adsb', 'opensky', 'fixture']).default('adsb'),
+  /** Use the recorded fixture feed (offline dev). Overrides TRACKER_SOURCE when set. */
   TRACKER_USE_FIXTURE: configSchemas.boolish.default('false'),
+  /** Community ADS-B feed (readsb/tar1090 JSON). */
+  ADSB_API_URL: z.string().default('https://api.adsb.lol/v2'),
+  /** ADS-B query centre + radius (nm). Türkiye-centric defaults; adsb.lol caps at 250. */
+  ADSB_CENTER_LAT: z.coerce.number().default(39.0),
+  ADSB_CENTER_LON: z.coerce.number().default(35.0),
+  ADSB_RADIUS_NM: z.coerce.number().int().positive().default(250),
 });
 
 const trackerConfigSchema = configSchemas.base

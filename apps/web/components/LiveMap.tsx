@@ -29,7 +29,7 @@ const LERP = 0.18; // per-frame easing toward the latest sample (docs/12 §12.5)
 // still render. Point NEXT_PUBLIC_MAP_STYLE at your own tile provider for a
 // full basemap.
 const REMOTE_STYLE =
-  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://demotiles.maplibre.org/style.json';
+  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://tiles.openfreemap.org/styles/dark';
 
 // Fully self-contained fallback style (no network) — a dark "radar" canvas.
 const DARK_STYLE: maplibregl.StyleSpecification = {

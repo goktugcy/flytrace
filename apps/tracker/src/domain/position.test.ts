@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeStateVector, normalizeStatesResponse } from './position.ts';
+import {
+  normalizeAdsbResponse,
+  normalizeStateVector,
+  normalizeStatesResponse,
+} from './position.ts';
 
 describe('normalizeStateVector', () => {
   const base: unknown[] = [
@@ -72,5 +76,57 @@ describe('normalizeStatesResponse', () => {
   test('handles empty/null states', () => {
     expect(normalizeStatesResponse({ time: 1, states: null })).toEqual([]);
     expect(normalizeStatesResponse({ nope: true })).toEqual([]);
+  });
+});
+
+describe('normalizeAdsbResponse', () => {
+  const now = 1_700_000_000_000;
+
+  test('normalizes readsb aircraft (feet/knots/fpm, no conversion)', () => {
+    const out = normalizeAdsbResponse(
+      {
+        ac: [
+          {
+            hex: '748021',
+            flight: 'MEA212  ',
+            r: 'OD-MEC',
+            t: 'A332',
+            lat: 41.51,
+            lon: 26.9,
+            alt_baro: 39000,
+            gs: 510.7,
+            track: 145.13,
+            baro_rate: -64,
+            seen_pos: 2,
+          },
+        ],
+      },
+      now,
+    );
+    expect(out).toHaveLength(1);
+    const p = out[0];
+    expect(p?.icao24).toBe('748021');
+    expect(p?.callsign).toBe('MEA212');
+    expect(p?.altFt).toBe(39000);
+    expect(p?.gsKt).toBe(510.7);
+    expect(p?.headingDeg).toBe(145.13);
+    expect(p?.vrateFpm).toBe(-64);
+    expect(p?.onGround).toBe(false);
+    expect(p?.ts).toBe(new Date(now - 2000).toISOString()); // seen_pos age applied
+  });
+
+  test('treats alt_baro "ground" as on-ground at 0 ft', () => {
+    const out = normalizeAdsbResponse(
+      { ac: [{ hex: 'abc', lat: 1, lon: 2, alt_baro: 'ground' }] },
+      now,
+    );
+    expect(out[0]?.onGround).toBe(true);
+    expect(out[0]?.altFt).toBe(0);
+  });
+
+  test('drops aircraft without a position and tolerates empty payloads', () => {
+    expect(normalizeAdsbResponse({ ac: [{ hex: 'x' }] }, now)).toEqual([]);
+    expect(normalizeAdsbResponse({ ac: null }, now)).toEqual([]);
+    expect(normalizeAdsbResponse({}, now)).toEqual([]);
   });
 });

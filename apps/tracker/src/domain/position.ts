@@ -128,3 +128,58 @@ export function normalizeStatesResponse(raw: unknown): Position[] {
   }
   return out;
 }
+
+/**
+ * ADS-B (readsb / tar1090 JSON, e.g. adsb.lol) aircraft record. Altitudes are
+ * already in feet, speeds in knots, rates in fpm — no unit conversion needed,
+ * unlike OpenSky. `alt_baro` is the string "ground" for on-ground aircraft.
+ */
+const adsbAircraftSchema = z
+  .object({
+    hex: z.string(),
+    flight: z.string().nullish(),
+    lat: z.number(),
+    lon: z.number(),
+    alt_baro: z.union([z.number(), z.literal('ground')]).nullish(),
+    gs: z.number().nullish(),
+    track: z.number().nullish(),
+    baro_rate: z.number().nullish(),
+    seen_pos: z.number().nullish(),
+  })
+  .passthrough();
+
+const adsbResponseSchema = z.object({ ac: z.array(z.unknown()).nullish() }).passthrough();
+
+/** Normalize one ADS-B aircraft. `nowMs` anchors the age-based timestamp. */
+export function normalizeAdsbAircraft(raw: unknown, nowMs: number): Position | null {
+  const parsed = adsbAircraftSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const a = parsed.data;
+  const onGround = a.alt_baro === 'ground';
+  const altFt = typeof a.alt_baro === 'number' ? Math.round(a.alt_baro) : onGround ? 0 : null;
+  const ageMs = Math.max(0, (a.seen_pos ?? 0) * 1000);
+  return {
+    icao24: a.hex.toLowerCase(),
+    callsign: a.flight ? a.flight.trim() || null : null,
+    lat: a.lat,
+    lon: a.lon,
+    altFt,
+    headingDeg: a.track ?? null,
+    gsKt: a.gs === null || a.gs === undefined ? null : round(a.gs, 1),
+    vrateFpm: a.baro_rate === null || a.baro_rate === undefined ? null : Math.round(a.baro_rate),
+    onGround,
+    ts: new Date(nowMs - ageMs).toISOString(),
+  };
+}
+
+/** Normalize a full ADS-B point/radius response into placed positions. */
+export function normalizeAdsbResponse(raw: unknown, nowMs: number): Position[] {
+  const parsed = adsbResponseSchema.safeParse(raw);
+  if (!parsed.success || !parsed.data.ac) return [];
+  const out: Position[] = [];
+  for (const a of parsed.data.ac) {
+    const pos = normalizeAdsbAircraft(a, nowMs);
+    if (pos !== null) out.push(pos);
+  }
+  return out;
+}
