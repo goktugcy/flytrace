@@ -7,6 +7,22 @@ import type { AppContext } from '../context.ts';
 import type { Bbox } from '../ws/channels.ts';
 import { createHotState } from './hot-state.ts';
 
+const PLANESPOTTERS_UA = 'FlyTrace/1.0 (+https://flytrace.app; live flight tracker)';
+const PHOTO_TTL_MS = 6 * 60 * 60 * 1000; // 6h — tail photos rarely change
+
+interface PlanespottersPhoto {
+  thumbnail?: { src?: string };
+  thumbnail_large?: { src?: string };
+  link?: string;
+  photographer?: string;
+}
+type AircraftPhoto = {
+  thumb: string | null;
+  link: string | null;
+  photographer: string | null;
+} | null;
+const photoCache = new Map<string, { photo: AircraftPhoto; exp: number }>();
+
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD');
 const bboxSchema = z.string().transform((v, ctx) => {
   const parts = v.split(',').map(Number);
@@ -31,6 +47,37 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const ok = (c: Context<AppEnv>, data: unknown, cached = false) =>
     c.json({ data, meta: { requestId: c.get('requestId'), cached } });
+
+  // Aircraft photo proxy (Planespotters). Server-side so we can send the
+  // contact User-Agent their API requires; short in-memory cache to stay polite.
+  app.get('/aircraft-photo/:hex', async (c) => {
+    const hex = (c.req.param('hex') ?? '').trim().toLowerCase();
+    if (!/^[0-9a-f]{6}$/.test(hex)) throw new AppError('BAD_REQUEST', 'hex must be 6 hex digits');
+    const cached = photoCache.get(hex);
+    if (cached && cached.exp > Date.now()) return ok(c, { photo: cached.photo }, true);
+    let photo: AircraftPhoto = null;
+    try {
+      const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`, {
+        headers: { accept: 'application/json', 'user-agent': PLANESPOTTERS_UA },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { photos?: PlanespottersPhoto[] };
+        const p = body.photos?.[0];
+        if (p) {
+          photo = {
+            thumb: p.thumbnail_large?.src ?? p.thumbnail?.src ?? null,
+            link: p.link ?? null,
+            photographer: p.photographer ?? null,
+          };
+        }
+      }
+    } catch {
+      /* no photo — degrade gracefully */
+    }
+    photoCache.set(hex, { photo, exp: Date.now() + PHOTO_TTL_MS });
+    return ok(c, { photo });
+  });
 
   // Live flights in a viewport (map bootstrap) — Redis hot path.
   app.get('/flights/live', async (c) => {
