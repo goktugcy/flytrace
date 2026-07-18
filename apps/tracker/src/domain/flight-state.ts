@@ -18,6 +18,8 @@ export interface FlightState {
   vrateFpm: number | null;
   gsKt: number | null;
   headingDeg: number | null;
+  /** Coarse aircraft class (light | jet | heavy | helo) for map iconography. */
+  category: string | null;
   lastTs: string; // ISO of the last accepted sample
 
   // ground/air phase (hysteresis-confirmed)

@@ -16,8 +16,30 @@ export interface Position {
   gsKt: number | null;
   vrateFpm: number | null;
   onGround: boolean;
+  /** Coarse aircraft class for map iconography: light | jet | heavy | helo. */
+  category: string | null;
   /** Event time (UTC ISO) — when the source observed this sample. */
   ts: string;
+}
+
+/** Map an ADS-B emitter category (A1–A7…) to a coarse icon class. */
+function adsbCategory(cat: string | null | undefined): string | null {
+  switch ((cat ?? '').toUpperCase()) {
+    case 'A1':
+    case 'A2':
+    case 'B4':
+      return 'light';
+    case 'A5':
+      return 'heavy';
+    case 'A7':
+      return 'helo';
+    case 'A3':
+    case 'A4':
+    case 'A6':
+      return 'jet';
+    default:
+      return null;
+  }
 }
 
 // ── Unit conversions ──
@@ -113,6 +135,7 @@ export function normalizeStateVector(raw: unknown): Position | null {
     gsKt: velMs === null ? null : round(velMs * MS_TO_KT, 1),
     vrateFpm: vrateMs === null ? null : round(vrateMs * MS_TO_FPM, 0),
     onGround,
+    category: null, // OpenSky state vectors carry no emitter category
     ts: new Date(tsSec * 1000).toISOString(),
   };
 }
@@ -145,6 +168,7 @@ const adsbAircraftSchema = z
     track: z.number().nullish(),
     baro_rate: z.number().nullish(),
     seen_pos: z.number().nullish(),
+    category: z.string().nullish(),
   })
   .passthrough();
 
@@ -168,6 +192,7 @@ export function normalizeAdsbAircraft(raw: unknown, nowMs: number): Position | n
     gsKt: a.gs === null || a.gs === undefined ? null : round(a.gs, 1),
     vrateFpm: a.baro_rate === null || a.baro_rate === undefined ? null : Math.round(a.baro_rate),
     onGround,
+    category: adsbCategory(a.category),
     ts: new Date(nowMs - ageMs).toISOString(),
   };
 }

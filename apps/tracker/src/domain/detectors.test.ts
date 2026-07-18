@@ -67,6 +67,7 @@ describe('detectStep — invariants', () => {
     gsKt: 0,
     vrateFpm: 0,
     onGround: true,
+    category: null,
     ts: '2023-11-14T22:13:20.000Z',
     ...over,
   });

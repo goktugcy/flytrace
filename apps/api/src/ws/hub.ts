@@ -53,6 +53,7 @@ const hotStateSchema = z
     gsKt: z.number().nullable(),
     headingDeg: z.number().nullable(),
     vrateFpm: z.number().nullable(),
+    category: z.string().nullish(),
     lastTs: z.string(),
   })
   .passthrough();

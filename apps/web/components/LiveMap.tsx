@@ -53,9 +53,8 @@ interface SelInfo {
   gsKt: number | null;
   heading: number | null;
   onGround: boolean;
+  category: string;
 }
-
-const SIZE_MUL = [0.7, 0.85, 1.05, 1.3];
 
 function toSel(f: FlightSample): SelInfo {
   return {
@@ -66,6 +65,7 @@ function toSel(f: FlightSample): SelInfo {
     gsKt: f.gsKt,
     heading: f.heading,
     onGround: f.onGround,
+    category: flightCategory(f),
   };
 }
 
@@ -106,6 +106,43 @@ function makePlaneImage(size = 64): ImageData {
   return ctx.getImageData(0, 0, size, size);
 }
 
+function blankCtx(size: number): { ctx: CanvasRenderingContext2D | null; s: number } {
+  const cv = document.createElement('canvas');
+  cv.width = size;
+  cv.height = size;
+  const ctx = cv.getContext('2d');
+  if (ctx) ctx.fillStyle = '#fff';
+  return { ctx, s: size / 64 };
+}
+
+/** Light / general-aviation silhouette (straight high wing), points north. */
+function makePropImage(size = 64): ImageData {
+  const { ctx, s } = blankCtx(size);
+  if (!ctx) return new ImageData(size, size);
+  const r = (x: number, y: number, w: number, h: number) =>
+    ctx.fillRect(x * s, y * s, w * s, h * s);
+  r(29, 8, 6, 48); // fuselage
+  r(6, 26, 52, 5); // straight wing
+  r(23, 52, 18, 4); // tailplane
+  return ctx.getImageData(0, 0, size, size);
+}
+
+/** Helicopter silhouette (rotor disc + tail boom), points north. */
+function makeHeloImage(size = 64): ImageData {
+  const { ctx, s } = blankCtx(size);
+  if (!ctx) return new ImageData(size, size);
+  const r = (x: number, y: number, w: number, h: number) =>
+    ctx.fillRect(x * s, y * s, w * s, h * s);
+  r(9, 29, 46, 3); // main rotor (horizontal)
+  r(30, 9, 4, 40); // main rotor (vertical)
+  r(26, 22, 12, 20); // body
+  r(31, 42, 3, 16); // tail boom
+  r(27, 57, 11, 3); // tail rotor
+  return ctx.getImageData(0, 0, size, size);
+}
+
+const CAT_SIZE: Record<string, number> = { light: 0.72, jet: 1.0, heavy: 1.35, helo: 0.9 };
+
 /** Faint lat/lon graticule for depth. */
 function graticule(step = 10): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
@@ -131,12 +168,13 @@ function graticule(step = 10): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
-// Aircraft size class from client-available signals (a pragmatic proxy for type).
-function sizeClass(altFt: number | null, gsKt: number | null, onGround: boolean): number {
-  if (onGround) return 0;
-  if ((gsKt ?? 0) < 160 && (altFt ?? 0) < 10000) return 1; // light / regional
-  if ((altFt ?? 0) >= 28000) return 3; // heavy / widebody cruise
-  return 2; // jet
+// Prefer the real ADS-B emitter category; otherwise fall back to a coarse
+// class inferred from altitude/speed so every aircraft still gets an icon.
+function flightCategory(f: FlightSample): string {
+  if (f.category) return f.category;
+  if (!f.onGround && (f.gsKt ?? 0) < 160 && (f.altFt ?? 0) < 10000) return 'light';
+  if ((f.altFt ?? 0) >= 30000) return 'heavy';
+  return 'jet';
 }
 
 /** Altitude → colour ramp (Flightradar-ish). */
@@ -238,7 +276,7 @@ export function LiveMap() {
       type: 'FeatureCollection',
       features: client.store.list().map((f) => {
         const r = rendered.get(f.flightId) ?? { lat: f.lat, lon: f.lon, hdg: f.heading ?? 0 };
-        const cls = sizeClass(f.altFt, f.gsKt, f.onGround);
+        const cat = flightCategory(f);
         return {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
@@ -248,7 +286,8 @@ export function LiveMap() {
             heading: r.hdg,
             alt: f.altFt ?? 0,
             gs: f.gsKt ?? 0,
-            sizeMul: SIZE_MUL[cls],
+            cat,
+            sizeMul: CAT_SIZE[cat] ?? 1,
             onGround: f.onGround ? 1 : 0,
           },
         };
@@ -376,6 +415,8 @@ export function LiveMap() {
 
       if (!map.hasImage('plane')) {
         map.addImage('plane', makePlaneImage(64), { sdf: true, pixelRatio: 2 });
+        map.addImage('prop', makePropImage(64), { sdf: true, pixelRatio: 2 });
+        map.addImage('helo', makeHeloImage(64), { sdf: true, pixelRatio: 2 });
       }
 
       if (!map.getSource('trail')) {
@@ -425,7 +466,7 @@ export function LiveMap() {
           type: 'symbol',
           source: 'flights',
           layout: {
-            'icon-image': 'plane',
+            'icon-image': ['match', ['get', 'cat'], 'light', 'prop', 'helo', 'helo', 'plane'],
             'icon-rotate': ['get', 'heading'],
             'icon-rotation-alignment': 'map',
             'icon-allow-overlap': true,
@@ -584,7 +625,9 @@ export function LiveMap() {
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-lg font-semibold leading-tight">{sel.callsign}</div>
-                  <div className="text-xs text-muted-foreground">{sel.icao24.toUpperCase()}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {sel.icao24.toUpperCase()} · {t(`map.cat.${sel.category}`)}
+                  </div>
                 </div>
                 <button
                   type="button"

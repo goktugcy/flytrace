@@ -83,6 +83,7 @@ function initialState(flightId: string, obs: Position, cfg: DetectorConfig): Fli
     vrateFpm: obs.vrateFpm,
     gsKt: obs.gsKt,
     headingDeg: obs.headingDeg,
+    category: obs.category,
     lastTs: obs.ts,
     airborne,
     groundStreak: obs.onGround ? cfg.transitionConfirmSamples : 0,
@@ -142,6 +143,7 @@ export function detectStep(
     vrateFpm: obs.vrateFpm,
     gsKt: obs.gsKt,
     headingDeg: obs.headingDeg,
+    category: obs.category ?? prev.category,
     lastTs: obs.ts,
   };
 

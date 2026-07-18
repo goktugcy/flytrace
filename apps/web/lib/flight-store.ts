@@ -14,6 +14,8 @@ export interface FlightSample {
   altFt: number | null;
   gsKt: number | null;
   onGround: boolean;
+  /** Coarse aircraft class (light | jet | heavy | helo) for map icons. */
+  category: string | null;
   ts: string;
   tsMs: number;
 }
@@ -68,6 +70,7 @@ export class FlightStore {
       altFt: p.altFt,
       gsKt: p.gsKt,
       onGround: p.onGround,
+      category: prev?.category ?? null, // static per aircraft; deltas omit it
       ts: p.ts,
       tsMs,
     });
@@ -85,6 +88,7 @@ export class FlightStore {
     headingDeg?: number | null;
     altFt: number | null;
     gsKt: number | null;
+    category?: string | null;
     lastTs: string;
   }): void {
     const tsMs = Date.parse(s.lastTs);
@@ -100,6 +104,7 @@ export class FlightStore {
       altFt: s.altFt,
       gsKt: s.gsKt,
       onGround: false,
+      category: s.category ?? prev?.category ?? null,
       ts: s.lastTs,
       tsMs,
     });
