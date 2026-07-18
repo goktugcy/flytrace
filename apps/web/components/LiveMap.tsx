@@ -224,6 +224,25 @@ function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
 }
 
+const KT_TO_MS = 0.514_444; // knots → metres/second
+const M_PER_DEG_LAT = 111_320;
+/**
+ * Dead-reckon a sample forward along its track so the marker tracks the
+ * aircraft's real-time position between (infrequent) feed updates — this is why
+ * Flightradar's dots sit ahead of a naive "last reported point" render. Capped
+ * at 90 s so a stale/lost target doesn't drift off indefinitely.
+ */
+function project(f: FlightSample, nowMs: number): [number, number] {
+  if (f.onGround || !f.gsKt || f.heading == null) return [f.lat, f.lon];
+  const dt = Math.min(Math.max((nowMs - f.tsMs) / 1000, 0), 90);
+  if (dt === 0) return [f.lat, f.lon];
+  const dist = f.gsKt * KT_TO_MS * dt; // metres travelled since the sample
+  const brng = (f.heading * Math.PI) / 180;
+  const dLat = (dist * Math.cos(brng)) / M_PER_DEG_LAT;
+  const dLon = (dist * Math.sin(brng)) / (M_PER_DEG_LAT * Math.cos((f.lat * Math.PI) / 180));
+  return [f.lat + dLat, f.lon + dLon];
+}
+
 interface Airport {
   iata: string;
   name: string;
@@ -390,12 +409,17 @@ export function LiveMap() {
     };
 
     const tick = () => {
+      const nowMs = Date.now();
       for (const f of client.store.list()) {
+        // Ease toward the *dead-reckoned* position (projected forward from the
+        // last sample), not the raw last point — otherwise the marker lags the
+        // real aircraft by the whole feed interval.
+        const [tLat, tLon] = project(f, nowMs);
         const r = rendered.get(f.flightId);
-        if (!r) rendered.set(f.flightId, { lat: f.lat, lon: f.lon, hdg: f.heading ?? 0 });
+        if (!r) rendered.set(f.flightId, { lat: tLat, lon: tLon, hdg: f.heading ?? 0 });
         else {
-          r.lat += (f.lat - r.lat) * LERP;
-          r.lon += (f.lon - r.lon) * LERP;
+          r.lat += (tLat - r.lat) * LERP;
+          r.lon += (tLon - r.lon) * LERP;
           if (f.heading != null) r.hdg += angleDelta(r.hdg, f.heading) * LERP;
         }
       }

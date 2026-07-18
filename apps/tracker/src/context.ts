@@ -50,7 +50,10 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     detector: DEFAULT_DETECTOR_CONFIG,
     sourceLabel: source.name,
     flightTimeoutMs: config.TRACKER_FLIGHT_TIMEOUT_MS,
-    pollIntervalMs: config.OPENSKY_POLL_INTERVAL_MS,
+    pollIntervalMs:
+      config.TRACKER_SOURCE === 'adsb'
+        ? config.ADSB_POLL_INTERVAL_MS
+        : config.OPENSKY_POLL_INTERVAL_MS,
     lockName: 'tracker:leader',
     lockTtlMs: config.TRACKER_LOCK_TTL_MS,
   };

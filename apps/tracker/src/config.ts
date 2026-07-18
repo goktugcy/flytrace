@@ -42,6 +42,12 @@ const trackerSchema = z.object({
   ADSB_CENTER_LAT: z.coerce.number().default(39.0),
   ADSB_CENTER_LON: z.coerce.number().default(35.0),
   ADSB_RADIUS_NM: z.coerce.number().int().positive().default(250),
+  /**
+   * Poll cadence for the adsb.lol feed. Keyless with generous limits, so we can
+   * refresh far more often than OpenSky — fresher positions mean the map lags
+   * the real aircraft less (the client also dead-reckons between updates).
+   */
+  ADSB_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
 });
 
 const trackerConfigSchema = configSchemas.base
