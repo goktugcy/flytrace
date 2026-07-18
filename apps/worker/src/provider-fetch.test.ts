@@ -70,7 +70,10 @@ const fakeCatalog = {
   getAircraftIdByRegistration: async (reg: string) => (reg === 'TC-XXX' ? 'ac-1' : null),
 } as unknown as CatalogRepo;
 
-async function makeService(statusRepo: FakeStatusRepo) {
+async function makeService(
+  statusRepo: FakeStatusRepo,
+  opts: { deriveStatus?: (id: string) => Promise<'active' | 'landed' | null> } = {},
+) {
   const emitted: EventEnvelope[] = [];
   const enriched: { flightId: string; patch: FlightEnrichment }[] = [];
   const logs: { providerKey: string; success: boolean }[] = [];
@@ -95,6 +98,7 @@ async function makeService(statusRepo: FakeStatusRepo) {
     logProvider: async (e) => {
       logs.push({ providerKey: e.providerKey, success: e.success });
     },
+    ...(opts.deriveStatus ? { deriveStatus: opts.deriveStatus } : {}),
   });
   return { service, emitted, enriched, logs };
 }
@@ -142,12 +146,22 @@ describe('ProviderFetchService', () => {
     expect(payload.changed).toContain('gate');
   });
 
-  test('does nothing when no provider serves the airline', async () => {
+  test('does nothing when no provider serves the airline (no fallback)', async () => {
     const repo = new FakeStatusRepo();
     const { service, emitted } = await makeService(repo);
     await service.process({ ...job, airlineIata: 'ZZ' });
     expect(repo.upserts).toHaveLength(0);
     expect(emitted).toHaveLength(0);
+  });
+
+  test('falls back to a position-derived status when no provider serves the airline', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, emitted } = await makeService(repo, { deriveStatus: async () => 'active' });
+    await service.process({ ...job, airlineIata: 'ZZ' });
+    expect(repo.upserts).toHaveLength(1);
+    expect(repo.upserts[0]?.providerKey).toBe('derived');
+    expect(repo.upserts[0]?.status).toBe('active');
+    expect((emitted[0]?.payload as ProviderUpdatedPayload).providerKey).toBe('derived');
   });
 
   test('records a provider log entry per fetch', async () => {

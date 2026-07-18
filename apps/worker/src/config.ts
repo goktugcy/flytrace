@@ -37,8 +37,19 @@ const workerSchema = z.object({
     .default('{}')
     .transform((v, ctx) => {
       try {
-        const parsed = JSON.parse(v) as Record<string, string>;
-        return parsed;
+        return JSON.parse(v) as Record<string, string>;
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
+        return z.NEVER;
+      }
+    }),
+  /** Per-provider priority for airline-IATA conflicts (higher wins), JSON map. */
+  WORKER_PROVIDER_PRIORITY: z
+    .string()
+    .default('{}')
+    .transform((v, ctx) => {
+      try {
+        return JSON.parse(v) as Record<string, number>;
       } catch {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
         return z.NEVER;

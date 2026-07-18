@@ -2,6 +2,7 @@ import {
   type Database,
   createCatalogRepo,
   createDb,
+  createFlightReadRepo,
   createFlightRepo,
   createFlightStatusRepo,
   createSystemRepo,
@@ -113,7 +114,11 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   ];
   const enabled = new Set<string>(config.WORKER_ENABLED_PROVIDERS);
   if (fixtureIatas.length > 0) enabled.add('fixture');
-  const registry = await ProviderRegistry.build(factories, { enabled, ctx: providerCtx });
+  const registry = await ProviderRegistry.build(factories, {
+    enabled,
+    priority: config.WORKER_PROVIDER_PRIORITY,
+    ctx: providerCtx,
+  });
 
   // Publish domain events on the bus (durable stream + pub/sub), like the tracker.
   const emit = async (env: EventEnvelope): Promise<void> => {
@@ -137,6 +142,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   };
 
   const systemRepo = createSystemRepo(db);
+  const flightRead = createFlightReadRepo(db);
   const providerFetch = new ProviderFetchService({
     registry,
     statusRepo: createFlightStatusRepo(db),
@@ -146,6 +152,12 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     clock: providerCtx.clock,
     logger,
     logProvider: (e) => systemRepo.insertProviderLog(e),
+    // Outage fallback: coarse status from the aircraft's latest position.
+    deriveStatus: async (flightId) => {
+      const pos = await flightRead.getLatestPosition(flightId);
+      if (!pos) return null;
+      return pos.onGround ? 'landed' : 'active';
+    },
   });
 
   // ── BullMQ provider-fetch worker (queue built above; dedicated connection) ──

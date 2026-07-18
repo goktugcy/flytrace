@@ -74,6 +74,8 @@ export interface ProviderFetchDeps {
   logger: Logger;
   /** Optional provider-traffic sink (provider_logs); best-effort, never blocks. */
   logProvider?: (entry: ProviderLogEntry) => Promise<void>;
+  /** Position-derived status fallback when no provider result is available. */
+  deriveStatus?: (flightId: string) => Promise<ProviderStatusFields['status'] | null>;
 }
 
 function optDate(iso: string | undefined): Date | undefined {
@@ -91,35 +93,49 @@ export class ProviderFetchService {
 
   async process(job: ProviderFetchJob): Promise<void> {
     const provider = this.deps.registry.forAirline(job.airlineIata);
-    if (!provider) {
-      this.deps.logger.debug('no provider for airline', { airline: job.airlineIata });
-      return;
+
+    if (provider) {
+      const startedAt = this.deps.clock.now();
+      const result = await provider.getFlightStatus({
+        by: 'flightNumber',
+        flightNumber: job.flightNumber,
+        date: job.date,
+      });
+      await this.log({
+        providerKey: provider.key,
+        operation: 'getFlightStatus',
+        request: { flightNumber: job.flightNumber, date: job.date },
+        latencyMs: this.deps.clock.now() - startedAt,
+        success: result !== null,
+        error: result === null ? 'no result (miss/rate-limit/circuit)' : null,
+      });
+      if (result) {
+        await this.commit(job.flightId, provider.key, toFields(result.status), result.status);
+        await this.enrich(job.flightId, result.status);
+        return;
+      }
     }
 
-    const startedAt = this.deps.clock.now();
-    const result = await provider.getFlightStatus({
-      by: 'flightNumber',
-      flightNumber: job.flightNumber,
-      date: job.date,
-    });
-    await this.log({
-      providerKey: provider.key,
-      operation: 'getFlightStatus',
-      request: { flightNumber: job.flightNumber, date: job.date },
-      latencyMs: this.deps.clock.now() - startedAt,
-      success: result !== null,
-      error: result === null ? 'no result (miss/rate-limit/circuit)' : null,
-    });
-    if (!result) return;
+    // No provider serves the airline, or the provider is unavailable (rate
+    // limit / circuit open / miss): fall back to a status derived from the
+    // aircraft's own track so every tracked flight still gets a coarse status
+    // (docs/08 §8.10, docs/17 §17.5).
+    await this.deriveFallback(job.flightId);
+  }
 
-    const after = toFields(result.status);
-    const before = await this.deps.statusRepo.getSnapshot(job.flightId);
+  /** Project a status into the snapshot + emit ProviderUpdated on any diff. */
+  private async commit(
+    flightId: string,
+    providerKey: string,
+    after: ProviderStatusFields,
+    raw: unknown,
+  ): Promise<void> {
+    const before = await this.deps.statusRepo.getSnapshot(flightId);
     const changed = diffStatus(before, after);
-
     const fetchedAt = this.deps.clock.nowIso();
     await this.deps.statusRepo.upsertSnapshot({
-      flightId: job.flightId,
-      providerKey: provider.key,
+      flightId,
+      providerKey,
       status: after.status ?? 'unknown',
       gate: after.gate ?? null,
       terminal: after.terminal ?? null,
@@ -130,35 +146,50 @@ export class ProviderFetchService {
       scheduledArrival: after.scheduledArrival ?? null,
       estimatedArrival: after.estimatedArrival ?? null,
       actualArrival: after.actualArrival ?? null,
-      raw: result.status,
+      raw,
       fetchedAt: new Date(fetchedAt),
     });
-
-    await this.enrich(job.flightId, result.status);
-
-    if (changed.length === 0) return; // nothing new → no event
-
+    if (changed.length === 0) return;
     const payload: ProviderUpdatedPayload = {
-      flightId: job.flightId,
-      providerKey: provider.key,
+      flightId,
+      providerKey,
       before: before ? toSnapshotFields(before) : null,
       after,
       changed,
       fetchedAt,
     };
-    const bucket = fetchedAt.slice(0, 16); // minute bucket (dedupe)
     await this.deps.emit(
       makeEnvelope(
         {
           type: 'ProviderUpdated',
           occurredAt: fetchedAt,
-          dedupeKey: `${job.flightId}:provider:${bucket}`,
-          partitionKey: job.flightId,
+          dedupeKey: `${flightId}:provider:${fetchedAt.slice(0, 16)}`,
+          partitionKey: flightId,
           payload,
         },
         { producer: 'worker', clock: this.deps.clock },
       ),
     );
+  }
+
+  /** Derive a coarse status from the flight's latest position (outage fallback). */
+  private async deriveFallback(flightId: string): Promise<void> {
+    if (!this.deps.deriveStatus) return;
+    const status = await this.deps.deriveStatus(flightId);
+    if (!status) return;
+    const after: ProviderStatusFields = {
+      status,
+      gate: null,
+      terminal: null,
+      baggageBelt: null,
+      scheduledDeparture: null,
+      estimatedDeparture: null,
+      actualDeparture: null,
+      scheduledArrival: null,
+      estimatedArrival: null,
+      actualArrival: null,
+    };
+    await this.commit(flightId, 'derived', after, { derived: true, status });
   }
 
   /** Best-effort provider-traffic log; a logging failure never fails the job. */

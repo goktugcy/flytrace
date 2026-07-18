@@ -2,10 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import { createLogger, fixedClock } from '@flytrace/shared';
 import {
   type AjetRaw,
+  type BaRaw,
+  type LhRaw,
   type PegasusRaw,
   type ThyRaw,
   concreteProviderFactories,
   normalizeAjet,
+  normalizeBa,
+  normalizeLufthansa,
   normalizePegasus,
   normalizeThy,
 } from './concrete.ts';
@@ -89,6 +93,45 @@ describe('normalizeAjet', () => {
   });
 });
 
+describe('normalizeLufthansa', () => {
+  const raw: LhRaw = {
+    flightNumber: 'LH1300',
+    status: 'Departed',
+    departure: { airport: 'muc', scheduled: '2023-11-14T08:00:00Z', gate: 'G12', terminal: '2' },
+    arrival: { airport: 'lhr', estimated: '2023-11-14T09:20:00Z' },
+    aircraftType: 'A320',
+  };
+  test('maps nested departure/arrival + vocabulary', () => {
+    const n = normalizeLufthansa(raw, FETCHED);
+    expect(n.airlineIata).toBe('LH');
+    expect(n.status).toBe('active');
+    expect(n.origin).toBe('MUC');
+    expect(n.destination).toBe('LHR');
+    expect(n.gate).toBe('G12');
+    expect(n.scheduledDeparture).toBe('2023-11-14T08:00:00Z');
+    expect(n.estimatedArrival).toBe('2023-11-14T09:20:00Z');
+  });
+});
+
+describe('normalizeBa', () => {
+  const raw: BaRaw = {
+    flight: 'BA117',
+    from: 'lhr',
+    to: 'jfk',
+    flightStatus: 'Cancelled',
+    depGate: 'A10',
+    schedDep: '2023-11-14T10:00:00Z',
+  };
+  test('maps flat shape + vocabulary', () => {
+    const n = normalizeBa(raw, FETCHED);
+    expect(n.airlineIata).toBe('BA');
+    expect(n.status).toBe('cancelled');
+    expect(n.origin).toBe('LHR');
+    expect(n.destination).toBe('JFK');
+    expect(n.gate).toBe('A10');
+  });
+});
+
 // ── Contract: registration list + through-the-base fetch/normalize ──
 
 function ctxWith(raw: unknown, config: Record<string, unknown>): ProviderContext {
@@ -103,11 +146,11 @@ function ctxWith(raw: unknown, config: Record<string, unknown>): ProviderContext
 }
 
 describe('concrete provider factories', () => {
-  test('register thy/pegasus/ajet with their IATA codes', () => {
+  test('register all concrete providers with their IATA codes', () => {
     const keys = concreteProviderFactories().map((f) => f.key);
-    expect(keys).toEqual(['thy', 'pegasus', 'ajet']);
+    expect(keys).toEqual(['thy', 'pegasus', 'ajet', 'lufthansa', 'ba']);
     const iatas = concreteProviderFactories().flatMap((f) => f.airlineIata);
-    expect(iatas).toEqual(['TK', 'PC', 'VF']);
+    expect(iatas).toEqual(['TK', 'PC', 'VF', 'LH', 'BA']);
   });
 
   test('THY fetches + normalizes through the base pipeline when configured', async () => {
