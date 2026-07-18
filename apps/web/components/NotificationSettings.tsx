@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,7 +12,7 @@ import { ArrowLeft, Mail, Moon, Send } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 async function api(path: string, init?: RequestInit) {
   return fetch(`${API_BASE}/api/v1${path}`, { credentials: 'include', ...init });

@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,7 +13,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
 type Live = NonNullable<FlightDetail['live']>;

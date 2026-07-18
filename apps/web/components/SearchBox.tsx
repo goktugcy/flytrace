@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { Badge } from '@/components/ui/badge';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -7,7 +9,7 @@ import { Loader2, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useId, useRef, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 interface Result {
   flightId: string;

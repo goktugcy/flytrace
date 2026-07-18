@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,7 +12,7 @@ import { Bell, Eye, Radio, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 interface Dashboard {
   watchlist: { id: string; flightId: string | null; eventTypes: string[]; channels: string[] }[];

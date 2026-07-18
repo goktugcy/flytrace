@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +19,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 interface AdminData {
   stats: Record<string, number>;

@@ -59,10 +59,22 @@ export function createApp(ctx: AppContext) {
   });
 
   app.use('*', secureHeaders());
+  // In local dev, also reflect private-LAN origins so a phone on the same
+  // network (e.g. http://192.168.x.x:3000) can reach the API. Configured
+  // CORS_ORIGINS are always allowed; everything else is rejected.
+  const allowed = new Set(ctx.config.CORS_ORIGINS);
+  const isLocal = ctx.config.APP_ENV === 'local';
+  const lanOrigin =
+    /^https?:\/\/(localhost|127\.0\.0\.1|(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.[\d.]+)(?::\d+)?$/;
   app.use(
     '/api/*',
     cors({
-      origin: ctx.config.CORS_ORIGINS,
+      origin: (origin) => {
+        if (!origin) return ctx.config.CORS_ORIGINS[0] ?? null;
+        if (allowed.has(origin)) return origin;
+        if (isLocal && lanOrigin.test(origin)) return origin;
+        return null;
+      },
       credentials: true,
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     }),

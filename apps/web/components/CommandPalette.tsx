@@ -1,12 +1,14 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { Bell, Home, LayoutDashboard, Map as MapIcon, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 interface FlightResult {
   flightId: string;

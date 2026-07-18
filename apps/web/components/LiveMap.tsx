@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
@@ -23,7 +25,7 @@ function webglAvailable(): boolean {
   }
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
 const LERP = 0.16; // per-frame easing toward the latest sample (docs/12 §12.5)
 

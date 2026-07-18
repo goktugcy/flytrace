@@ -1,5 +1,7 @@
 'use client';
 
+import { apiBase } from '@/lib/api';
+
 import { SearchBox } from '@/components/SearchBox';
 import { Button } from '@/components/ui/button';
 import { LOCALES, useI18n } from '@/lib/i18n';
@@ -9,7 +11,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = apiBase();
 
 const NAV = [
   { href: '/map', key: 'nav.map', icon: MapIcon },
