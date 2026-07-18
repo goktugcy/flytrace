@@ -6,11 +6,46 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
-import { ArrowLeft, PlaneLanding, PlaneTakeoff, TowerControl } from 'lucide-react';
+import {
+  ArrowLeft,
+  Cloud,
+  CloudDrizzle,
+  CloudFog,
+  CloudLightning,
+  CloudRain,
+  CloudSnow,
+  type LucideIcon,
+  Moon,
+  PlaneLanding,
+  PlaneTakeoff,
+  Sun,
+  TowerControl,
+  Wind,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 const API_BASE = apiBase();
+
+interface Weather {
+  tempC: number | null;
+  windKt: number | null;
+  code: number;
+  isDay: boolean;
+}
+
+/** WMO weather-code → short label + icon (Open-Meteo `weather_code`). */
+function wmo(code: number, isDay: boolean): { label: string; Icon: LucideIcon } {
+  if (code === 0) return { label: 'Clear', Icon: isDay ? Sun : Moon };
+  if (code <= 3) return { label: 'Partly cloudy', Icon: Cloud };
+  if (code <= 48) return { label: 'Fog', Icon: CloudFog };
+  if (code <= 57) return { label: 'Drizzle', Icon: CloudDrizzle };
+  if (code <= 67) return { label: 'Rain', Icon: CloudRain };
+  if (code <= 77) return { label: 'Snow', Icon: CloudSnow };
+  if (code <= 82) return { label: 'Showers', Icon: CloudRain };
+  if (code <= 86) return { label: 'Snow showers', Icon: CloudSnow };
+  return { label: 'Thunderstorm', Icon: CloudLightning };
+}
 
 interface Airport {
   iata: string | null;
@@ -54,6 +89,7 @@ interface AirportData {
 export function AirportView({ iata }: { iata: string }) {
   const [data, setData] = useState<AirportData | null>(null);
   const [state, setState] = useState<'loading' | 'missing' | 'ready' | 'error'>('loading');
+  const [weather, setWeather] = useState<Weather | null>(null);
 
   async function load() {
     setState('loading');
@@ -71,6 +107,21 @@ export function AirportView({ iata }: { iata: string }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refetch only on iata change
   useEffect(() => {
     void load();
+  }, [iata]);
+
+  // Weather loads independently so it never blocks or breaks the board.
+  useEffect(() => {
+    let cancelled = false;
+    setWeather(null);
+    fetch(`${API_BASE}/api/v1/airports/${iata}/weather`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled) setWeather((d?.data?.weather as Weather | undefined) ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [iata]);
 
   const runwayCount = Array.isArray(data?.airport.runways) ? data.airport.runways.length : null;
@@ -99,11 +150,12 @@ export function AirportView({ iata }: { iata: string }) {
 
       {state === 'ready' && data && (
         <>
-          <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-3xl font-semibold tracking-tight">
               {data.airport.iata ?? data.airport.icao}
             </h1>
             <span className="text-muted-foreground">{data.airport.name}</span>
+            {weather && <WeatherBadge weather={weather} />}
           </header>
           <p className="mt-1 text-sm text-muted-foreground">
             {[data.airport.city, data.airport.country].filter(Boolean).join(', ')}
@@ -135,6 +187,25 @@ export function AirportView({ iata }: { iata: string }) {
         </>
       )}
     </main>
+  );
+}
+
+function WeatherBadge({ weather }: { weather: Weather }) {
+  const { label, Icon } = wmo(weather.code, weather.isDay);
+  return (
+    <span className="ml-auto inline-flex items-center gap-2 rounded-md border border-border bg-card/60 px-2.5 py-1 text-sm">
+      <Icon className="size-4 text-accent-bright" />
+      {weather.tempC != null && (
+        <span className="font-medium tabular-nums">{Math.round(weather.tempC)}°C</span>
+      )}
+      <span className="text-muted-foreground">{label}</span>
+      {weather.windKt != null && (
+        <span className="inline-flex items-center gap-1 text-muted-foreground">
+          <Wind className="size-3.5" />
+          <span className="tabular-nums">{Math.round(weather.windKt)} kt</span>
+        </span>
+      )}
+    </span>
   );
 }
 

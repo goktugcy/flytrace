@@ -12,8 +12,8 @@ type Mode = 'pending' | 'animated' | 'still' | 'fallback';
 
 function detectMode(): Exclude<Mode, 'pending'> {
   if (typeof window === 'undefined') return 'fallback';
-  // Small screens keep the lightweight CSS sky — the ~500KB WebGL bundle isn't
-  // worth the mobile main-thread cost for a decorative visual (docs/17 perf gate).
+  // Small screens keep the lightweight CSS sky; the WebGL bundle plus model
+  // asset is still not worth the mobile main-thread cost for this hero visual.
   if (!window.matchMedia?.('(min-width: 1024px)').matches) return 'fallback';
   // No-WebGL → CSS fallback.
   try {
@@ -30,8 +30,8 @@ function detectMode(): Exclude<Mode, 'pending'> {
 
 /**
  * Landing hero visual (docs/17 §17.4). Progressive enhancement: a self-contained
- * CSS "sky" is the baseline; browsers with WebGL upgrade to a React Three Fiber
- * globe, and viewers who prefer reduced motion get the globe without rotation.
+ * CSS "sky" is the baseline; browsers with WebGL upgrade to the engine model,
+ * and viewers who prefer reduced motion get the model without rotation.
  */
 export function Hero() {
   const [mode, setMode] = useState<Mode>('pending');
