@@ -2,10 +2,22 @@
 
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { SearchBox } from '@/components/SearchBox';
+import { ErrorState } from '@/components/ui/states';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
-import { SearchBox } from './SearchBox';
+
+/** The live map needs a WebGL context (maplibre); some browsers/GPUs disable it. */
+function webglAvailable(): boolean {
+  if (typeof document === 'undefined') return true;
+  try {
+    const c = document.createElement('canvas');
+    return Boolean(c.getContext('webgl2') ?? c.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
@@ -20,18 +32,30 @@ interface Rendered {
 export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [count, setCount] = useState(0);
+  const [failed, setFailed] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     if (!containerRef.current) return;
+    if (!webglAvailable()) {
+      setFailed(true);
+      return;
+    }
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: STYLE,
-      center: [35, 39],
-      zoom: 5,
-      attributionControl: false,
-    });
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: STYLE,
+        center: [35, 39],
+        zoom: 5,
+        attributionControl: false,
+      });
+    } catch {
+      setFailed(true);
+      return;
+    }
+    map.on('error', (e) => console.warn('maplibre error', e?.error?.message));
     map.addControl(new maplibregl.NavigationControl({ showZoom: true }), 'top-right');
     map.addControl(
       new maplibregl.AttributionControl({
@@ -133,6 +157,18 @@ export function LiveMap() {
       map.remove();
     };
   }, [router]);
+
+  if (failed) {
+    return (
+      <div className="fixed inset-x-0 bottom-0 top-14 grid place-items-center p-6">
+        <ErrorState
+          title="The live map can’t be displayed"
+          description="This map needs WebGL, which your browser or GPU has turned off. Enable hardware acceleration (or WebGL) and reload — the rest of FlyTrace works without it."
+          onRetry={() => window.location.reload()}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-x-0 bottom-0 top-14">
