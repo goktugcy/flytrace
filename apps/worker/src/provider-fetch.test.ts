@@ -9,6 +9,7 @@ import type {
 import { ProviderRegistry, fixtureProviderFactory } from '@flytrace/providers';
 import type { ProviderContext } from '@flytrace/providers';
 import {
+  type AircraftChangedPayload,
   type EventEnvelope,
   type ProviderUpdatedPayload,
   createLogger,
@@ -68,23 +69,35 @@ const fakeCatalog = {
   getAirlineIdByIata: async (iata: string) => (iata === 'XX' ? 'airline-xx' : null),
   getAirportIdByIata: async (iata: string) => ({ IST: 'ap-ist', ESB: 'ap-esb' })[iata] ?? null,
   getAircraftIdByRegistration: async (reg: string) => (reg === 'TC-XXX' ? 'ac-1' : null),
+  getFlightIcao24: async () => null,
+  getIcao24ByRegistration: async () => null,
 } as unknown as CatalogRepo;
 
 async function makeService(
   statusRepo: FakeStatusRepo,
-  opts: { deriveStatus?: (id: string) => Promise<'active' | 'landed' | null> } = {},
+  opts: {
+    deriveStatus?: (id: string) => Promise<'active' | 'landed' | null>;
+    build?: Parameters<typeof fixtureProviderFactory>[0]['build'];
+    catalog?: CatalogRepo;
+  } = {},
 ) {
   const emitted: EventEnvelope[] = [];
   const enriched: { flightId: string; patch: FlightEnrichment }[] = [];
   const logs: { providerKey: string; success: boolean }[] = [];
   const registry = await ProviderRegistry.build(
-    [fixtureProviderFactory({ key: 'fixture', airlineIata: ['XX'] })],
+    [
+      fixtureProviderFactory({
+        key: 'fixture',
+        airlineIata: ['XX'],
+        ...(opts.build ? { build: opts.build } : {}),
+      }),
+    ],
     { enabled: new Set(['fixture']), ctx: providerCtx() },
   );
   const service = new ProviderFetchService({
     registry,
     statusRepo,
-    catalog: fakeCatalog,
+    catalog: opts.catalog ?? fakeCatalog,
     flightRepo: {
       enrichFlight: async (flightId, patch) => {
         enriched.push({ flightId, patch });
@@ -185,5 +198,57 @@ describe('ProviderFetchService', () => {
     expect(patch.originAirportId).toBe('ap-ist'); // IST resolves
     expect(patch.destinationAirportId).toBeUndefined(); // LHR uncatalogued → omitted
     expect(patch.aircraftId).toBeUndefined(); // no registration in fixture
+  });
+
+  // AircraftChanged (docs/07): provider reports a tail whose icao24 differs from
+  // the aircraft currently attached to the flight.
+  const buildTail =
+    (registration: string): Parameters<typeof fixtureProviderFactory>[0]['build'] =>
+    (_q, c, key) => ({
+      flightNumber: 'XX100',
+      airlineIata: 'XX',
+      origin: 'IST',
+      destination: 'ESB',
+      status: 'active',
+      registration,
+      source: key,
+      fetchedAt: c.nowIso(),
+      confidence: 0.9,
+    });
+  const swapCatalog = (newIcao: string | null) =>
+    ({
+      getAirlineByIcao: async () => null,
+      getAirlineIdByIata: async () => 'airline-xx',
+      getAirportIdByIata: async () => null,
+      getAircraftIdByRegistration: async () => 'ac-new',
+      getFlightIcao24: async () => 'aaaaaa',
+      getIcao24ByRegistration: async () => newIcao,
+    }) as unknown as CatalogRepo;
+
+  test('emits AircraftChanged when the provider reports a different tail', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, emitted } = await makeService(repo, {
+      build: buildTail('TC-NEW'),
+      catalog: swapCatalog('bbbbbb'),
+    });
+    await service.process(job);
+
+    const ev = emitted.find((e) => e.type === 'AircraftChanged');
+    expect(ev).toBeDefined();
+    const p = ev?.payload as AircraftChangedPayload;
+    expect(p.previousIcao24).toBe('aaaaaa');
+    expect(p.newIcao24).toBe('bbbbbb');
+    expect(p.flightNumber).toBe('XX100');
+    expect(ev?.dedupeKey).toBe('XX100:2023-11-14:aircraftChange');
+  });
+
+  test('does not emit AircraftChanged when the tail is unchanged', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, emitted } = await makeService(repo, {
+      build: buildTail('TC-SAME'),
+      catalog: swapCatalog('aaaaaa'), // same as the flight's current icao24
+    });
+    await service.process(job);
+    expect(emitted.some((e) => e.type === 'AircraftChanged')).toBe(false);
   });
 });

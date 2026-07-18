@@ -56,6 +56,24 @@ export function createCatalogRepo(db: Database) {
       `)) as unknown as { id: string }[];
       return rows[0]?.id ?? null;
     },
+
+    /** icao24 (hex) of the aircraft currently attached to a flight, or null. */
+    async getFlightIcao24(flightId: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select a.icao24 from flights f
+        join aircraft a on a.id = f.aircraft_id
+        where f.id = ${flightId} limit 1
+      `)) as unknown as { icao24: string }[];
+      return rows[0]?.icao24 ?? null;
+    },
+
+    /** icao24 (hex) for a registration/tail number, or null if uncatalogued. */
+    async getIcao24ByRegistration(registration: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select icao24 from aircraft where registration = ${registration.toUpperCase()} limit 1
+      `)) as unknown as { icao24: string }[];
+      return rows[0]?.icao24 ?? null;
+    },
   };
 }
 

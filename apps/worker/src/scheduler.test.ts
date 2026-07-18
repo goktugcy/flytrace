@@ -43,6 +43,8 @@ function catalog(map: Record<string, string>): CatalogRepo {
     getIcaoByIata: async () => null,
     getAirportIdByIata: async () => null,
     getAircraftIdByRegistration: async () => null,
+    getFlightIcao24: async () => null,
+    getIcao24ByRegistration: async () => null,
   };
 }
 

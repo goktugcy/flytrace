@@ -160,6 +160,15 @@ export const providerUpdatedPayloadSchema = z.object({
 });
 export type ProviderUpdatedPayload = z.infer<typeof providerUpdatedPayloadSchema>;
 
+/** AircraftChanged — the tail serving a flight number changed vs history (docs/07). */
+export const aircraftChangedPayloadSchema = z.object({
+  flightId: z.string().uuid(),
+  flightNumber: z.string(),
+  previousIcao24: z.string(),
+  newIcao24: z.string(),
+});
+export type AircraftChangedPayload = z.infer<typeof aircraftChangedPayloadSchema>;
+
 /** Registry mapping each event type to its current schema version. */
 export const EVENT_REGISTRY: Record<EventType, { version: number }> = Object.fromEntries(
   EVENT_TYPES.map((t) => [t, { version: 1 }]),

@@ -7,6 +7,7 @@ import type {
 } from '@flytrace/db';
 import type { NormalizedFlightStatus, ProviderRegistry } from '@flytrace/providers';
 import {
+  type AircraftChangedPayload,
   type Clock,
   type Logger,
   type ProviderStatusFields,
@@ -111,7 +112,7 @@ export class ProviderFetchService {
       });
       if (result) {
         await this.commit(job.flightId, provider.key, toFields(result.status), result.status);
-        await this.enrich(job.flightId, result.status);
+        await this.enrich(job, result.status);
         return;
       }
     }
@@ -207,7 +208,12 @@ export class ProviderFetchService {
    * and attach them to the flight row (docs/08 §8.8). Best-effort: unresolved
    * codes (unknown airline/airport/tail) are simply left off the patch.
    */
-  private async enrich(flightId: string, s: NormalizedFlightStatus): Promise<void> {
+  private async enrich(job: ProviderFetchJob, s: NormalizedFlightStatus): Promise<void> {
+    const flightId = job.flightId;
+    // Aircraft attached to the flight *before* this enrich — the "history" side
+    // of an aircraft-swap comparison.
+    const prevIcao24 = await this.deps.catalog.getFlightIcao24(flightId);
+
     const patch: FlightEnrichment = { flightNumber: s.flightNumber };
 
     const [airlineId, originId, destinationId, aircraftId] = await Promise.all([
@@ -238,6 +244,34 @@ export class ProviderFetchService {
     if (aa) patch.actualArrival = aa;
 
     await this.deps.flightRepo.enrichFlight(flightId, patch);
+
+    // AircraftChanged (docs/07 §): the provider reports a tail whose icao24
+    // differs from the aircraft we had on this flight. Emit once per
+    // flightNumber+date (dedupe key); only when both tails are known.
+    const newIcao24 = s.registration
+      ? await this.deps.catalog.getIcao24ByRegistration(s.registration)
+      : null;
+    if (prevIcao24 && newIcao24 && prevIcao24 !== newIcao24) {
+      const flightNumber = s.flightNumber ?? job.flightNumber;
+      const payload: AircraftChangedPayload = {
+        flightId,
+        flightNumber,
+        previousIcao24: prevIcao24,
+        newIcao24,
+      };
+      await this.deps.emit(
+        makeEnvelope(
+          {
+            type: 'AircraftChanged',
+            occurredAt: this.deps.clock.nowIso(),
+            dedupeKey: `${flightNumber}:${job.date}:aircraftChange`,
+            partitionKey: flightId,
+            payload,
+          },
+          { producer: 'worker', clock: this.deps.clock },
+        ),
+      );
+    }
   }
 }
 
