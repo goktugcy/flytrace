@@ -4,6 +4,7 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
 import { ErrorState } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { Plane, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
@@ -188,6 +189,7 @@ export function LiveMap() {
   const [failed, setFailed] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  const t = useT();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -531,8 +533,8 @@ export function LiveMap() {
     return (
       <div className="fixed inset-x-0 bottom-0 top-14 grid place-items-center p-6">
         <ErrorState
-          title="The live map can’t be displayed"
-          description="This map needs WebGL, which your browser or GPU has turned off. Enable hardware acceleration (or WebGL) and reload — the rest of FlyTrace works without it."
+          title={t('map.webglTitle')}
+          description={t('map.webglBody')}
           onRetry={() => window.location.reload()}
         />
       </div>
@@ -552,19 +554,19 @@ export function LiveMap() {
             <span className="relative inline-flex size-2 rounded-full bg-success" />
           </span>
           <span className="tabular-nums">{count.toLocaleString()}</span>
-          <span className="text-muted-foreground">live</span>
+          <span className="text-muted-foreground">{t('common.live')}</span>
         </div>
         <SearchBox className="w-56 sm:w-72" />
       </div>
 
       {/* Altitude legend */}
       <div className="absolute bottom-4 right-3 z-10 hidden items-center gap-2 rounded-md border border-border bg-card/85 px-3 py-2 text-xs shadow-soft-md backdrop-blur-md sm:flex">
-        <span className="text-muted-foreground">low</span>
+        <span className="text-muted-foreground">{t('common.low')}</span>
         <span
           className="h-1.5 w-24 rounded-full"
           style={{ background: 'linear-gradient(90deg,#22c55e,#eab308,#fb923c,#38bdf8,#e2e8f0)' }}
         />
-        <span className="text-muted-foreground">high</span>
+        <span className="text-muted-foreground">{t('common.high')}</span>
       </div>
 
       {/* Selected flight card — stays on the map */}
@@ -586,7 +588,7 @@ export function LiveMap() {
                 </div>
                 <button
                   type="button"
-                  aria-label="Close"
+                  aria-label={t('common.close')}
                   onClick={() => selectRef.current(null)}
                   className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
@@ -595,13 +597,16 @@ export function LiveMap() {
               </div>
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <Metric label="Altitude" value={sel.onGround ? 'Ground' : fmtFt(sel.altFt)} />
                 <Metric
-                  label="Speed"
+                  label={t('map.altitude')}
+                  value={sel.onGround ? t('map.ground') : fmtFt(sel.altFt)}
+                />
+                <Metric
+                  label={t('map.speed')}
                   value={sel.gsKt != null ? `${Math.round(sel.gsKt)} kt` : '—'}
                 />
                 <Metric
-                  label="Heading"
+                  label={t('map.heading')}
                   value={sel.heading != null ? `${Math.round(sel.heading)}°` : '—'}
                 />
               </div>
@@ -610,7 +615,7 @@ export function LiveMap() {
                 href={`/flights/id/${sel.flightId}`}
                 className="mt-4 flex h-9 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
               >
-                Details
+                {t('common.details')}
               </Link>
             </div>
           </div>

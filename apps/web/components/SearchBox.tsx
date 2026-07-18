@@ -1,6 +1,7 @@
 'use client';
 
 import { Badge } from '@/components/ui/badge';
+import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { Loader2, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -23,6 +24,7 @@ export function SearchBox({ className, autoFocus }: { className?: string; autoFo
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
   const router = useRouter();
+  const t = useT();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listId = useId();
 
@@ -88,7 +90,7 @@ export function SearchBox({ className, autoFocus }: { className?: string; autoFo
           onFocus={() => results.length > 0 && setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={onKeyDown}
-          placeholder="Search flight or callsign…"
+          placeholder={t('search.placeholder')}
           role="combobox"
           aria-expanded={showList}
           aria-controls={listId}
@@ -107,7 +109,7 @@ export function SearchBox({ className, autoFocus }: { className?: string; autoFo
         >
           {results.length === 0 && !loading ? (
             <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No matches for “{q.trim()}”.
+              {t('search.noMatch', { q: q.trim() })}
             </li>
           ) : (
             results.map((r, i) => (

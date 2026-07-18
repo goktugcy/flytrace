@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { Bell, Eye, Radio, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -23,6 +24,7 @@ type State = 'loading' | 'unauth' | 'ready' | 'error';
 export function DashboardView() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [state, setState] = useState<State>('loading');
+  const t = useT();
 
   async function load() {
     setState('loading');
@@ -46,17 +48,15 @@ export function DashboardView() {
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your watched flights, alerts and channels.
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('dash.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('dash.subtitle')}</p>
         </div>
         <div className="flex gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/settings/notifications">Notification settings</Link>
+            <Link href="/settings/notifications">{t('dash.settings')}</Link>
           </Button>
           <Button asChild size="sm">
-            <Link href="/map">Live map</Link>
+            <Link href="/map">{t('dash.liveMap')}</Link>
           </Button>
         </div>
       </div>
@@ -67,11 +67,11 @@ export function DashboardView() {
         {state === 'unauth' && (
           <EmptyState
             icon={Eye}
-            title="Sign in to see your dashboard"
-            description="Watched flights, notifications and connected channels live here."
+            title={t('dash.signinTitle')}
+            description={t('dash.signinBody')}
             action={
               <Button asChild size="sm">
-                <Link href="/signin?next=/dashboard">Sign in</Link>
+                <Link href="/signin?next=/dashboard">{t('nav.signin')}</Link>
               </Button>
             }
           />
@@ -86,22 +86,23 @@ export function DashboardView() {
 }
 
 function DashboardBody({ data }: { data: Dashboard }) {
+  const t = useT();
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat icon={Eye} label="Watching" value={data.watchlist.length} />
-        <Stat icon={Bell} label="Notifications" value={data.notifications.length} />
-        <Stat icon={Radio} label="Channels" value={data.channels.length} />
-        <Stat icon={Star} label="Favorites" value={data.favorites.length} />
+        <Stat icon={Eye} label={t('dash.watching')} value={data.watchlist.length} />
+        <Stat icon={Bell} label={t('dash.notifications')} value={data.notifications.length} />
+        <Stat icon={Radio} label={t('dash.channels')} value={data.channels.length} />
+        <Stat icon={Star} label={t('dash.favorites')} value={data.favorites.length} />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Watching</CardTitle>
+          <CardTitle>{t('dash.watching')}</CardTitle>
         </CardHeader>
         <CardContent>
           {data.watchlist.length === 0 ? (
-            <InlineEmpty>No watched flights yet. Open a flight and tap Watch.</InlineEmpty>
+            <InlineEmpty>{t('dash.empty.watch')}</InlineEmpty>
           ) : (
             <List>
               {data.watchlist.map((w) => (
@@ -135,11 +136,11 @@ function DashboardBody({ data }: { data: Dashboard }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent notifications</CardTitle>
+          <CardTitle>{t('dash.recentNotif')}</CardTitle>
         </CardHeader>
         <CardContent>
           {data.notifications.length === 0 ? (
-            <InlineEmpty>No notifications yet.</InlineEmpty>
+            <InlineEmpty>{t('dash.empty.notif')}</InlineEmpty>
           ) : (
             <List>
               {data.notifications.map((n) => (
@@ -158,11 +159,11 @@ function DashboardBody({ data }: { data: Dashboard }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Channels</CardTitle>
+          <CardTitle>{t('dash.channels')}</CardTitle>
         </CardHeader>
         <CardContent>
           {data.channels.length === 0 ? (
-            <InlineEmpty>No channels connected.</InlineEmpty>
+            <InlineEmpty>{t('dash.empty.channels')}</InlineEmpty>
           ) : (
             <List>
               {data.channels.map((ch) => (

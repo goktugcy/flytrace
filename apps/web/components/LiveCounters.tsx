@@ -1,6 +1,7 @@
 'use client';
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { useT } from '@/lib/i18n';
 import { useEffect, useState } from 'react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -12,6 +13,7 @@ interface Stats {
 
 export function LiveCounters() {
   const [stats, setStats] = useState<Stats | null>(null);
+  const t = useT();
 
   useEffect(() => {
     let alive = true;
@@ -24,17 +26,17 @@ export function LiveCounters() {
       }
     };
     void load();
-    const t = setInterval(load, 10_000);
+    const timer = setInterval(load, 10_000);
     return () => {
       alive = false;
-      clearInterval(t);
+      clearInterval(timer);
     };
   }, []);
 
   return (
     <dl className="mt-8 flex flex-wrap gap-x-10 gap-y-6">
-      <Counter label="Live aircraft" value={stats?.flightsLive} />
-      <Counter label="Events today" value={stats?.eventsToday} />
+      <Counter label={t('landing.counters.aircraft')} value={stats?.flightsLive} />
+      <Counter label={t('landing.counters.events')} value={stats?.eventsToday} />
     </dl>
   );
 }

@@ -7,7 +7,13 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["**/dist/**", "**/.next/**", "**/node_modules/**", "**/migrations/**"]
+    "ignore": [
+      "**/dist/**",
+      "**/.next/**",
+      "**/node_modules/**",
+      "**/migrations/**",
+      "apps/web/public/**"
+    ]
   },
   "formatter": {
     "enabled": true,

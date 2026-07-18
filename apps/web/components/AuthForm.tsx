@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { CheckCircle2, Plane } from 'lucide-react';
 import { useState } from 'react';
@@ -19,6 +20,7 @@ export function AuthForm({ next }: { next: string }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'busy' | 'success'>('idle');
+  const t = useT();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -59,12 +61,10 @@ export function AuthForm({ next }: { next: string }) {
           <Plane className="size-5" />
         </span>
         <h1 className="mt-4 text-2xl font-semibold tracking-tight">
-          {mode === 'sign-in' ? 'Welcome back' : 'Create your account'}
+          {mode === 'sign-in' ? t('auth.welcome') : t('auth.create')}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {mode === 'sign-in'
-            ? 'Sign in to watch flights and get alerts.'
-            : 'Start watching flights in under a minute.'}
+          {mode === 'sign-in' ? t('auth.sub.signin') : t('auth.sub.signup')}
         </p>
       </div>
 
@@ -90,7 +90,7 @@ export function AuthForm({ next }: { next: string }) {
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
-                {m === 'sign-in' ? 'Sign in' : 'Sign up'}
+                {m === 'sign-in' ? t('auth.tab.signin') : t('auth.tab.signup')}
               </button>
             ))}
           </div>
@@ -99,7 +99,7 @@ export function AuthForm({ next }: { next: string }) {
         <CardContent className="pt-6">
           <form onSubmit={submit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t('auth.email')}</Label>
               <Input
                 id="email"
                 type="email"
@@ -111,12 +111,12 @@ export function AuthForm({ next }: { next: string }) {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('auth.password')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
-                placeholder="At least 8 characters"
+                placeholder={t('auth.password.ph')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -137,18 +137,16 @@ export function AuthForm({ next }: { next: string }) {
               {status === 'busy' && <Spinner />}
               {status === 'success' && <CheckCircle2 />}
               {status === 'success'
-                ? 'Success — redirecting…'
+                ? t('auth.success')
                 : mode === 'sign-in'
-                  ? 'Sign in'
-                  : 'Create account'}
+                  ? t('auth.submit.signin')
+                  : t('auth.submit.signup')}
             </Button>
           </form>
         </CardContent>
       </Card>
 
-      <p className="mt-6 text-center text-xs text-muted-foreground">
-        By continuing you agree to our terms and privacy policy.
-      </p>
+      <p className="mt-6 text-center text-xs text-muted-foreground">{t('auth.terms')}</p>
     </main>
   );
 }

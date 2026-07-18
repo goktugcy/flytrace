@@ -2,6 +2,7 @@
 
 import { SearchBox } from '@/components/SearchBox';
 import { Button } from '@/components/ui/button';
+import { LOCALES, useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { LayoutDashboard, Map as MapIcon, Menu, Plane, X } from 'lucide-react';
 import Link from 'next/link';
@@ -11,8 +12,8 @@ import { useEffect, useState } from 'react';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 const NAV = [
-  { href: '/map', label: 'Map', icon: MapIcon },
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/map', key: 'nav.map', icon: MapIcon },
+  { href: '/dashboard', key: 'nav.dashboard', icon: LayoutDashboard },
 ];
 
 interface SessionUser {
@@ -23,6 +24,7 @@ interface SessionUser {
 
 export function SiteHeader() {
   const pathname = usePathname();
+  const { t } = useI18n();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -67,19 +69,20 @@ export function SiteHeader() {
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground',
               )}
             >
-              {item.label}
+              {t(item.key)}
             </Link>
           ))}
         </nav>
 
         <div className="ml-auto hidden items-center gap-3 md:flex">
           <SearchBox className="w-64" />
-          <AccountSlot user={user} />
+          <LangSwitcher />
+          <AccountSlot user={user} signIn={t('nav.signin')} />
         </div>
 
         <button
           type="button"
-          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-label={menuOpen ? t('common.close') : 'Menu'}
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((o) => !o)}
           className="ml-auto inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
@@ -104,12 +107,13 @@ export function SiteHeader() {
                 )}
               >
                 <item.icon className="size-4" />
-                {item.label}
+                {t(item.key)}
               </Link>
             ))}
           </nav>
-          <div className="mt-4">
-            <AccountSlot user={user} full />
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <AccountSlot user={user} signIn={t('nav.signin')} full />
+            <LangSwitcher />
           </div>
         </div>
       )}
@@ -117,11 +121,43 @@ export function SiteHeader() {
   );
 }
 
-function AccountSlot({ user, full }: { user: SessionUser | null; full?: boolean }) {
+function LangSwitcher() {
+  const { locale, setLocale } = useI18n();
+  return (
+    <div className="flex items-center rounded-md border border-border p-0.5">
+      {LOCALES.map((l) => (
+        <button
+          key={l}
+          type="button"
+          onClick={() => setLocale(l)}
+          aria-pressed={locale === l}
+          className={cn(
+            'rounded-[5px] px-2 py-1 text-xs font-medium uppercase transition-colors',
+            locale === l
+              ? 'bg-accent text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AccountSlot({
+  user,
+  signIn,
+  full,
+}: {
+  user: SessionUser | null;
+  signIn: string;
+  full?: boolean;
+}) {
   if (!user) {
     return (
-      <Button asChild size="sm" className={cn(full && 'w-full')}>
-        <Link href="/signin">Sign in</Link>
+      <Button asChild size="sm" className={cn(full && 'flex-1')}>
+        <Link href="/signin">{signIn}</Link>
       </Button>
     );
   }
@@ -131,7 +167,7 @@ function AccountSlot({ user, full }: { user: SessionUser | null; full?: boolean 
       href="/dashboard"
       className={cn(
         'flex items-center gap-2 rounded-md text-sm transition-colors hover:bg-accent',
-        full ? 'w-full px-3 py-2' : 'px-1.5 py-1',
+        full ? 'px-3 py-2' : 'px-1.5 py-1',
       )}
     >
       <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
