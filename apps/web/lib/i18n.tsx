@@ -76,6 +76,11 @@ const en: Record<string, string> = {
   'map.cat.jet': 'Jet',
   'map.cat.heavy': 'Heavy jet',
   'map.cat.helo': 'Helicopter',
+  'map.filter.all': 'All',
+  'map.filter.low': '< 10k',
+  'map.filter.mid': '10–30k',
+  'map.filter.high': '> 30k',
+  'map.filter.airline': 'Airline (e.g. THY)',
   'map.webglTitle': 'The live map can’t be displayed',
   'map.webglBody':
     'This map needs WebGL, which your browser or GPU has turned off. Enable hardware acceleration (or WebGL) and reload — the rest of FlyTrace works without it.',
@@ -165,6 +170,11 @@ const tr: Record<string, string> = {
   'map.cat.jet': 'Jet',
   'map.cat.heavy': 'Ağır jet',
   'map.cat.helo': 'Helikopter',
+  'map.filter.all': 'Tümü',
+  'map.filter.low': '< 10k',
+  'map.filter.mid': '10–30k',
+  'map.filter.high': '> 30k',
+  'map.filter.airline': 'Havayolu (örn. THY)',
   'map.webglTitle': 'Canlı harita gösterilemiyor',
   'map.webglBody':
     'Bu harita WebGL gerektiriyor; tarayıcın veya GPU’n kapatmış. Donanım hızlandırmayı (veya WebGL’i) açıp yeniden yükle — FlyTrace’in geri kalanı bunsuz da çalışır.',

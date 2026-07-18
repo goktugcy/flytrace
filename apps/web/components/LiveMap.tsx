@@ -5,6 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
 import { ErrorState } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 import { Plane, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
@@ -220,6 +221,21 @@ function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
 }
 
+type Band = 'all' | 'low' | 'mid' | 'high';
+
+/** Build a maplibre filter for the flights layer from the UI filter state. */
+function buildFilter(f: { band: Band; airline: string }): maplibregl.FilterSpecification | null {
+  const parts: unknown[] = [];
+  if (f.band === 'low') parts.push(['<', ['get', 'alt'], 10000]);
+  else if (f.band === 'mid')
+    parts.push(['all', ['>=', ['get', 'alt'], 10000], ['<', ['get', 'alt'], 30000]]);
+  else if (f.band === 'high') parts.push(['>=', ['get', 'alt'], 30000]);
+  const a = f.airline.trim().toUpperCase();
+  if (a) parts.push(['==', ['slice', ['get', 'callsign'], 0, a.length], a]);
+  if (parts.length === 0) return null;
+  return ['all', ...parts] as unknown as maplibregl.FilterSpecification;
+}
+
 export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef<(id: string | null) => void>(() => {});
@@ -227,7 +243,22 @@ export function LiveMap() {
   const [failed, setFailed] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [band, setBand] = useState<Band>('all');
+  const [airline, setAirline] = useState('');
+  const filterRef = useRef<{ band: Band; airline: string }>({ band: 'all', airline: '' });
+  const applyFilterRef = useRef<() => void>(() => {});
   const t = useT();
+
+  const changeBand = (b: Band) => {
+    setBand(b);
+    filterRef.current.band = b;
+    applyFilterRef.current();
+  };
+  const changeAirline = (v: string) => {
+    setAirline(v);
+    filterRef.current.airline = v;
+    applyFilterRef.current();
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -481,7 +512,15 @@ export function LiveMap() {
           },
         });
       }
+      applyFilter();
     };
+
+    // Apply the current altitude/airline filter to the flights layer.
+    const applyFilter = () => {
+      if (!map.getLayer('flights')) return;
+      map.setFilter('flights', buildFilter(filterRef.current));
+    };
+    applyFilterRef.current = applyFilter;
 
     // Connect the realtime feed + start the animation loop (once).
     const startFeed = () => {
@@ -588,16 +627,46 @@ export function LiveMap() {
           container, which would neutralise `absolute inset-0` and collapse it. */}
       <div ref={containerRef} className="size-full" />
 
-      <div className="absolute left-3 top-3 z-10 flex items-start gap-2 sm:left-4 sm:top-4">
-        <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-card/85 px-3 text-sm font-medium shadow-soft-md backdrop-blur-md">
-          <span className="relative flex size-2">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-75" />
-            <span className="relative inline-flex size-2 rounded-full bg-success" />
-          </span>
-          <span className="tabular-nums">{count.toLocaleString()}</span>
-          <span className="text-muted-foreground">{t('common.live')}</span>
+      <div className="absolute left-3 top-3 z-10 flex flex-col gap-2 sm:left-4 sm:top-4">
+        <div className="flex items-start gap-2">
+          <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-card/85 px-3 text-sm font-medium shadow-soft-md backdrop-blur-md">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-75" />
+              <span className="relative inline-flex size-2 rounded-full bg-success" />
+            </span>
+            <span className="tabular-nums">{count.toLocaleString()}</span>
+            <span className="text-muted-foreground">{t('common.live')}</span>
+          </div>
+          <SearchBox className="w-56 sm:w-72" />
         </div>
-        <SearchBox className="w-56 sm:w-72" />
+
+        {/* Filters: altitude band + airline prefix */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center rounded-md border border-border bg-card/85 p-0.5 shadow-soft-md backdrop-blur-md">
+            {(['all', 'low', 'mid', 'high'] as const).map((b) => (
+              <button
+                key={b}
+                type="button"
+                onClick={() => changeBand(b)}
+                aria-pressed={band === b}
+                className={cn(
+                  'rounded-[5px] px-2 py-1 text-xs font-medium transition-colors',
+                  band === b
+                    ? 'bg-accent text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t(`map.filter.${b}`)}
+              </button>
+            ))}
+          </div>
+          <input
+            value={airline}
+            onChange={(e) => changeAirline(e.target.value)}
+            placeholder={t('map.filter.airline')}
+            className="h-8 w-40 rounded-md border border-border bg-card/85 px-2.5 text-xs shadow-soft-md backdrop-blur-md outline-none placeholder:text-muted-foreground focus-visible:border-ring"
+          />
+        </div>
       </div>
 
       {/* Altitude legend */}

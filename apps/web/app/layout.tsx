@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { cookies } from 'next/headers';
 import type { ReactNode } from 'react';
+import { CommandPalette } from '../components/CommandPalette';
 import { ServiceWorker } from '../components/ServiceWorker';
 import { SiteHeader } from '../components/site-header';
 import { I18nProvider, LOCALE_COOKIE, type Locale } from '../lib/i18n';
@@ -26,6 +27,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <I18nProvider initialLocale={locale}>
           <SiteHeader />
           {children}
+          <CommandPalette />
           <ServiceWorker />
         </I18nProvider>
       </body>
