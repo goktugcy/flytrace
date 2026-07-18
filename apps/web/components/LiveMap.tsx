@@ -21,8 +21,22 @@ function webglAvailable(): boolean {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
-const STYLE = 'https://demotiles.maplibre.org/style.json';
 const LERP = 0.18; // per-frame easing toward the latest sample (docs/12 §12.5)
+
+// Optional geographic basemap. Defaults to MapLibre's public demo tiles, but
+// that CDN is frequently blocked by ad/privacy extensions — when it fails to
+// load, the map falls back to the self-contained dark style below so aircraft
+// still render. Point NEXT_PUBLIC_MAP_STYLE at your own tile provider for a
+// full basemap.
+const REMOTE_STYLE =
+  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://demotiles.maplibre.org/style.json';
+
+// Fully self-contained fallback style (no network) — a dark "radar" canvas.
+const DARK_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {},
+  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0b1020' } }],
+};
 
 interface Rendered {
   lat: number;
@@ -46,7 +60,7 @@ export function LiveMap() {
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: STYLE,
+        style: REMOTE_STYLE,
         center: [35, 39],
         zoom: 5,
         attributionControl: false,
@@ -55,7 +69,6 @@ export function LiveMap() {
       setFailed(true);
       return;
     }
-    map.on('error', (e) => console.warn('maplibre error', e?.error?.message));
     map.addControl(new maplibregl.NavigationControl({ showZoom: true }), 'top-right');
     map.addControl(
       new maplibregl.AttributionControl({
@@ -66,6 +79,7 @@ export function LiveMap() {
     const client = new RealtimeClient({ apiBase: API_BASE, wsBase: WS_BASE });
     const rendered = new Map<string, Rendered>();
     let raf = 0;
+    let didSetup = false;
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -84,7 +98,6 @@ export function LiveMap() {
     });
 
     const tick = () => {
-      // Ease each rendered marker toward its latest authoritative sample.
       for (const f of client.store.list()) {
         const r = rendered.get(f.flightId);
         if (!r) rendered.set(f.flightId, { lat: f.lat, lon: f.lon });
@@ -94,7 +107,6 @@ export function LiveMap() {
         }
       }
       for (const id of rendered.keys()) if (!client.store.get(id)) rendered.delete(id);
-
       const src = map.getSource('flights') as maplibregl.GeoJSONSource | undefined;
       if (src) src.setData(featureCollection());
       raf = requestAnimationFrame(tick);
@@ -105,52 +117,56 @@ export function LiveMap() {
       client.setViewport([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
     };
 
-    map.on('load', () => {
-      map.addSource('flights', { type: 'geojson', data: featureCollection() });
-      map.addLayer({
-        id: 'flights-dot',
-        type: 'circle',
-        source: 'flights',
-        paint: {
-          'circle-radius': 5,
-          'circle-color': ['case', ['==', ['get', 'onGround'], 1], '#8b97ab', '#4ea1ff'],
-          'circle-stroke-width': 1,
-          'circle-stroke-color': '#04122b',
-        },
-      });
-      map.addLayer({
-        id: 'flights-label',
-        type: 'symbol',
-        source: 'flights',
-        layout: {
-          'text-field': ['get', 'callsign'],
-          'text-size': 10,
-          'text-offset': [0, 1.2],
-          'text-anchor': 'top',
-        },
-        paint: { 'text-color': '#e6edf7', 'text-halo-color': '#04122b', 'text-halo-width': 1 },
-      });
-
-      // Click a plane → open its flight page.
-      map.on('click', 'flights-dot', (e) => {
-        const id = e.features?.[0]?.properties?.flightId as string | undefined;
-        if (id) router.push(`/flights/id/${id}`);
-      });
-      map.on('mouseenter', 'flights-dot', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'flights-dot', () => {
-        map.getCanvas().style.cursor = '';
-      });
-
+    // Runs once, after whichever style loads (remote basemap or the dark
+    // fallback). Adds the flight layer + starts the realtime feed.
+    const setup = () => {
+      if (didSetup) return;
+      didSetup = true;
+      if (!map.getSource('flights')) {
+        map.addSource('flights', { type: 'geojson', data: featureCollection() });
+        map.addLayer({
+          id: 'flights-dot',
+          type: 'circle',
+          source: 'flights',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 8, 6],
+            'circle-color': ['case', ['==', ['get', 'onGround'], 1], '#71717a', '#3b82f6'],
+            'circle-stroke-width': 1.5,
+            'circle-stroke-color': '#0b1020',
+          },
+        });
+        map.on('click', 'flights-dot', (e) => {
+          const id = e.features?.[0]?.properties?.flightId as string | undefined;
+          if (id) router.push(`/flights/id/${id}`);
+        });
+        map.on('mouseenter', 'flights-dot', () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', 'flights-dot', () => {
+          map.getCanvas().style.cursor = '';
+        });
+      }
       void client.connect().then(sendViewport);
       raf = requestAnimationFrame(tick);
-    });
+    };
+
+    // `style.load` fires for the initial style and after any setStyle().
+    map.on('style.load', setup);
+
+    // If the remote basemap is blocked/slow (common with ad/privacy
+    // extensions), swap to the self-contained dark style so aircraft still show.
+    const fallbackTimer = setTimeout(() => {
+      if (!didSetup && !map.isStyleLoaded()) {
+        console.warn('basemap style did not load — using offline dark style');
+        map.setStyle(DARK_STYLE);
+      }
+    }, 4000);
 
     map.on('moveend', sendViewport);
     const unsub = client.store.subscribe(() => setCount(client.store.size));
 
     return () => {
+      clearTimeout(fallbackTimer);
       cancelAnimationFrame(raf);
       unsub();
       client.close();
