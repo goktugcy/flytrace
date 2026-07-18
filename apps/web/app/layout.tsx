@@ -7,11 +7,20 @@ import { SiteHeader } from '../components/site-header';
 import { I18nProvider, LOCALE_COOKIE, type Locale } from '../lib/i18n';
 import './globals.css';
 
+// Absolute base for OG/canonical URLs so social cards resolve the per-route
+// opengraph-image files Next generates.
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+const TITLE = 'FlyTrace — Live Flight Tracking';
+const DESCRIPTION = 'Watch real aircraft move in real time.';
+
 export const metadata: Metadata = {
-  title: 'FlyTrace — Live Flight Tracking',
-  description: 'Watch real aircraft move in real time.',
+  metadataBase: new URL(SITE_URL),
+  title: TITLE,
+  description: DESCRIPTION,
   manifest: '/manifest.webmanifest',
   icons: { icon: '/icon.svg' },
+  openGraph: { type: 'website', siteName: 'FlyTrace', title: TITLE, description: DESCRIPTION },
+  twitter: { card: 'summary_large_image', title: TITLE, description: DESCRIPTION },
 };
 
 export const viewport: Viewport = {
