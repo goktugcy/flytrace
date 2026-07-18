@@ -22,8 +22,15 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const cookie = (await cookies()).get(LOCALE_COOKIE)?.value;
   const locale: Locale = cookie === 'tr' ? 'tr' : 'en';
   return (
-    <html lang={locale} className="dark">
-      <body className="min-h-dvh bg-background text-foreground antialiased">
+    // suppressHydrationWarning: browser extensions (dark-mode, translators,
+    // Grammarly…) inject attributes on <html>/<body> before hydration; the app
+    // markup itself is SSR-correct. This only suppresses attribute noise on
+    // these two elements, not real content mismatches deeper in the tree.
+    <html lang={locale} className="dark" suppressHydrationWarning>
+      <body
+        className="min-h-dvh bg-background text-foreground antialiased"
+        suppressHydrationWarning
+      >
         <I18nProvider initialLocale={locale}>
           <SiteHeader />
           {children}
