@@ -40,6 +40,7 @@ function catalog(map: Record<string, string>): CatalogRepo {
       return iata ? { id: 'a', iata, icao, name: icao, providerKey: null } : null;
     },
     getAirlineIdByIata: async () => null,
+    getIcaoByIata: async () => null,
     getAirportIdByIata: async () => null,
     getAircraftIdByRegistration: async () => null,
   };

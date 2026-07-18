@@ -110,13 +110,20 @@ function createReadRepo(db: Database) {
       `)) as unknown as EventRow[];
     },
 
-    async search(term: string, limit: number): Promise<SearchResultRow[]> {
+    /**
+     * Typeahead over callsign / flight number. `altTerm` lets the caller pass an
+     * extra callsign variant (e.g. the ICAO form "THY281" resolved from the IATA
+     * query "TK281") so users can search either designator.
+     */
+    async search(term: string, limit: number, altTerm?: string): Promise<SearchResultRow[]> {
       const q = `%${term}%`;
+      const alt = altTerm ? `%${altTerm}%` : null;
       return (await db.execute(sql`
         select id as "flightId", callsign, flight_number as "flightNumber", status,
                to_char(flight_date, 'YYYY-MM-DD') as "flightDate"
         from flights
         where callsign ilike ${q} or flight_number ilike ${q}
+           or (${alt}::text is not null and callsign ilike ${alt})
         order by last_seen_at desc nulls last
         limit ${limit}
       `)) as unknown as SearchResultRow[];

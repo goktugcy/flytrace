@@ -29,6 +29,14 @@ export function createCatalogRepo(db: Database) {
       return rows[0]?.id ?? null;
     },
 
+    /** Resolve an IATA airline designator → ICAO (callsign prefix); for search. */
+    async getIcaoByIata(iata: string): Promise<string | null> {
+      const rows = (await db.execute(sql`
+        select icao from airlines where iata = ${iata.toUpperCase()} limit 1
+      `)) as unknown as { icao: string | null }[];
+      return rows[0]?.icao ?? null;
+    },
+
     /** Resolve an IATA airport code → airport id (origin/destination FKs). */
     async getAirportIdByIata(iata: string): Promise<string | null> {
       const rows = (await db.execute(sql`

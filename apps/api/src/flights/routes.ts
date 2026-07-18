@@ -1,4 +1,4 @@
-import { type FlightRow, createFlightReadRepo } from '@flytrace/db';
+import { type FlightRow, createCatalogRepo, createFlightReadRepo } from '@flytrace/db';
 import { AppError, type FlightDetail } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -25,6 +25,7 @@ const bboxSchema = z.string().transform((v, ctx) => {
  */
 export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   const read = createFlightReadRepo(ctx.db);
+  const catalog = createCatalogRepo(ctx.db);
   const hot = createHotState(ctx.redis, ctx.redisPrefix);
 
   const app = new Hono<AppEnv>();
@@ -45,12 +46,21 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { flights, count: flights.length }, true);
   });
 
-  // Typeahead search over flights (callsign / flight number).
+  // Typeahead search over flights (callsign / flight number). OpenSky stores
+  // ICAO callsigns (THY281); if the query looks like an IATA flight number
+  // (TK281), resolve the airline's ICAO prefix and search that variant too.
   app.get('/flights/search', async (c) => {
     const q = (c.req.query('q') ?? '').trim();
     if (q.length < 1) return ok(c, { results: [] });
     const limit = Math.min(Number(c.req.query('limit') ?? 20) || 20, 50);
-    return ok(c, { results: await read.search(q, limit) });
+
+    let altTerm: string | undefined;
+    const iata = q.match(/^([A-Za-z]{2})\s?(\d{1,4})$/);
+    if (iata) {
+      const icao = await catalog.getIcaoByIata(iata[1] as string);
+      if (icao) altTerm = `${icao}${iata[2]}`;
+    }
+    return ok(c, { results: await read.search(q, limit, altTerm) });
   });
 
   // Landing-page live counters.
