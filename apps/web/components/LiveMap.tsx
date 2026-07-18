@@ -77,6 +77,14 @@ export function LiveMap() {
       }),
     );
 
+    // maplibre can latch onto a transient container height at init (a mis-sized
+    // canvas → black strip). Force a resize once layout settles and keep it in
+    // sync with the container.
+    const resize = () => map.resize();
+    requestAnimationFrame(resize);
+    const ro = new ResizeObserver(resize);
+    ro.observe(containerRef.current);
+
     const client = new RealtimeClient({ apiBase: API_BASE, wsBase: WS_BASE });
     const rendered = new Map<string, Rendered>();
     let raf = 0;
@@ -196,6 +204,7 @@ export function LiveMap() {
     return () => {
       clearTimeout(fallbackTimer);
       cancelAnimationFrame(raf);
+      ro.disconnect();
       unsub();
       client.close();
       map.remove();
@@ -216,7 +225,10 @@ export function LiveMap() {
 
   return (
     <div className="fixed inset-x-0 bottom-0 top-14">
-      <div ref={containerRef} className="absolute inset-0" />
+      {/* Explicit h-full/w-full — maplibre forces `position: relative` on its
+          container, which would neutralise `absolute inset-0` and collapse the
+          element to the canvas default height (~300px → black strip). */}
+      <div ref={containerRef} className="size-full" />
 
       {/* Floating controls (top-left), above the map canvas. */}
       <div className="absolute left-3 top-3 z-10 flex items-start gap-2 sm:left-4 sm:top-4">
