@@ -23,6 +23,34 @@ type AircraftPhoto = {
 } | null;
 const photoCache = new Map<string, { photo: AircraftPhoto; exp: number }>();
 
+const ADSBDB_UA = 'FlyTrace/1.0 (+https://flytrace.app; live flight tracker)';
+const ROUTE_TTL_MS = 6 * 60 * 60 * 1000; // 6h — routes are static per callsign
+
+interface AdsbdbAirport {
+  iata_code?: string;
+  name?: string;
+  municipality?: string;
+  latitude?: number;
+  longitude?: number;
+}
+interface FlightRoute {
+  airline: string | null;
+  origin: { iata: string; name: string; city: string | null; lat: number; lon: number };
+  destination: { iata: string; name: string; city: string | null; lat: number; lon: number };
+}
+const routeCache = new Map<string, { route: FlightRoute | null; exp: number }>();
+
+function toEndpoint(a: AdsbdbAirport): FlightRoute['origin'] | null {
+  if (typeof a.latitude !== 'number' || typeof a.longitude !== 'number') return null;
+  return {
+    iata: a.iata_code ?? '',
+    name: a.name ?? '',
+    city: a.municipality ?? null,
+    lat: a.latitude,
+    lon: a.longitude,
+  };
+}
+
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD');
 const bboxSchema = z.string().transform((v, ctx) => {
   const parts = v.split(',').map(Number);
@@ -77,6 +105,43 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     }
     photoCache.set(hex, { photo, exp: Date.now() + PHOTO_TTL_MS });
     return ok(c, { photo });
+  });
+
+  // Flight route (origin/destination airports) by callsign, via adsbdb —
+  // keyless, cached; the ADS-B feed itself carries no route.
+  app.get('/flights/route/:callsign', async (c) => {
+    const cs = (c.req.param('callsign') ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{3,8}$/.test(cs)) throw new AppError('BAD_REQUEST', 'invalid callsign');
+    const cached = routeCache.get(cs);
+    if (cached && cached.exp > Date.now()) return ok(c, { route: cached.route }, true);
+    let route: FlightRoute | null = null;
+    try {
+      const res = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cs)}`, {
+        headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const fr = (
+          (await res.json()) as {
+            response?: {
+              flightroute?: {
+                origin?: AdsbdbAirport;
+                destination?: AdsbdbAirport;
+                airline?: { name?: string };
+              };
+            };
+          }
+        ).response?.flightroute;
+        const origin = fr?.origin ? toEndpoint(fr.origin) : null;
+        const destination = fr?.destination ? toEndpoint(fr.destination) : null;
+        if (origin && destination)
+          route = { airline: fr?.airline?.name ?? null, origin, destination };
+      }
+    } catch {
+      /* no route — degrade gracefully */
+    }
+    routeCache.set(cs, { route, exp: Date.now() + ROUTE_TTL_MS });
+    return ok(c, { route });
   });
 
   // Live flights in a viewport (map bootstrap) — Redis hot path.

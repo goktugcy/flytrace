@@ -223,6 +223,49 @@ function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
 }
 
+interface Airport {
+  iata: string;
+  name: string;
+  city: string | null;
+  lat: number;
+  lon: number;
+}
+interface RouteInfo {
+  airline: string | null;
+  origin: Airport;
+  destination: Airport;
+}
+
+/** Great-circle polyline between two [lon,lat] points (curved route line). */
+function greatCircle(from: [number, number], to: [number, number], n = 64): [number, number][] {
+  const rad = Math.PI / 180;
+  const deg = 180 / Math.PI;
+  const lon1 = from[0] * rad;
+  const lat1 = from[1] * rad;
+  const lon2 = to[0] * rad;
+  const lat2 = to[1] * rad;
+  const d =
+    2 *
+    Math.asin(
+      Math.sqrt(
+        Math.sin((lat2 - lat1) / 2) ** 2 +
+          Math.cos(lat1) * Math.cos(lat2) * Math.sin((lon2 - lon1) / 2) ** 2,
+      ),
+    );
+  if (d === 0) return [from, to];
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i += 1) {
+    const f = i / n;
+    const a = Math.sin((1 - f) * d) / Math.sin(d);
+    const b = Math.sin(f * d) / Math.sin(d);
+    const x = a * Math.cos(lat1) * Math.cos(lon1) + b * Math.cos(lat2) * Math.cos(lon2);
+    const y = a * Math.cos(lat1) * Math.sin(lon1) + b * Math.cos(lat2) * Math.sin(lon2);
+    const z = a * Math.sin(lat1) + b * Math.sin(lat2);
+    pts.push([Math.atan2(y, x) * deg, Math.atan2(z, Math.sqrt(x * x + y * y)) * deg]);
+  }
+  return pts;
+}
+
 type Band = 'all' | 'low' | 'mid' | 'high';
 
 /** Build a maplibre filter for the flights layer from the UI filter state. */
@@ -245,6 +288,7 @@ export function LiveMap() {
   const [failed, setFailed] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [route, setRoute] = useState<RouteInfo | null>(null);
   const [band, setBand] = useState<Band>('all');
   const [airline, setAirline] = useState('');
   const filterRef = useRef<{ band: Band; airline: string }>({ band: 'all', airline: '' });
@@ -301,7 +345,7 @@ export function LiveMap() {
     let raf = 0;
     let started = false;
     let remoteTileOk = false;
-    const OURS = new Set(['world', 'grid', 'flights', 'trail', 'selected']);
+    const OURS = new Set(['world', 'grid', 'flights', 'trail', 'selected', 'route', 'route-ends']);
     let selectedId: string | null = null;
     let pulse = 0;
 
@@ -399,15 +443,61 @@ export function LiveMap() {
       if (trail) trail.setData({ type: 'FeatureCollection', features: [] });
     };
 
+    const setRouteData = (r: RouteInfo | null) => {
+      const line = map.getSource('route') as maplibregl.GeoJSONSource | undefined;
+      const ends = map.getSource('route-ends') as maplibregl.GeoJSONSource | undefined;
+      if (!line || !ends) return;
+      if (!r) {
+        line.setData({ type: 'FeatureCollection', features: [] });
+        ends.setData({ type: 'FeatureCollection', features: [] });
+        return;
+      }
+      const coords = greatCircle(
+        [r.origin.lon, r.origin.lat],
+        [r.destination.lon, r.destination.lat],
+      );
+      line.setData({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: coords },
+        properties: {},
+      });
+      ends.setData({
+        type: 'FeatureCollection',
+        features: [r.origin, r.destination].map((a) => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [a.lon, a.lat] },
+          properties: { iata: a.iata },
+        })),
+      });
+    };
+
+    const loadRoute = async (callsign: string) => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/flights/route/${encodeURIComponent(callsign)}`);
+        if (!res.ok) return;
+        const r = ((await res.json()) as { data: { route: RouteInfo | null } }).data.route;
+        if (selectedId === null) return; // deselected while fetching
+        setRoute(r);
+        setRouteData(r);
+      } catch {
+        /* no route */
+      }
+    };
+
     const select = (id: string | null) => {
       selectedId = id;
       if (id) {
         void loadTrail(id);
         const s = client.store.get(id);
         setSel(s ? toSel(s) : null);
+        setRoute(null);
+        setRouteData(null);
+        if (s?.callsign) void loadRoute(s.callsign);
       } else {
         clearTrail();
+        setRouteData(null);
         setSel(null);
+        setRoute(null);
       }
     };
     selectRef.current = select;
@@ -450,6 +540,41 @@ export function LiveMap() {
         map.addImage('plane', makePlaneImage(64), { sdf: true, pixelRatio: 2 });
         map.addImage('prop', makePropImage(64), { sdf: true, pixelRatio: 2 });
         map.addImage('helo', makeHeloImage(64), { sdf: true, pixelRatio: 2 });
+      }
+
+      // Planned route (origin → destination great circle), dashed + muted.
+      if (!map.getSource('route')) {
+        map.addSource('route', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        map.addLayer({
+          id: 'route-line',
+          type: 'line',
+          source: 'route',
+          layout: { 'line-cap': 'round' },
+          paint: {
+            'line-color': '#64748b',
+            'line-width': 1.4,
+            'line-dasharray': [2, 2],
+            'line-opacity': 0.8,
+          },
+        });
+        map.addSource('route-ends', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        map.addLayer({
+          id: 'route-ends',
+          type: 'circle',
+          source: 'route-ends',
+          paint: {
+            'circle-radius': 4,
+            'circle-color': '#0b1020',
+            'circle-stroke-color': '#94a3b8',
+            'circle-stroke-width': 1.5,
+          },
+        });
       }
 
       if (!map.getSource('trail')) {
@@ -709,6 +834,30 @@ export function LiveMap() {
                   <X className="size-4" />
                 </button>
               </div>
+
+              {route && (
+                <div className="mt-3 rounded-md bg-muted/50 px-3 py-2">
+                  <div className="flex items-center justify-center gap-3 text-sm">
+                    <span className="font-semibold" title={route.origin.name}>
+                      {route.origin.iata || '—'}
+                    </span>
+                    <span className="flex-1 border-t border-dashed border-muted-foreground/40" />
+                    <Plane className="size-3.5 rotate-90 text-accent-bright" />
+                    <span className="flex-1 border-t border-dashed border-muted-foreground/40" />
+                    <span className="font-semibold" title={route.destination.name}>
+                      {route.destination.iata || '—'}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span className="max-w-[45%] truncate">
+                      {route.origin.city ?? route.origin.name}
+                    </span>
+                    <span className="max-w-[45%] truncate text-right">
+                      {route.destination.city ?? route.destination.name}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <Metric
