@@ -1,5 +1,19 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState, ErrorState } from '@/components/ui/states';
+import {
+  Activity,
+  ListChecks,
+  Plane,
+  Radio,
+  RefreshCw,
+  ScrollText,
+  ShieldAlert,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -28,6 +42,15 @@ interface AdminData {
   audit: AuditEntry[];
 }
 
+interface DlqJob {
+  id: string;
+  name: string;
+  failedReason: string | null;
+  attemptsMade: number;
+  timestamp: number;
+  data: { flightId?: string; flightNumber?: string };
+}
+
 interface ProviderLog {
   id: string;
   providerKey: string;
@@ -47,24 +70,16 @@ interface AuditEntry {
   createdAt: string;
 }
 
-interface DlqJob {
-  id: string;
-  name: string;
-  failedReason: string | null;
-  attemptsMade: number;
-  timestamp: number;
-  data: { flightId?: string; flightNumber?: string };
-}
+type State = 'loading' | 'unauth' | 'forbidden' | 'ready' | 'error';
 
 export function AdminConsole() {
   const [data, setData] = useState<AdminData | null>(null);
-  const [state, setState] = useState<'loading' | 'unauth' | 'forbidden' | 'ready' | 'error'>(
-    'loading',
-  );
+  const [state, setState] = useState<State>('loading');
 
   const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
 
   async function load() {
+    setState('loading');
     try {
       const first = await get('stats');
       if (first.status === 401) return setState('unauth');
@@ -104,217 +119,307 @@ export function AdminConsole() {
     await load();
   }
 
-  if (state === 'unauth')
-    return (
-      <Shell>
-        <p>
-          Please <Link href="/signin?next=/admin">sign in</Link>.
-        </p>
-      </Shell>
-    );
-  if (state === 'forbidden')
-    return (
-      <Shell>
-        <p style={{ color: '#ff7b7b' }}>Admins only.</p>
-      </Shell>
-    );
-  if (state !== 'ready' || !data)
-    return (
-      <Shell>
-        <p style={{ color: 'var(--muted)' }}>
-          {state === 'error' ? 'Failed to load.' : 'Loading…'}
-        </p>
-      </Shell>
-    );
-
   return (
-    <Shell>
-      <Section title="Platform">
-        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          {Object.entries(data.stats).map(([k, v]) => (
-            <Stat key={k} label={k} value={v} />
-          ))}
+    <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Operational health — queues, providers and audit.
+          </p>
         </div>
-      </Section>
-
-      <Section title="Queues">
-        {data.queues.map((q) => (
-          <Row key={q.name}>
-            <span style={{ fontWeight: 600 }}>{q.name}</span>
-            <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
-              waiting {q.waiting} · active {q.active} · done {q.completed} · failed {q.failed} ·
-              delayed {q.delayed}
-            </span>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title="Providers">
-        {data.providers.length === 0 ? (
-          <Empty>No providers registered.</Empty>
-        ) : (
-          data.providers.map((p) => (
-            <Row key={p.key}>
-              <span style={{ fontWeight: 600 }}>{p.name}</span>
-              <span style={{ color: 'var(--muted)' }}>{p.enabled ? 'enabled' : 'disabled'}</span>
-              <span style={{ marginLeft: 'auto', color: healthColor(p.health) }}>{p.health}</span>
-              <span style={{ color: 'var(--muted)' }}>{p.circuitState}</span>
-            </Row>
-          ))
+        {state === 'ready' && (
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw />
+            Refresh
+          </Button>
         )}
-      </Section>
+      </div>
 
-      <Section title={`Dead-letter queue (${data.dlq.length})`}>
-        {data.dlq.length === 0 ? (
-          <Empty>No failed jobs 🎉</Empty>
-        ) : (
-          <>
-            <div style={{ marginBottom: 8 }}>
-              <button type="button" onClick={() => retry('dlq/retry-all')} style={retryBtn}>
-                Retry all
-              </button>
-            </div>
-            {data.dlq.map((j) => (
-              <Row key={j.id}>
-                <span style={{ fontWeight: 600 }}>{j.data.flightNumber ?? j.name}</span>
-                <span
-                  style={{
-                    color: '#ff7b7b',
-                    fontSize: 13,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    maxWidth: 360,
-                  }}
-                >
-                  {j.failedReason ?? 'unknown error'}
-                </span>
-                <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
-                  {j.attemptsMade} attempts
-                </span>
-                <button type="button" onClick={() => retry(`dlq/${j.id}/retry`)} style={retryBtn}>
-                  Retry
-                </button>
-              </Row>
-            ))}
-          </>
+      <div className="mt-8">
+        {state === 'loading' && <AdminSkeleton />}
+        {state === 'unauth' && (
+          <EmptyState
+            icon={ShieldAlert}
+            title="Sign in required"
+            description="This console is only available to signed-in admins."
+            action={
+              <Button asChild size="sm">
+                <Link href="/signin?next=/admin">Sign in</Link>
+              </Button>
+            }
+          />
         )}
-      </Section>
-
-      <Section title={`Recent flights (${data.flights.length})`}>
-        {data.flights.map((f) => (
-          <Row key={f.flightId}>
-            <Link href={`/flights/id/${f.flightId}`}>{f.callsign}</Link>
-            <span style={{ color: 'var(--muted)' }}>{f.status}</span>
-            <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{f.flightDate}</span>
-          </Row>
-        ))}
-      </Section>
-
-      <Section title={`Provider logs (${data.logs.length})`}>
-        {data.logs.length === 0 ? (
-          <Empty>No provider traffic yet.</Empty>
-        ) : (
-          data.logs.map((l) => (
-            <Row key={l.id}>
-              <span style={{ fontWeight: 600 }}>{l.providerKey}</span>
-              <span style={{ color: 'var(--muted)' }}>{l.operation}</span>
-              <span style={{ color: l.success ? '#2e9e6b' : '#ff7b7b' }}>
-                {l.success ? 'ok' : 'fail'}
-              </span>
-              <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
-                {l.latencyMs != null ? `${l.latencyMs}ms · ` : ''}
-                {new Date(l.createdAt).toLocaleTimeString()}
-              </span>
-            </Row>
-          ))
+        {state === 'forbidden' && (
+          <EmptyState
+            icon={ShieldAlert}
+            title="Admins only"
+            description="Your account doesn’t have access to the admin console."
+          />
         )}
-      </Section>
-
-      <Section title={`Audit log (${data.audit.length})`}>
-        {data.audit.length === 0 ? (
-          <Empty>No admin actions recorded.</Empty>
-        ) : (
-          data.audit.map((a) => (
-            <Row key={a.id}>
-              <span style={{ fontWeight: 600 }}>{a.action}</span>
-              <span style={{ color: 'var(--muted)' }}>
-                {a.entity}
-                {a.entityId ? ` · ${a.entityId}` : ''}
-              </span>
-              <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 12 }}>
-                {a.actorType} · {new Date(a.createdAt).toLocaleString()}
-              </span>
-            </Row>
-          ))
-        )}
-      </Section>
-    </Shell>
-  );
-}
-
-const retryBtn: React.CSSProperties = {
-  padding: '4px 12px',
-  borderRadius: 6,
-  border: 'none',
-  cursor: 'pointer',
-  fontWeight: 600,
-  fontSize: 13,
-  background: 'var(--accent)',
-  color: '#04122b',
-};
-
-function healthColor(h: string): string {
-  return h === 'up' ? '#2e9e6b' : h === 'degraded' ? '#c9a227' : '#ff7b7b';
-}
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <main style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <h1 style={{ fontSize: '1.75rem', marginBottom: '1rem' }}>Admin</h1>
-      {children}
+        {state === 'error' && <ErrorState onRetry={load} />}
+        {state === 'ready' && data && <AdminBody data={data} retry={retry} />}
+      </div>
     </main>
   );
 }
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+
+function AdminBody({
+  data,
+  retry,
+}: {
+  data: AdminData;
+  retry: (path: string) => Promise<void>;
+}) {
   return (
-    <section
-      style={{
-        background: 'var(--panel)',
-        borderRadius: 12,
-        padding: '1rem 1.25rem',
-        marginBottom: '1.25rem',
-      }}
-    >
-      <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.75rem' }}>{title}</h2>
-      {children}
-    </section>
-  );
-}
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div>
-      <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--accent)' }}>
-        {value.toLocaleString()}
+    <div className="space-y-6">
+      {/* Platform stats */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {Object.entries(data.stats).map(([k, v]) => (
+          <Card key={k}>
+            <CardContent className="p-4">
+              <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                {v.toLocaleString()}
+              </p>
+              <p className="mt-0.5 text-xs capitalize text-muted-foreground">
+                {k.replace(/([A-Z])/g, ' $1')}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
-      <div style={{ color: 'var(--muted)', fontSize: 12 }}>{label}</div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Queues */}
+        <Card>
+          <SectionTitle icon={Activity}>Queues</SectionTitle>
+          <CardContent>
+            {data.queues.map((q) => (
+              <div key={q.name} className="flex items-center justify-between gap-3 py-1">
+                <span className="font-medium">{q.name}</span>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {q.waiting} waiting · {q.active} active · {q.completed} done · {q.failed} failed
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        {/* Providers */}
+        <Card>
+          <SectionTitle icon={Radio}>Providers</SectionTitle>
+          <CardContent>
+            {data.providers.length === 0 ? (
+              <InlineEmpty>No providers registered.</InlineEmpty>
+            ) : (
+              <List>
+                {data.providers.map((p) => (
+                  <Row key={p.key}>
+                    <span className="font-medium">{p.name}</span>
+                    <Badge variant={p.enabled ? 'accent' : 'default'}>
+                      {p.enabled ? 'enabled' : 'disabled'}
+                    </Badge>
+                    <Badge
+                      variant={
+                        p.health === 'up'
+                          ? 'success'
+                          : p.health === 'degraded'
+                            ? 'warning'
+                            : 'destructive'
+                      }
+                      className="ml-auto"
+                    >
+                      {p.health}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{p.circuitState}</span>
+                  </Row>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Dead-letter queue */}
+      <Card>
+        <SectionTitle
+          icon={ListChecks}
+          action={
+            data.dlq.length > 0 ? (
+              <Button variant="outline" size="sm" onClick={() => retry('dlq/retry-all')}>
+                Retry all
+              </Button>
+            ) : undefined
+          }
+        >
+          Dead-letter queue
+          <Badge variant="outline" className="tabular-nums">
+            {data.dlq.length}
+          </Badge>
+        </SectionTitle>
+        <CardContent>
+          {data.dlq.length === 0 ? (
+            <InlineEmpty>No failed jobs. 🎉</InlineEmpty>
+          ) : (
+            <List>
+              {data.dlq.map((j) => (
+                <Row key={j.id}>
+                  <span className="font-medium">{j.data.flightNumber ?? j.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-destructive">
+                    {j.failedReason ?? 'unknown error'}
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {j.attemptsMade} attempts
+                  </span>
+                  <Button variant="secondary" size="sm" onClick={() => retry(`dlq/${j.id}/retry`)}>
+                    Retry
+                  </Button>
+                </Row>
+              ))}
+            </List>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Recent flights */}
+        <Card>
+          <SectionTitle icon={Plane}>Recent flights</SectionTitle>
+          <CardContent>
+            {data.flights.length === 0 ? (
+              <InlineEmpty>No flights yet.</InlineEmpty>
+            ) : (
+              <List>
+                {data.flights.slice(0, 12).map((f) => (
+                  <Row key={f.flightId}>
+                    <Link
+                      href={`/flights/id/${f.flightId}`}
+                      className="font-medium text-accent-bright hover:underline"
+                    >
+                      {f.callsign}
+                    </Link>
+                    <Badge variant="outline" className="ml-auto capitalize">
+                      {f.status}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{f.flightDate}</span>
+                  </Row>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Provider logs */}
+        <Card>
+          <SectionTitle icon={Activity}>Provider logs</SectionTitle>
+          <CardContent>
+            {data.logs.length === 0 ? (
+              <InlineEmpty>No provider traffic yet.</InlineEmpty>
+            ) : (
+              <List>
+                {data.logs.slice(0, 12).map((l) => (
+                  <Row key={l.id}>
+                    <span className="font-medium">{l.providerKey}</span>
+                    <span className="text-sm text-muted-foreground">{l.operation}</span>
+                    <Badge variant={l.success ? 'success' : 'destructive'} className="ml-auto">
+                      {l.success ? 'ok' : 'fail'}
+                    </Badge>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {l.latencyMs != null ? `${l.latencyMs}ms` : ''}
+                    </span>
+                  </Row>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Audit */}
+      <Card>
+        <SectionTitle icon={ScrollText}>Audit log</SectionTitle>
+        <CardContent>
+          {data.audit.length === 0 ? (
+            <InlineEmpty>No admin actions recorded.</InlineEmpty>
+          ) : (
+            <List>
+              {data.audit.slice(0, 12).map((a) => (
+                <Row key={a.id}>
+                  <span className="font-medium">{a.action}</span>
+                  <span className="text-sm text-muted-foreground">
+                    {a.entity}
+                    {a.entityId ? ` · ${a.entityId}` : ''}
+                  </span>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {a.actorType} · {new Date(a.createdAt).toLocaleString()}
+                  </span>
+                </Row>
+              ))}
+            </List>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
-function Row({ children }: { children: React.ReactNode }) {
+
+function SectionTitle({
+  icon: Icon,
+  children,
+  action,
+}: {
+  icon: typeof Activity;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 12,
-        alignItems: 'center',
-        padding: '6px 0',
-        borderBottom: '1px solid #1e2636',
-      }}
-    >
-      {children}
-    </div>
+    <CardHeader className="flex-row items-center gap-2 space-y-0">
+      <Icon className="size-4 text-muted-foreground" />
+      <CardTitle className="flex flex-1 items-center gap-2 text-base">{children}</CardTitle>
+      {action}
+    </CardHeader>
   );
 }
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--muted)', margin: 0 }}>{children}</p>;
+
+function List({ children }: { children: React.ReactNode }) {
+  return <div className="divide-y divide-border">{children}</div>;
+}
+
+function Row({ children }: { children: React.ReactNode }) {
+  return <div className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">{children}</div>;
+}
+
+function InlineEmpty({ children }: { children: React.ReactNode }) {
+  return <p className="py-2 text-sm text-muted-foreground">{children}</p>;
+}
+
+function AdminSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {['s0', 's1', 's2', 's3', 's4', 's5'].map((k) => (
+          <Card key={k}>
+            <CardContent className="p-4">
+              <Skeleton className="h-7 w-12" />
+              <Skeleton className="mt-1.5 h-3 w-16" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-5 w-28" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[0, 1, 2].map((j) => (
+                <Skeleton key={j} className="h-6 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
 }

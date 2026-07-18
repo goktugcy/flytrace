@@ -1,6 +1,12 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
 import type { FlightDetail } from '@flytrace/shared';
+import { ArrowLeft, Bell, BellRing, Check, Clock } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
@@ -29,6 +35,13 @@ const EVENT_LABEL: Record<string, string> = {
   flight_detected: 'Detected',
   flight_ended: 'Flight ended',
 };
+
+function statusVariant(status: string): 'success' | 'warning' | 'destructive' | 'default' {
+  if (status === 'active') return 'success';
+  if (status === 'delayed') return 'warning';
+  if (status === 'cancelled' || status === 'diverted') return 'destructive';
+  return 'default';
+}
 
 export function FlightView({ flightId }: { flightId: string }) {
   const [detail, setDetail] = useState<FlightDetail | null>(null);
@@ -119,59 +132,83 @@ export function FlightView({ flightId }: { flightId: string }) {
     }
   }
 
-  const title = detail?.flight.callsign ?? flightId.slice(0, 8);
+  if (error) {
+    return (
+      <Container>
+        <BackLink />
+        <ErrorState
+          title={error === 'Flight not found' ? 'Flight not found' : 'Couldn’t load this flight'}
+          description={
+            error === 'Flight not found'
+              ? 'This flight may have landed and rolled off, or the link is wrong.'
+              : 'Please try again in a moment.'
+          }
+        />
+      </Container>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <Container>
+        <BackLink />
+        <FlightSkeleton />
+      </Container>
+    );
+  }
 
   return (
-    <main style={{ maxWidth: 860, margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <p style={{ marginBottom: '1rem' }}>
-        <Link href="/map">← Live map</Link>
-      </p>
+    <Container>
+      <BackLink />
 
-      {error ? (
-        <p style={{ color: '#ff7b7b' }}>{error}</p>
-      ) : (
-        <>
-          <header style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-            <h1 style={{ fontSize: '2rem', margin: 0 }}>{title}</h1>
-            {detail && <StatusChip status={detail.flight.status} />}
-            <button
-              type="button"
-              onClick={onWatch}
-              disabled={watchState === 'working' || watchState === 'watching'}
-              style={{
-                marginLeft: 'auto',
-                padding: '0.5rem 1rem',
-                borderRadius: 8,
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: 600,
-                background: watchState === 'watching' ? '#2e7d5b' : 'var(--accent)',
-                color: '#04122b',
-              }}
-            >
-              {watchState === 'watching'
-                ? '✓ Watching'
-                : watchState === 'working'
-                  ? 'Setting up…'
-                  : '🔔 Watch'}
-            </button>
-          </header>
-          {watchMsg && (
-            <p style={{ color: watchState === 'error' ? '#ff7b7b' : 'var(--muted)', marginTop: 6 }}>
-              {watchMsg}
-            </p>
-          )}
+      <header className="flex flex-wrap items-center gap-3">
+        <h1 className="text-3xl font-semibold tracking-tight">{detail.flight.callsign}</h1>
+        <Badge variant={statusVariant(detail.flight.status)} className="capitalize">
+          {detail.flight.status}
+        </Badge>
+        {detail.flight.flightNumber && (
+          <span className="text-muted-foreground">{detail.flight.flightNumber}</span>
+        )}
+        <div className="ml-auto">
+          <Button
+            type="button"
+            onClick={onWatch}
+            disabled={watchState === 'working' || watchState === 'watching'}
+            variant={watchState === 'watching' ? 'secondary' : 'default'}
+          >
+            {watchState === 'working' && <Spinner />}
+            {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
+            {watchState === 'watching'
+              ? 'Watching'
+              : watchState === 'working'
+                ? 'Setting up…'
+                : 'Watch'}
+          </Button>
+        </div>
+      </header>
+      {watchMsg && (
+        <p
+          className={
+            watchState === 'error'
+              ? 'mt-2 text-sm text-destructive'
+              : 'mt-2 text-sm text-muted-foreground'
+          }
+        >
+          {watchMsg}
+        </p>
+      )}
 
-          <section style={panel}>
-            <h2 style={h2}>Live telemetry</h2>
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BellRing className="size-4 text-muted-foreground" />
+              Live telemetry
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
             {live ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))',
-                  gap: 12,
-                }}
-              >
+              <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3">
                 <Metric
                   label="Altitude"
                   value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
@@ -199,73 +236,100 @@ export function FlightView({ flightId }: { flightId: string }) {
                 <Metric label="On ground" value={live.onGround ? 'Yes' : 'No'} />
               </div>
             ) : (
-              <p style={{ color: 'var(--muted)' }}>Waiting for live data…</p>
+              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Spinner className="text-muted-foreground" />
+                Waiting for live data…
+              </div>
             )}
-          </section>
+          </CardContent>
+        </Card>
 
-          <section style={panel}>
-            <h2 style={h2}>Timeline</h2>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Clock className="size-4 text-muted-foreground" />
+              Timeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
             {timeline.length === 0 ? (
-              <p style={{ color: 'var(--muted)' }}>No events yet.</p>
+              <EmptyState
+                icon={Clock}
+                title="No events yet"
+                description="Takeoff, climb, descent and landing will appear here as they’re detected."
+                className="border-0 py-8"
+              />
             ) : (
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              <ol className="relative space-y-4 border-l border-border pl-5">
                 {timeline.map((e, i) => (
-                  <li
-                    key={`${e.type}-${e.occurredAt}-${i}`}
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      padding: '6px 0',
-                      borderBottom: '1px solid #1e2636',
-                    }}
-                  >
-                    <span style={{ fontWeight: 600 }}>{EVENT_LABEL[e.type] ?? e.type}</span>
-                    <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
-                      {new Date(e.occurredAt).toLocaleTimeString()}
-                    </span>
+                  <li key={`${e.type}-${e.occurredAt}-${i}`} className="relative">
+                    <span className="absolute -left-6 top-1.5 size-2 rounded-full bg-accent-bright ring-4 ring-background" />
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium">{EVENT_LABEL[e.type] ?? e.type}</span>
+                      <time className="text-sm text-muted-foreground">
+                        {new Date(e.occurredAt).toLocaleTimeString()}
+                      </time>
+                    </div>
                   </li>
                 ))}
-              </ul>
+              </ol>
             )}
-          </section>
-        </>
-      )}
-    </main>
+          </CardContent>
+        </Card>
+      </div>
+    </Container>
+  );
+}
+
+function Container({ children }: { children: React.ReactNode }) {
+  return <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">{children}</main>;
+}
+
+function BackLink() {
+  return (
+    <Link
+      href="/map"
+      className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <ArrowLeft className="size-4" />
+      Live map
+    </Link>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ color: 'var(--muted)', fontSize: 12 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 600 }}>{value}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-lg font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
 
-function StatusChip({ status }: { status: string }) {
+function FlightSkeleton() {
   return (
-    <span
-      style={{
-        padding: '2px 10px',
-        borderRadius: 999,
-        background: '#1e2636',
-        color: 'var(--muted)',
-        fontSize: 13,
-      }}
-    >
-      {status}
-    </span>
+    <div>
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-9 w-40" />
+        <Skeleton className="h-5 w-16 rounded-full" />
+      </div>
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-5 w-32" />
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {[0, 1, 2].map((j) => (
+                <Skeleton key={j} className="h-8 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
   );
 }
-
-const panel: React.CSSProperties = {
-  background: 'var(--panel)',
-  borderRadius: 12,
-  padding: '1.25rem',
-  marginTop: '1.5rem',
-};
-const h2: React.CSSProperties = { margin: '0 0 1rem', fontSize: '1.1rem' };
 
 /** Register the service worker + create a Web Push subscription (docs/10 §10.6). */
 async function subscribeWebPush(): Promise<void> {

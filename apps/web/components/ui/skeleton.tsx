@@ -1,0 +1,7 @@
+import { cn } from '@/lib/utils';
+import type * as React from 'react';
+
+/** Loading placeholder — matches the shape of the content it stands in for. */
+export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('animate-pulse rounded-md bg-muted', className)} {...props} />;
+}

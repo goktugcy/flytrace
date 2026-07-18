@@ -1,5 +1,11 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState, ErrorState } from '@/components/ui/states';
+import { Bell, Eye, Radio, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -12,165 +18,246 @@ interface Dashboard {
   channels: { id: string; channel: string; verified: boolean; enabled: boolean; label: string }[];
 }
 
+type State = 'loading' | 'unauth' | 'ready' | 'error';
+
 export function DashboardView() {
   const [data, setData] = useState<Dashboard | null>(null);
-  const [state, setState] = useState<'loading' | 'unauth' | 'ready' | 'error'>('loading');
+  const [state, setState] = useState<State>('loading');
 
+  async function load() {
+    setState('loading');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard`, { credentials: 'include' });
+      if (res.status === 401) return setState('unauth');
+      if (!res.ok) return setState('error');
+      setData(((await res.json()) as { data: Dashboard }).data);
+      setState('ready');
+    } catch {
+      setState('error');
+    }
+  }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once on mount
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/dashboard`, { credentials: 'include' });
-        if (res.status === 401) return setState('unauth');
-        if (!res.ok) return setState('error');
-        setData(((await res.json()) as { data: Dashboard }).data);
-        setState('ready');
-      } catch {
-        setState('error');
-      }
-    })();
+    void load();
   }, []);
 
-  if (state === 'loading')
-    return (
-      <Shell>
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
-      </Shell>
-    );
-  if (state === 'unauth')
-    return (
-      <Shell>
-        <p>
-          Please <Link href="/signin?next=/dashboard">sign in</Link> to see your dashboard.
-        </p>
-      </Shell>
-    );
-  if (state === 'error' || !data)
-    return (
-      <Shell>
-        <p style={{ color: '#ff7b7b' }}>Failed to load.</p>
-      </Shell>
-    );
-
   return (
-    <Shell>
-      <div style={{ display: 'flex', gap: 12, marginBottom: '1.5rem' }}>
-        <Link href="/map">Live map</Link>
-        <Link href="/settings/notifications">Notification settings</Link>
+    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your watched flights, alerts and channels.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/notifications">Notification settings</Link>
+          </Button>
+          <Button asChild size="sm">
+            <Link href="/map">Live map</Link>
+          </Button>
+        </div>
       </div>
 
-      <Section title={`Watching (${data.watchlist.length})`}>
-        {data.watchlist.length === 0 ? (
-          <Empty>No watched flights. Open a flight and tap Watch.</Empty>
-        ) : (
-          data.watchlist.map((w) => (
-            <Row key={w.id}>
-              {w.flightId ? (
-                <Link href={`/flights/id/${w.flightId}`}>{w.flightId.slice(0, 8)}</Link>
-              ) : (
-                <span>matcher</span>
-              )}
-              <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
-                {w.eventTypes.join(', ')}
-              </span>
-              <span style={{ color: 'var(--muted)' }}>{w.channels.join(', ')}</span>
-            </Row>
-          ))
+      <div className="mt-8">
+        {state === 'loading' && <DashboardSkeleton />}
+
+        {state === 'unauth' && (
+          <EmptyState
+            icon={Eye}
+            title="Sign in to see your dashboard"
+            description="Watched flights, notifications and connected channels live here."
+            action={
+              <Button asChild size="sm">
+                <Link href="/signin?next=/dashboard">Sign in</Link>
+              </Button>
+            }
+          />
         )}
-      </Section>
 
-      <Section title="Recent notifications">
-        {data.notifications.length === 0 ? (
-          <Empty>No notifications yet.</Empty>
-        ) : (
-          data.notifications.map((n) => (
-            <Row key={n.id}>
-              <span style={{ fontWeight: 600 }}>{n.title}</span>
-              <span style={{ color: 'var(--muted)' }}>{n.body}</span>
-              <span style={{ marginLeft: 'auto', color: statusColor(n.status) }}>{n.status}</span>
-            </Row>
-          ))
-        )}
-      </Section>
+        {state === 'error' && <ErrorState onRetry={load} />}
 
-      <Section title="Channels">
-        {data.channels.length === 0 ? (
-          <Empty>No channels connected.</Empty>
-        ) : (
-          data.channels.map((ch) => (
-            <Row key={ch.id}>
-              <span style={{ fontWeight: 600 }}>{ch.channel}</span>
-              <span style={{ color: 'var(--muted)' }}>{ch.label}</span>
-              <span style={{ marginLeft: 'auto', color: ch.verified ? '#2e9e6b' : '#c9a227' }}>
-                {ch.verified ? 'verified' : 'pending'}
-              </span>
-            </Row>
-          ))
-        )}
-      </Section>
-
-      <Section title={`Favorites (${data.favorites.length})`}>
-        {data.favorites.length === 0 ? (
-          <Empty>No favorites.</Empty>
-        ) : (
-          data.favorites.map((f) => (
-            <Row key={f.id}>
-              <span>{f.kind}</span>
-              <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
-                {JSON.stringify(f.ref)}
-              </span>
-            </Row>
-          ))
-        )}
-      </Section>
-    </Shell>
-  );
-}
-
-function statusColor(s: string): string {
-  if (s === 'sent' || s === 'delivered') return '#2e9e6b';
-  if (s === 'failed') return '#ff7b7b';
-  if (s === 'suppressed') return '#8b97ab';
-  return 'var(--muted)';
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <main style={{ maxWidth: 820, margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <h1 style={{ fontSize: '1.75rem', marginBottom: '1rem' }}>Dashboard</h1>
-      {children}
+        {state === 'ready' && data && <DashboardBody data={data} />}
+      </div>
     </main>
   );
 }
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+
+function DashboardBody({ data }: { data: Dashboard }) {
   return (
-    <section
-      style={{
-        background: 'var(--panel)',
-        borderRadius: 12,
-        padding: '1rem 1.25rem',
-        marginBottom: '1.25rem',
-      }}
-    >
-      <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.75rem' }}>{title}</h2>
-      {children}
-    </section>
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat icon={Eye} label="Watching" value={data.watchlist.length} />
+        <Stat icon={Bell} label="Notifications" value={data.notifications.length} />
+        <Stat icon={Radio} label="Channels" value={data.channels.length} />
+        <Stat icon={Star} label="Favorites" value={data.favorites.length} />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Watching</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.watchlist.length === 0 ? (
+            <InlineEmpty>No watched flights yet. Open a flight and tap Watch.</InlineEmpty>
+          ) : (
+            <List>
+              {data.watchlist.map((w) => (
+                <Row key={w.id}>
+                  {w.flightId ? (
+                    <Link
+                      href={`/flights/id/${w.flightId}`}
+                      className="font-medium text-accent-bright hover:underline"
+                    >
+                      {w.flightId.slice(0, 8)}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">Matcher rule</span>
+                  )}
+                  <span className="ml-auto hidden text-sm text-muted-foreground sm:inline">
+                    {w.eventTypes.join(', ')}
+                  </span>
+                  <div className="flex gap-1">
+                    {w.channels.map((ch) => (
+                      <Badge key={ch} variant="outline">
+                        {ch}
+                      </Badge>
+                    ))}
+                  </div>
+                </Row>
+              ))}
+            </List>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent notifications</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.notifications.length === 0 ? (
+            <InlineEmpty>No notifications yet.</InlineEmpty>
+          ) : (
+            <List>
+              {data.notifications.map((n) => (
+                <Row key={n.id} className="items-start">
+                  <div className="min-w-0">
+                    <p className="font-medium">{n.title}</p>
+                    <p className="truncate text-sm text-muted-foreground">{n.body}</p>
+                  </div>
+                  <StatusBadge className="ml-auto" status={n.status} />
+                </Row>
+              ))}
+            </List>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Channels</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.channels.length === 0 ? (
+            <InlineEmpty>No channels connected.</InlineEmpty>
+          ) : (
+            <List>
+              {data.channels.map((ch) => (
+                <Row key={ch.id}>
+                  <span className="font-medium capitalize">{ch.channel}</span>
+                  <span className="text-sm text-muted-foreground">{ch.label}</span>
+                  <Badge className="ml-auto" variant={ch.verified ? 'success' : 'warning'}>
+                    {ch.verified ? 'verified' : 'pending'}
+                  </Badge>
+                </Row>
+              ))}
+            </List>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
-function Row({ children }: { children: React.ReactNode }) {
+
+function Stat({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Eye;
+  label: string;
+  value: number;
+}) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 12,
-        alignItems: 'center',
-        padding: '6px 0',
-        borderBottom: '1px solid #1e2636',
-      }}
-    >
+    <Card>
+      <CardContent className="p-4">
+        <Icon className="size-4 text-muted-foreground" />
+        <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight">{value}</p>
+        <p className="text-xs text-muted-foreground">{label}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusBadge({ status, className }: { status: string; className?: string }) {
+  const variant =
+    status === 'sent' || status === 'delivered'
+      ? 'success'
+      : status === 'failed'
+        ? 'destructive'
+        : 'default';
+  return (
+    <Badge variant={variant} className={className}>
+      {status}
+    </Badge>
+  );
+}
+
+function List({ children }: { children: React.ReactNode }) {
+  return <div className="divide-y divide-border">{children}</div>;
+}
+
+function Row({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`flex items-center gap-3 py-3 first:pt-0 last:pb-0 ${className ?? ''}`}>
       {children}
     </div>
   );
 }
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--muted)', margin: 0 }}>{children}</p>;
+
+function InlineEmpty({ children }: { children: React.ReactNode }) {
+  return <p className="py-2 text-sm text-muted-foreground">{children}</p>;
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardContent className="p-4">
+              <Skeleton className="size-4" />
+              <Skeleton className="mt-2 h-7 w-10" />
+              <Skeleton className="mt-1.5 h-3 w-16" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      {[0, 1].map((i) => (
+        <Card key={i}>
+          <CardHeader>
+            <Skeleton className="h-5 w-32" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {[0, 1, 2].map((j) => (
+              <Skeleton key={j} className="h-6 w-full" />
+            ))}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
 }

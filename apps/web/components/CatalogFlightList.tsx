@@ -1,5 +1,7 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { PlaneLanding, PlaneTakeoff } from 'lucide-react';
 import Link from 'next/link';
 
 export interface CatalogFlight {
@@ -14,40 +16,31 @@ export interface CatalogFlight {
 /** Shared compact flight list used by the airport & aircraft pages. */
 export function CatalogFlightList({ flights }: { flights: CatalogFlight[] }) {
   if (flights.length === 0)
-    return <p style={{ color: 'var(--muted)', margin: 0 }}>No recent flights.</p>;
+    return <p className="py-2 text-sm text-muted-foreground">No recent flights.</p>;
 
   return (
-    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+    <ul className="divide-y divide-border">
       {flights.map((f) => (
-        <li
-          key={f.flightId}
-          style={{
-            display: 'flex',
-            gap: 12,
-            alignItems: 'center',
-            padding: '8px 0',
-            borderBottom: '1px solid #1e2636',
-          }}
-        >
-          <Link href={`/flights/id/${f.flightId}`} style={{ fontWeight: 600 }}>
+        <li key={f.flightId} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+          {f.role &&
+            (f.role === 'departure' ? (
+              <PlaneTakeoff className="size-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <PlaneLanding className="size-4 shrink-0 text-muted-foreground" />
+            ))}
+          <Link
+            href={`/flights/id/${f.flightId}`}
+            className="font-medium text-accent-bright hover:underline"
+          >
             {f.callsign}
           </Link>
-          {f.flightNumber && <span style={{ color: 'var(--muted)' }}>{f.flightNumber}</span>}
-          {f.role && (
-            <span
-              style={{
-                fontSize: 12,
-                padding: '1px 8px',
-                borderRadius: 999,
-                background: '#1e2636',
-                color: 'var(--muted)',
-              }}
-            >
-              {f.role}
-            </span>
+          {f.flightNumber && (
+            <span className="text-sm text-muted-foreground">{f.flightNumber}</span>
           )}
-          <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{f.status}</span>
-          <span style={{ color: 'var(--muted)', fontSize: 13 }}>{f.flightDate}</span>
+          <Badge variant="outline" className="ml-auto capitalize">
+            {f.status}
+          </Badge>
+          <span className="hidden text-sm text-muted-foreground sm:inline">{f.flightDate}</span>
         </li>
       ))}
     </ul>

@@ -1,25 +1,29 @@
+import { Hero } from '@/components/Hero';
+import { LiveCounters } from '@/components/LiveCounters';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { ArrowRight, Bell, ChevronDown, PlaneTakeoff, Radio, Satellite } from 'lucide-react';
 import Link from 'next/link';
-import { Hero } from '../components/Hero';
-import { LiveCounters } from '../components/LiveCounters';
 
 const FEATURES = [
   {
-    icon: '🛰️',
+    icon: Satellite,
     title: 'Real-time positions',
     body: 'Aircraft glide across the map, updated every few seconds from the OpenSky Network.',
   },
   {
-    icon: '✈️',
+    icon: PlaneTakeoff,
     title: 'Derived events',
     body: 'Takeoff, climb, top-of-descent and landing — detected from the raw track, on a timeline.',
   },
   {
-    icon: '🔔',
+    icon: Bell,
     title: 'Watch & get pinged',
     body: 'Watch a flight and get a Web Push, Telegram, or email alert the moment something happens.',
   },
   {
-    icon: '🛫',
+    icon: Radio,
     title: 'Provider status',
     body: 'Gate changes, delays and cancellations from airline sources, layered on top of positions.',
   },
@@ -42,93 +46,81 @@ const FAQ = [
 
 export default function HomePage() {
   return (
-    <main style={{ maxWidth: 960, margin: '0 auto', padding: '4rem 1.5rem' }}>
-      <section>
-        <h1 style={{ fontSize: '3rem', lineHeight: 1.05, margin: 0, letterSpacing: '-0.02em' }}>
-          Watch the sky, <span style={{ color: 'var(--accent)' }}>live</span>.
-        </h1>
-        <p
-          style={{
-            color: 'var(--muted)',
-            fontSize: '1.2rem',
-            lineHeight: 1.5,
-            maxWidth: 620,
-            marginTop: '1rem',
-          }}
-        >
-          Real aircraft, moving in real time — with takeoff, landing and descent events derived from
-          the track, and alerts on the channel you choose.
-        </p>
-        <div style={{ display: 'flex', gap: 12, marginTop: '1.75rem', flexWrap: 'wrap' }}>
-          <Cta href="/map" primary>
-            Open the live map →
-          </Cta>
-          <Cta href="/signin">Create account</Cta>
+    <main className="mx-auto max-w-6xl px-4 sm:px-6">
+      {/* Hero */}
+      <section className="grid items-center gap-10 py-16 sm:py-24 lg:grid-cols-2 lg:gap-12">
+        <div>
+          <Badge variant="accent" className="mb-5">
+            <span className="relative flex size-1.5">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent-bright opacity-75" />
+              <span className="relative inline-flex size-1.5 rounded-full bg-accent-bright" />
+            </span>
+            Live · OpenSky Network
+          </Badge>
+          <h1 className="text-balance text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl">
+            Watch the sky, <span className="text-accent-bright">live</span>.
+          </h1>
+          <p className="mt-5 max-w-xl text-pretty text-lg leading-relaxed text-muted-foreground">
+            Real aircraft, moving in real time — with takeoff, landing and descent events derived
+            from the track, and alerts on the channel you choose.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Button asChild size="lg">
+              <Link href="/map">
+                Open the live map
+                <ArrowRight />
+              </Link>
+            </Button>
+            <Button asChild size="lg" variant="outline">
+              <Link href="/signin">Create account</Link>
+            </Button>
+          </div>
+          <LiveCounters />
         </div>
-        <LiveCounters />
+
         <Hero />
       </section>
 
-      <h2 style={{ fontSize: '1.5rem', marginTop: '4rem', marginBottom: 0 }}>What you get</h2>
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))',
-          gap: 16,
-          marginTop: '1.25rem',
-        }}
-      >
-        {FEATURES.map((f) => (
-          <div
-            key={f.title}
-            style={{ background: 'var(--panel)', borderRadius: 12, padding: '1.25rem' }}
-          >
-            <div style={{ fontSize: 28 }}>{f.icon}</div>
-            <h3 style={{ margin: '0.5rem 0 0.35rem', fontSize: '1.05rem' }}>{f.title}</h3>
-            <p style={{ color: 'var(--muted)', margin: 0, fontSize: 14, lineHeight: 1.5 }}>
-              {f.body}
-            </p>
-          </div>
-        ))}
+      {/* Features */}
+      <section className="py-8">
+        <h2 className="text-2xl font-semibold tracking-tight">What you get</h2>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          {FEATURES.map((f) => (
+            <Card
+              key={f.title}
+              className="transition-colors hover:border-border/60 hover:bg-accent/40"
+            >
+              <CardContent className="p-6">
+                <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-accent-bright">
+                  <f.icon className="size-5" />
+                </div>
+                <h3 className="mt-4 font-medium">{f.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{f.body}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </section>
 
-      <section style={{ marginTop: '4rem' }}>
-        <h2 style={{ fontSize: '1.5rem' }}>FAQ</h2>
-        {FAQ.map((item) => (
-          <details key={item.q} style={{ borderBottom: '1px solid #1e2636', padding: '0.9rem 0' }}>
-            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{item.q}</summary>
-            <p style={{ color: 'var(--muted)', margin: '0.5rem 0 0', lineHeight: 1.5 }}>{item.a}</p>
-          </details>
-        ))}
+      {/* FAQ */}
+      <section className="py-16">
+        <h2 className="text-2xl font-semibold tracking-tight">Frequently asked</h2>
+        <div className="mt-6 divide-y divide-border rounded-xl border border-border bg-card">
+          {FAQ.map((item) => (
+            <details key={item.q} className="group px-5 [&_summary]:list-none">
+              <summary className="flex cursor-pointer items-center justify-between py-4 font-medium">
+                {item.q}
+                <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <p className="pb-4 text-sm leading-relaxed text-muted-foreground">{item.a}</p>
+            </details>
+          ))}
+        </div>
       </section>
 
-      <footer style={{ marginTop: '4rem', color: 'var(--muted)', fontSize: 13 }}>
+      <footer className="border-t border-border py-8 text-sm text-muted-foreground">
         Positions © OpenSky Network · Map © MapLibre · FlyTrace
       </footer>
     </main>
-  );
-}
-
-function Cta({
-  href,
-  children,
-  primary,
-}: { href: string; children: React.ReactNode; primary?: boolean }) {
-  return (
-    <Link
-      href={href}
-      style={{
-        display: 'inline-block',
-        padding: '0.75rem 1.5rem',
-        borderRadius: 8,
-        fontWeight: 600,
-        textDecoration: 'none',
-        background: primary ? 'var(--accent)' : 'transparent',
-        color: primary ? '#04122b' : 'var(--fg)',
-        border: primary ? 'none' : '1px solid #2a3446',
-      }}
-    >
-      {children}
-    </Link>
   );
 }

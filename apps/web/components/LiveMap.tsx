@@ -135,32 +135,20 @@ export function LiveMap() {
   }, [router]);
 
   return (
-    <div style={{ position: 'fixed', inset: 0 }}>
-      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          left: 12,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          zIndex: 1,
-        }}
-      >
-        <div
-          style={{
-            padding: '8px 12px',
-            borderRadius: 8,
-            background: 'rgba(18,24,38,0.85)',
-            color: 'var(--fg)',
-            font: '600 13px/1.2 ui-sans-serif, system-ui',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          ✈ {count} live
+    <div className="fixed inset-x-0 bottom-0 top-14">
+      <div ref={containerRef} className="absolute inset-0" />
+
+      {/* Floating controls (top-left), above the map canvas. */}
+      <div className="absolute left-3 top-3 z-10 flex items-start gap-2 sm:left-4 sm:top-4">
+        <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-card/85 px-3 text-sm font-medium shadow-soft-md backdrop-blur-md">
+          <span className="relative flex size-2">
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-75" />
+            <span className="relative inline-flex size-2 rounded-full bg-success" />
+          </span>
+          <span className="tabular-nums">{count.toLocaleString()}</span>
+          <span className="text-muted-foreground">live</span>
         </div>
-        <SearchBox />
+        <SearchBox className="w-56 sm:w-72" />
       </div>
     </div>
   );

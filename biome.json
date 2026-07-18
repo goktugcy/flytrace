@@ -46,7 +46,12 @@
   },
   "overrides": [
     {
-      "include": ["**/*.config.ts", "**/drizzle.config.ts", "apps/*/next.config.*"],
+      "include": [
+        "**/*.config.ts",
+        "**/drizzle.config.ts",
+        "apps/*/next.config.*",
+        "apps/*/postcss.config.*"
+      ],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     },
     {

@@ -1,5 +1,9 @@
 'use client';
 
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Spinner } from '@/components/ui/states';
+import { CheckCircle2, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -21,26 +25,49 @@ export function VerifyEmail({ token }: { token: string }) {
   }, [token]);
 
   return (
-    <main style={{ maxWidth: 480, margin: '0 auto', padding: '4rem 1.5rem', textAlign: 'center' }}>
-      {state === 'working' && <p style={{ color: 'var(--muted)' }}>Verifying…</p>}
-      {state === 'ok' && (
-        <>
-          <h1>✅ Email verified</h1>
-          <p style={{ color: 'var(--muted)' }}>You’ll now receive flight alerts by email.</p>
-          <p>
-            <Link href="/dashboard">Go to dashboard →</Link>
-          </p>
-        </>
-      )}
-      {state === 'fail' && (
-        <>
-          <h1>⚠️ Verification failed</h1>
-          <p style={{ color: 'var(--muted)' }}>This link is invalid or expired.</p>
-          <p>
-            <Link href="/settings/notifications">Try again</Link>
-          </p>
-        </>
-      )}
+    <main className="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-md flex-col justify-center px-4 py-12 sm:px-6">
+      <Card>
+        <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
+          {state === 'working' && (
+            <>
+              <Spinner className="size-6 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Verifying your email…</p>
+            </>
+          )}
+
+          {state === 'ok' && (
+            <>
+              <div className="flex size-12 items-center justify-center rounded-full bg-success/15 text-success">
+                <CheckCircle2 className="size-6" />
+              </div>
+              <div className="space-y-1">
+                <h1 className="text-lg font-semibold">Email verified</h1>
+                <p className="text-sm text-muted-foreground">
+                  You’ll now receive flight alerts by email.
+                </p>
+              </div>
+              <Button asChild size="sm">
+                <Link href="/dashboard">Go to dashboard</Link>
+              </Button>
+            </>
+          )}
+
+          {state === 'fail' && (
+            <>
+              <div className="flex size-12 items-center justify-center rounded-full bg-destructive/15 text-destructive">
+                <XCircle className="size-6" />
+              </div>
+              <div className="space-y-1">
+                <h1 className="text-lg font-semibold">Verification failed</h1>
+                <p className="text-sm text-muted-foreground">This link is invalid or expired.</p>
+              </div>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/settings/notifications">Try again</Link>
+              </Button>
+            </>
+          )}
+        </CardContent>
+      </Card>
     </main>
   );
 }

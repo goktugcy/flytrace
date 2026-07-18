@@ -12,6 +12,9 @@ type Mode = 'pending' | 'animated' | 'still' | 'fallback';
 
 function detectMode(): Exclude<Mode, 'pending'> {
   if (typeof window === 'undefined') return 'fallback';
+  // Small screens keep the lightweight CSS sky — the ~500KB WebGL bundle isn't
+  // worth the mobile main-thread cost for a decorative visual (docs/17 perf gate).
+  if (!window.matchMedia?.('(min-width: 1024px)').matches) return 'fallback';
   // No-WebGL → CSS fallback.
   try {
     const canvas = document.createElement('canvas');
@@ -61,15 +64,9 @@ export function Hero() {
     <div
       ref={ref}
       aria-hidden="true"
+      className="relative aspect-4/3 w-full overflow-hidden rounded-2xl border border-border shadow-soft-lg sm:aspect-video lg:aspect-4/3"
       style={{
-        position: 'relative',
-        width: '100%',
-        height: 320,
-        marginTop: '2.5rem',
-        borderRadius: 16,
-        overflow: 'hidden',
         background: 'radial-gradient(120% 120% at 70% 20%, #12335b 0%, #0a1626 55%, #060d18 100%)',
-        border: '1px solid #1e2636',
       }}
     >
       {show3d ? <Hero3DScene animate={mode === 'animated'} /> : <CssSky />}

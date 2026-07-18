@@ -1,26 +1,108 @@
+@import "tailwindcss";
+
+/*
+ * FlyTrace design system — dark-mode-first (docs/04).
+ * Minimal palette: neutral zinc surfaces + a single Sky Blue accent.
+ * Contrast tuned for WCAG AA (muted text ≥ 4.5:1 on background; primary
+ * buttons use blue-600 for ≥ 4.5:1 white text).
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --bg: #0b0f1a;
-  --panel: #121826;
-  --fg: #e6edf7;
-  --muted: #8b97ab;
-  --accent: #4ea1ff;
+  --background: #09090b; /* zinc-950 */
+  --foreground: #fafafa; /* zinc-50 */
+
+  --card: #131316;
+  --card-foreground: #fafafa;
+
+  --popover: #18181b; /* zinc-900 */
+  --popover-foreground: #fafafa;
+
+  --primary: #2563eb; /* blue-600 — AA on white text */
+  --primary-foreground: #ffffff;
+
+  --accent-solid: #3b82f6; /* blue-500 — links/rings on dark */
+  --accent-bright: #60a5fa; /* blue-400 — focus ring */
+
+  --secondary: #1c1c20;
+  --secondary-foreground: #fafafa;
+
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa; /* zinc-400 — 6.4:1 on bg */
+
+  --accent: #1f1f23; /* hover surface */
+  --accent-foreground: #fafafa;
+
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+
+  --border: #27272a; /* zinc-800 */
+  --input: #27272a;
+  --ring: #3b82f6;
+
+  --radius: 0.625rem; /* 10px */
+
+  color-scheme: dark;
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-solid: var(--accent-solid);
+  --color-accent-bright: var(--accent-bright);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+
+  --shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-soft-md: 0 4px 16px -4px rgb(0 0 0 / 0.4);
+  --shadow-soft-lg: 0 12px 40px -8px rgb(0 0 0 / 0.5);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
-}
-
-a {
-  color: var(--accent);
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Consistent, visible keyboard focus everywhere (accessibility). */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }

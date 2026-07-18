@@ -1,5 +1,10 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState, ErrorState } from '@/components/ui/states';
+import { ArrowLeft, PlaneLanding, PlaneTakeoff, TowerControl } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -48,55 +53,63 @@ export function AirportView({ iata }: { iata: string }) {
   const [data, setData] = useState<AirportData | null>(null);
   const [state, setState] = useState<'loading' | 'missing' | 'ready' | 'error'>('loading');
 
+  async function load() {
+    setState('loading');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/airports/${iata}`);
+      if (res.status === 404) return setState('missing');
+      if (!res.ok) return setState('error');
+      setData(((await res.json()) as { data: AirportData }).data);
+      setState('ready');
+    } catch {
+      setState('error');
+    }
+  }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refetch only on iata change
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/airports/${iata}`);
-        if (res.status === 404) return void (!cancelled && setState('missing'));
-        if (!res.ok) return void (!cancelled && setState('error'));
-        const d = ((await res.json()) as { data: AirportData }).data;
-        if (cancelled) return;
-        setData(d);
-        setState('ready');
-      } catch {
-        if (!cancelled) setState('error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void load();
   }, [iata]);
 
   const runwayCount = Array.isArray(data?.airport.runways) ? data.airport.runways.length : null;
 
   return (
-    <main style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <p style={{ marginBottom: '1rem' }}>
-        <Link href="/map">← Live map</Link>
-      </p>
+    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+      <Link
+        href="/map"
+        className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" />
+        Live map
+      </Link>
+
+      {state === 'loading' && <AirportSkeleton />}
 
       {state === 'missing' && (
-        <p style={{ color: '#ff7b7b' }}>Airport {iata.toUpperCase()} not found.</p>
+        <EmptyState
+          icon={TowerControl}
+          title={`${iata.toUpperCase()} not found`}
+          description="We don’t have this airport in the catalog yet."
+        />
       )}
-      {state === 'error' && <p style={{ color: '#ff7b7b' }}>Failed to load airport.</p>}
-      {state === 'loading' && <p style={{ color: 'var(--muted)' }}>Loading…</p>}
+
+      {state === 'error' && <ErrorState onRetry={load} />}
 
       {state === 'ready' && data && (
         <>
-          <header style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-            <h1 style={{ fontSize: '2rem', margin: 0 }}>
+          <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-3xl font-semibold tracking-tight">
               {data.airport.iata ?? data.airport.icao}
             </h1>
-            <span style={{ color: 'var(--muted)' }}>{data.airport.name}</span>
+            <span className="text-muted-foreground">{data.airport.name}</span>
           </header>
-          <p style={{ color: 'var(--muted)', marginTop: 4 }}>
+          <p className="mt-1 text-sm text-muted-foreground">
             {[data.airport.city, data.airport.country].filter(Boolean).join(', ')}
             {data.airport.timezone ? ` · ${data.airport.timezone}` : ''}
           </p>
 
-          <section style={panel}>
-            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+          <Card className="mt-6">
+            <CardContent className="flex flex-wrap gap-x-10 gap-y-5 p-6">
               <Metric label="Departures" value={data.stats.departures.toLocaleString()} />
               <Metric label="Arrivals" value={data.stats.arrivals.toLocaleString()} />
               <Metric label="Active now" value={data.stats.active.toLocaleString()} accent />
@@ -110,19 +123,12 @@ export function AirportView({ iata }: { iata: string }) {
                 }
               />
               <Metric label="Runways" value={runwayCount != null ? String(runwayCount) : '—'} />
-            </div>
-          </section>
+            </CardContent>
+          </Card>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))',
-              gap: '1.5rem',
-              marginTop: '1.5rem',
-            }}
-          >
-            <Board title="Departures" rows={data.departures} dir="departure" />
-            <Board title="Arrivals" rows={data.arrivals} dir="arrival" />
+          <div className="mt-6 grid gap-6 md:grid-cols-2">
+            <Board title="Departures" dir="departure" rows={data.departures} />
+            <Board title="Arrivals" dir="arrival" rows={data.arrivals} />
           </div>
         </>
       )}
@@ -132,47 +138,56 @@ export function AirportView({ iata }: { iata: string }) {
 
 function Board({
   title,
-  rows,
   dir,
-}: { title: string; rows: BoardRow[]; dir: 'departure' | 'arrival' }) {
+  rows,
+}: {
+  title: string;
+  dir: 'departure' | 'arrival';
+  rows: BoardRow[];
+}) {
+  const Icon = dir === 'departure' ? PlaneTakeoff : PlaneLanding;
   return (
-    <section style={{ ...panel, marginTop: 0 }}>
-      <h2 style={h2}>
-        {dir === 'departure' ? '🛫' : '🛬'} {title} ({rows.length})
-      </h2>
-      {rows.length === 0 ? (
-        <p style={{ color: 'var(--muted)', margin: 0 }}>No scheduled flights.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-          {rows.map((r) => (
-            <li
-              key={r.flightId}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'auto 1fr auto',
-                gap: 10,
-                alignItems: 'baseline',
-                padding: '8px 0',
-                borderBottom: '1px solid #1e2636',
-              }}
-            >
-              <Link href={`/flights/id/${r.flightId}`} style={{ fontWeight: 600 }}>
-                {r.flightNumber ?? r.callsign}
-              </Link>
-              <span style={{ color: 'var(--muted)' }}>
-                {r.counterpartIata ?? '—'}
-                {r.counterpartCity ? ` · ${r.counterpartCity}` : ''}
-                {r.gate ? ` · Gate ${r.gate}` : ''}
-              </span>
-              <span style={{ textAlign: 'right' }}>
-                <span style={{ display: 'block' }}>{fmtTime(r.estimated ?? r.scheduled)}</span>
-                <span style={{ color: 'var(--muted)', fontSize: 12 }}>{r.status}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Icon className="size-4 text-muted-foreground" />
+          {title}
+          <Badge variant="outline" className="ml-auto tabular-nums">
+            {rows.length}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="py-2 text-sm text-muted-foreground">No scheduled flights.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {rows.map((r) => (
+              <li
+                key={r.flightId}
+                className="grid grid-cols-[auto_1fr_auto] items-baseline gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <Link
+                  href={`/flights/id/${r.flightId}`}
+                  className="font-medium text-accent-bright hover:underline"
+                >
+                  {r.flightNumber ?? r.callsign}
+                </Link>
+                <span className="truncate text-sm text-muted-foreground">
+                  {r.counterpartIata ?? '—'}
+                  {r.counterpartCity ? ` · ${r.counterpartCity}` : ''}
+                  {r.gate ? ` · Gate ${r.gate}` : ''}
+                </span>
+                <span className="text-right">
+                  <span className="block tabular-nums">{fmtTime(r.estimated ?? r.scheduled)}</span>
+                  <span className="text-xs capitalize text-muted-foreground">{r.status}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -187,18 +202,43 @@ function fmtTime(iso: string | null): string {
 function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: accent ? 'var(--accent)' : undefined }}>
+      <div className={`text-xl font-semibold tabular-nums ${accent ? 'text-accent-bright' : ''}`}>
         {value}
       </div>
-      <div style={{ color: 'var(--muted)', fontSize: 12 }}>{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
 
-const panel: React.CSSProperties = {
-  background: 'var(--panel)',
-  borderRadius: 12,
-  padding: '1.25rem',
-  marginTop: '1.5rem',
-};
-const h2: React.CSSProperties = { margin: '0 0 1rem', fontSize: '1.1rem' };
+function AirportSkeleton() {
+  return (
+    <div>
+      <Skeleton className="h-9 w-48" />
+      <Skeleton className="mt-2 h-4 w-64" />
+      <Card className="mt-6">
+        <CardContent className="flex flex-wrap gap-10 p-6">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i}>
+              <Skeleton className="h-7 w-12" />
+              <Skeleton className="mt-1.5 h-3 w-16" />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <div className="mt-6 grid gap-6 md:grid-cols-2">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-5 w-28" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[0, 1, 2, 3].map((j) => (
+                <Skeleton key={j} className="h-7 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

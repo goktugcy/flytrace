@@ -15,6 +15,10 @@
     "allowImportingTsExtensions": true,
     "incremental": true,
     "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    },
     "plugins": [{ "name": "next" }]
   },
   "include": ["**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

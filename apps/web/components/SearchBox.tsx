@@ -1,7 +1,10 @@
 'use client';
 
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { Loader2, Plane, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -12,96 +15,125 @@ interface Result {
   status: string;
 }
 
-export function SearchBox() {
+/** Debounced flight/callsign typeahead with keyboard navigation (↑/↓/Enter/Esc). */
+export function SearchBox({ className, autoFocus }: { className?: string; autoFocus?: boolean }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Result[]>([]);
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [active, setActive] = useState(0);
   const router = useRouter();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listId = useId();
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
-    if (q.trim().length < 1) {
+    const term = q.trim();
+    if (term.length < 1) {
       setResults([]);
+      setLoading(false);
       return;
     }
+    setLoading(true);
     timer.current = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/api/v1/flights/search?q=${encodeURIComponent(q.trim())}`,
-        );
+        const res = await fetch(`${API_BASE}/api/v1/flights/search?q=${encodeURIComponent(term)}`);
         const data = ((await res.json()) as { data: { results: Result[] } }).data;
         setResults(data.results);
+        setActive(0);
         setOpen(true);
       } catch {
         setResults([]);
+      } finally {
+        setLoading(false);
       }
-    }, 300);
+    }, 250);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [q]);
 
+  function go(r: Result) {
+    setOpen(false);
+    setQ('');
+    router.push(`/flights/id/${r.flightId}`);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') return setOpen(false);
+    if (!open || results.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((a) => (a + 1) % results.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => (a - 1 + results.length) % results.length);
+    } else if (e.key === 'Enter') {
+      const r = results[active];
+      if (r) go(r);
+    }
+  }
+
+  const showList = open && q.trim().length > 0;
+
   return (
-    <div style={{ position: 'relative', width: 280 }}>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onFocus={() => results.length > 0 && setOpen(true)}
-        placeholder="Search flight / callsign…"
-        style={{
-          width: '100%',
-          padding: '8px 12px',
-          borderRadius: 8,
-          border: '1px solid #2a3446',
-          background: 'rgba(14,20,32,0.95)',
-          color: 'var(--fg)',
-          fontSize: 14,
-        }}
-      />
-      {open && results.length > 0 && (
+    <div className={cn('relative', className)}>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          // biome-ignore lint/a11y/noAutofocus: opt-in via prop for the mobile search sheet
+          autoFocus={autoFocus}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 120)}
+          onKeyDown={onKeyDown}
+          placeholder="Search flight or callsign…"
+          role="combobox"
+          aria-expanded={showList}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          className="h-9 w-full rounded-md border border-input bg-card/60 pl-9 pr-3 text-sm shadow-soft transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
+        />
+        {loading && (
+          <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+        )}
+      </div>
+
+      {showList && (
         <ul
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            listStyle: 'none',
-            margin: 0,
-            padding: 4,
-            background: 'rgba(18,24,38,0.98)',
-            border: '1px solid #2a3446',
-            borderRadius: 8,
-            maxHeight: 280,
-            overflowY: 'auto',
-          }}
+          id={listId}
+          className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-72 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-soft-lg"
         >
-          {results.map((r) => (
-            <li key={r.flightId}>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  router.push(`/flights/id/${r.flightId}`);
-                }}
-                style={{
-                  display: 'flex',
-                  width: '100%',
-                  gap: 8,
-                  padding: '6px 8px',
-                  border: 'none',
-                  background: 'none',
-                  color: 'var(--fg)',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>{r.callsign}</span>
-                {r.flightNumber && <span style={{ color: 'var(--muted)' }}>{r.flightNumber}</span>}
-                <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{r.status}</span>
-              </button>
+          {results.length === 0 && !loading ? (
+            <li className="px-3 py-6 text-center text-sm text-muted-foreground">
+              No matches for “{q.trim()}”.
             </li>
-          ))}
+          ) : (
+            results.map((r, i) => (
+              <li key={r.flightId}>
+                <button
+                  type="button"
+                  // onMouseDown (not onClick) fires before input blur closes the list.
+                  onMouseDown={() => go(r)}
+                  onMouseEnter={() => setActive(i)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                    i === active ? 'bg-accent' : 'hover:bg-accent',
+                  )}
+                >
+                  <Plane className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="font-medium">{r.callsign}</span>
+                  {r.flightNumber && (
+                    <span className="text-muted-foreground">{r.flightNumber}</span>
+                  )}
+                  <Badge variant="outline" className="ml-auto capitalize">
+                    {r.status}
+                  </Badge>
+                </button>
+              </li>
+            ))
+          )}
         </ul>
       )}
     </div>
