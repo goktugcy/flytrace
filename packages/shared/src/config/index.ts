@@ -108,6 +108,25 @@ const emailSchema = z.object({
   EMAIL_FROM: z.string().default('FlyTrace <alerts@flytrace.local>'),
   EMAIL_API_KEY: z.string().optional(),
   EMAIL_API_URL: z.string().url().default('https://api.resend.com/emails'),
+  /** Email adapter: mock (default, logs only) | resend | brevo | smtp. */
+  EMAIL_PROVIDER: z.string().default('mock'),
+});
+
+// Cross-cutting infra: secret store, tracing, and generic provider selection.
+// All optional with safe local defaults so nothing external is required.
+const infraSchema = z.object({
+  SECRET_PROVIDER: z.string().default('env'),
+  INFISICAL_API_URL: z.string().url().optional(),
+  INFISICAL_TOKEN: z.string().optional(),
+  INFISICAL_PROJECT_ID: z.string().optional(),
+  INFISICAL_ENV: z.string().optional(),
+  VAULT_ADDR: z.string().url().optional(),
+  VAULT_TOKEN: z.string().optional(),
+  VAULT_KV_MOUNT: z.string().optional(),
+  VAULT_SECRET_PATH: z.string().optional(),
+  OTEL_TRACES_EXPORTER: z.enum(['noop', 'console', 'otlp']).default('noop'),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().optional(),
 });
 
 /** Compose the schemas an app needs; each app validates only its slice. */
@@ -121,6 +140,7 @@ export const configSchemas = {
   webPush: webPushSchema,
   telegram: telegramSchema,
   email: emailSchema,
+  infra: infraSchema,
   boolish,
 };
 
@@ -132,7 +152,8 @@ const fullSchema = baseSchema
   .merge(openskySchema)
   .merge(webPushSchema)
   .merge(telegramSchema)
-  .merge(emailSchema);
+  .merge(emailSchema)
+  .merge(infraSchema);
 
 export type Config = z.infer<typeof fullSchema>;
 

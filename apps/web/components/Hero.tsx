@@ -64,17 +64,14 @@ export function Hero() {
     <div
       ref={ref}
       aria-hidden="true"
-      className="relative aspect-4/3 w-full overflow-hidden rounded-2xl border border-border shadow-soft-lg sm:aspect-video lg:aspect-4/3"
-      style={{
-        background: 'radial-gradient(120% 120% at 70% 20%, #12335b 0%, #0a1626 55%, #060d18 100%)',
-      }}
+      className="relative aspect-4/3 w-full overflow-hidden sm:aspect-video lg:aspect-4/3"
     >
       {show3d ? <Hero3DScene animate={mode === 'animated'} /> : <CssSky />}
     </div>
   );
 }
 
-/** No-WebGL / pre-hydration baseline: layered gradient sky with a drifting plane. */
+/** No-WebGL / pre-hydration baseline: transparent placeholder with a simple icon. */
 function CssSky() {
   return (
     <div
@@ -83,10 +80,6 @@ function CssSky() {
         inset: 0,
         display: 'grid',
         placeItems: 'center',
-        backgroundImage:
-          'radial-gradient(1px 1px at 20% 30%, #ffffff55 0, transparent 100%),' +
-          'radial-gradient(1px 1px at 60% 70%, #ffffff44 0, transparent 100%),' +
-          'radial-gradient(1px 1px at 80% 20%, #ffffff33 0, transparent 100%)',
       }}
     >
       <span style={{ fontSize: 72, filter: 'drop-shadow(0 8px 24px #0008)' }}>🛰️</span>

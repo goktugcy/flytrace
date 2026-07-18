@@ -1,8 +1,16 @@
 'use client';
 
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { Suspense, useEffect, useMemo, useRef } from 'react';
-import { AnimationMixer, Box3, type Group, Vector3 } from 'three';
+import { Suspense, useMemo, useRef } from 'react';
+import {
+  Box3,
+  Color,
+  type Group,
+  type Material,
+  type Mesh,
+  MeshStandardMaterial,
+  Vector3,
+} from 'three';
 import { type GLTF, GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const ENGINE_MODEL_URL = '/models/airplane_engine.glb';
@@ -24,16 +32,15 @@ export function Hero3DScene({ animate }: { animate: boolean }) {
       <directionalLight position={[3.5, 4, 4.5]} intensity={2.4} />
       <directionalLight position={[-4, -1, 2]} intensity={0.65} color="#4fd1c5" />
       <Suspense fallback={<EngineFallback animate={animate} />}>
-        <AirplaneEngine animate={animate} />
+        <AirplaneEngine />
       </Suspense>
     </Canvas>
   );
 }
 
-function AirplaneEngine({ animate }: { animate: boolean }) {
+function AirplaneEngine() {
   const gltf = useLoader(GLTFLoader, ENGINE_MODEL_URL) as GLTF;
   const group = useRef<Group>(null);
-  const mixer = useRef<AnimationMixer | null>(null);
 
   const { scene, scale } = useMemo(() => {
     const clonedScene = gltf.scene.clone(true);
@@ -44,6 +51,7 @@ function AirplaneEngine({ animate }: { animate: boolean }) {
     bounds.getSize(size);
     bounds.getCenter(center);
     clonedScene.position.set(-center.x, -center.y, -center.z);
+    colorizeEngine(clonedScene);
 
     const maxAxis = Math.max(size.x, size.y, size.z);
     return {
@@ -52,44 +60,55 @@ function AirplaneEngine({ animate }: { animate: boolean }) {
     };
   }, [gltf.scene]);
 
-  useEffect(() => {
-    if (gltf.animations.length === 0) return;
-
-    const nextMixer = new AnimationMixer(scene);
-    const actions = gltf.animations.map((clip) => nextMixer.clipAction(clip));
-    for (const action of actions) action.play();
-    mixer.current = nextMixer;
-
-    return () => {
-      for (const action of actions) action.stop();
-      nextMixer.stopAllAction();
-      nextMixer.uncacheRoot(scene);
-      mixer.current = null;
-    };
-  }, [gltf.animations, scene]);
-
-  useEffect(() => {
-    scene.traverse((object) => {
-      if ('castShadow' in object) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-    });
-  }, [scene]);
-
-  useFrame((_, delta) => {
-    if (!animate) return;
-    mixer.current?.update(delta);
-    if (group.current) {
-      group.current.rotation.y += delta * 0.14;
-    }
-  });
-
   return (
     <group ref={group} position={[0, -0.05, 0]} rotation={[0.18, -0.5, -0.08]} scale={scale}>
       <primitive object={scene} dispose={null} />
     </group>
   );
+}
+
+function isMesh(object: unknown): object is Mesh {
+  return object !== null && typeof object === 'object' && (object as Mesh).isMesh === true;
+}
+
+function colorizeEngine(scene: Group) {
+  let meshIndex = 0;
+  const accents = [
+    new Color('#4fd1c5'),
+    new Color('#7dd3fc'),
+    new Color('#f59e0b'),
+    new Color('#ef4444'),
+  ];
+
+  scene.traverse((object) => {
+    if (!isMesh(object)) return;
+
+    object.castShadow = true;
+    object.receiveShadow = true;
+
+    const sourceMaterials = Array.isArray(object.material) ? object.material : [object.material];
+    const nextMaterials = sourceMaterials.map((material, materialIndex) => {
+      const nextMaterial = material.clone() as Material;
+
+      if (nextMaterial instanceof MeshStandardMaterial) {
+        const isAccent = meshIndex % 11 === 0 || meshIndex % 17 === 0;
+        const isWarmAccent = meshIndex % 29 === 0;
+
+        nextMaterial.color = isAccent
+          ? accents[(meshIndex + materialIndex) % accents.length]
+          : new Color(meshIndex % 3 === 0 ? '#d5dde8' : '#748195');
+        nextMaterial.emissive = isWarmAccent ? new Color('#f59e0b') : new Color('#0b1f32');
+        nextMaterial.emissiveIntensity = isWarmAccent ? 0.22 : 0.04;
+        nextMaterial.metalness = isAccent ? 0.72 : 0.88;
+        nextMaterial.roughness = isAccent ? 0.32 : 0.42;
+      }
+
+      return nextMaterial;
+    });
+
+    object.material = Array.isArray(object.material) ? nextMaterials : nextMaterials[0];
+    meshIndex += 1;
+  });
 }
 
 function EngineFallback({ animate }: { animate: boolean }) {

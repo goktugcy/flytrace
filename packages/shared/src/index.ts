@@ -8,3 +8,4 @@ export * from './bus/index.ts';
 export * from './contracts/index.ts';
 export * from './metrics/index.ts';
 export * from './queues/index.ts';
+export * from './infra/index.ts';
