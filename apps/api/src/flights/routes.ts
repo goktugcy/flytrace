@@ -189,12 +189,19 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     }
     const results = await read.search(q, limit, altTerm);
 
-    // Not in our DB yet? If the query is a plausible callsign, look it up live
-    // on adsb.lol and synthesise a result so the map can still locate it. The
-    // ADS-B feed carries the position; no persistent flight row is created.
-    if (results.length === 0) {
-      const live = await lookupLiveCallsign(altTerm ?? q.replace(/\s/g, ''));
-      if (live) results.push({ ...live, flightDate: ctx.clock.nowIso().slice(0, 10) });
+    // Partial DB matches (ilike '%THY1%' → THY1DU…) must NOT suppress the live
+    // lookup for the *exact* callsign the user typed. So whenever the query
+    // looks like a complete callsign and no DB row matches it exactly, resolve
+    // it live on adsb.lol and surface it at the top. No persistent row is
+    // created; the ADS-B feed carries the position for the map to locate it.
+    const norm = (altTerm ?? q).replace(/\s+/g, '').toUpperCase();
+    const looksComplete = /^[A-Z]{2,3}\d{1,4}[A-Z]?$/.test(norm) || /^[A-Z0-9]{5,8}$/.test(norm);
+    const hasExact = results.some((r) => r.callsign.toUpperCase() === norm);
+    if (looksComplete && !hasExact) {
+      const live = await lookupLiveCallsign(norm);
+      if (live && !results.some((r) => r.icao24 === live.icao24)) {
+        results.unshift({ ...live, flightDate: ctx.clock.nowIso().slice(0, 10) });
+      }
     }
     return ok(c, { results });
   });
