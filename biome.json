@@ -12,7 +12,8 @@
       "**/.next/**",
       "**/node_modules/**",
       "**/migrations/**",
-      "apps/web/public/**"
+      "apps/web/public/**",
+      "load/**"
     ]
   },
   "formatter": {
@@ -63,6 +64,10 @@
     {
       "include": ["apps/web/app/**"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
+    },
+    {
+      "include": ["**/*.test.ts"],
+      "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
     }
   ]
 }

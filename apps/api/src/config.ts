@@ -9,7 +9,8 @@ const apiConfigSchema = configSchemas.base
   .merge(configSchemas.auth)
   .merge(configSchemas.webPush)
   .merge(configSchemas.telegram)
-  .merge(configSchemas.email);
+  .merge(configSchemas.email)
+  .merge(configSchemas.infra);
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
 

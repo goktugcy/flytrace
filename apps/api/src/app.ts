@@ -1,15 +1,18 @@
 import { type AuthUser, createAuthRepo, sql } from '@flytrace/db';
-import { AppError, correlationId, isAppError, uuidv7 } from '@flytrace/shared';
+import { AppError, correlationId, createTracer, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { createAdminRoutes } from './admin/routes.ts';
+import { createAirspaceRoutes } from './airspace/routes.ts';
 import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
 import { createCatalogRoutes } from './catalog/routes.ts';
 import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
 import { createApiMetrics } from './metrics.ts';
+import { tracingMiddleware } from './monitoring/request-tracing.ts';
+import { createMonitoringRoutes } from './monitoring/routes.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { createTelegramRoutes } from './notify/telegram.ts';
 import { createUserRoutes } from './user/routes.ts';
@@ -37,6 +40,7 @@ export function createApp(ctx: AppContext) {
   });
   const cookieSecure = ctx.config.APP_ENV !== 'local';
   const metrics = ctx.metrics ?? createApiMetrics();
+  const tracer = createTracer(ctx.config, { logger: ctx.logger });
 
   // ── Middleware chain (see docs/11-api.md §11.10) ──
   app.use('*', async (c, next) => {
@@ -57,6 +61,9 @@ export function createApp(ctx: AppContext) {
       ms,
     });
   });
+
+  // Wrap every request in a tracing span (noop unless OTEL_* configured).
+  app.use('*', tracingMiddleware(tracer));
 
   app.use('*', secureHeaders());
   // In local dev, also reflect private-LAN origins so a phone on the same
@@ -115,6 +122,9 @@ export function createApp(ctx: AppContext) {
     c.text(metrics.registry.render(), 200, { 'content-type': 'text/plain; version=0.0.4' }),
   );
 
+  // Detailed health JSON (db/redis/queue/ws/memory) — GET /health/detailed.
+  app.route('/', createMonitoringRoutes(ctx));
+
   app.get('/api/v1', (c) =>
     c.json({
       data: { name: 'FlyTrace API', version: 'v1' },
@@ -166,6 +176,9 @@ export function createApp(ctx: AppContext) {
 
   // ── Catalog: airport / aircraft pages (docs/11 §11.6) ──
   app.route('/api/v1', createCatalogRoutes(ctx));
+
+  // ── Airspace lookup (Phase 3 §1: EnteredAirspace) ──
+  app.route('/api/v1', createAirspaceRoutes(ctx));
 
   // ── Admin console (role=admin; docs/11 §11.6) ──
   app.route('/api/v1', createAdminRoutes(ctx));

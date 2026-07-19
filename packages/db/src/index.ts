@@ -13,6 +13,12 @@ export * from './repos/catalog.ts';
 export * from './repos/catalog-read.ts';
 export * from './repos/system.ts';
 export * from './repos/user.ts';
+export * from './timeseries/positions-repo.ts';
+export * from './timeseries/retention.ts';
+export * from './timeseries/aggregation.ts';
+export * from './pool/connection-manager.ts';
+export * from './pool/transaction.ts';
+export * from './pool/pool-config.ts';
 
 export type Database = ReturnType<typeof createDb>['db'];
 

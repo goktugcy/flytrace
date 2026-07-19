@@ -127,6 +127,26 @@ const infraSchema = z.object({
   OTEL_TRACES_EXPORTER: z.enum(['noop', 'console', 'otlp']).default('noop'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
+  // Timeseries (Phase 3 §4): flight-position backend.
+  TIMESERIES_BACKEND: z.enum(['postgres', 'timescale']).default('postgres'),
+  // Airspace (Phase 3 §1): provider + optional dataset paths.
+  AIRSPACE_PROVIDER: z.string().default('mock'),
+  OPENAIP_DATASET_PATH: z.string().optional(),
+  OPENFLIGHTMAPS_DATASET_PATH: z.string().optional(),
+  AIXM_DATASET_PATH: z.string().optional(),
+  // Connection pooling (Phase 3 §5): PgBouncer-ready.
+  PG_POOL_MODE: z.enum(['session', 'transaction']).default('session'),
+  PG_POOL_MAX: z.coerce.number().int().positive().default(10),
+  PG_PREPARE: z.coerce.boolean().default(true),
+  // Backup / DR (Phase 3 §9).
+  BACKUP_PROVIDER: z.enum(['mock', 'pgdump']).default('mock'),
+  BACKUP_DIR: z.string().optional(),
+  WAL_ARCHIVE_DIR: z.string().optional(),
+  // Digest email (Phase 3 §2).
+  DIGEST_ENABLED: boolish.default('false'),
+  DIGEST_INTERVAL_MS: z.coerce.number().int().positive().default(3_600_000),
+  BREVO_API_KEY: z.string().optional(),
+  SMTP_URL: z.string().optional(),
 });
 
 /** Compose the schemas an app needs; each app validates only its slice. */

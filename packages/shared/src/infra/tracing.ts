@@ -161,9 +161,9 @@ export class NoopTracer extends BasicTracer {
 
 export interface TracingConfig {
   /** noop | console | otlp (default noop). */
-  OTEL_TRACES_EXPORTER?: string;
-  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
-  OTEL_SERVICE_NAME?: string;
+  OTEL_TRACES_EXPORTER?: string | undefined;
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string | undefined;
+  OTEL_SERVICE_NAME?: string | undefined;
 }
 
 /**
@@ -175,8 +175,8 @@ export function createTracer(
   cfg: TracingConfig,
   deps: {
     logger?: {
-      info: (m: string, meta?: unknown) => void;
-      error?: (m: string, meta?: unknown) => void;
+      info: (m: string, meta?: Record<string, unknown>) => void;
+      error?: (m: string, meta?: Record<string, unknown>) => void;
     };
     fetchImpl?: typeof fetch;
     tracerDeps?: TracerDeps;

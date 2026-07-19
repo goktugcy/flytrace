@@ -9,3 +9,4 @@ export * from './flights.ts';
 export * from './personalization.ts';
 export * from './notifications.ts';
 export * from './system.ts';
+export * from './airspace.ts';

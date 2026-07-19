@@ -14,6 +14,7 @@
       "name": "@flytrace/api",
       "version": "0.0.0",
       "dependencies": {
+        "@flytrace/airspace": "workspace:*",
         "@flytrace/db": "workspace:*",
         "@flytrace/notifications": "workspace:*",
         "@flytrace/shared": "workspace:*",
@@ -92,6 +93,18 @@
         "@flytrace/shared": "workspace:*",
         "bullmq": "^5.34.0",
         "ioredis": "^5.4.2",
+        "zod": "^3.24.1",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.1.14",
+        "typescript": "^5.7.3",
+      },
+    },
+    "packages/airspace": {
+      "name": "@flytrace/airspace",
+      "version": "0.0.0",
+      "dependencies": {
+        "@flytrace/shared": "workspace:*",
         "zod": "^3.24.1",
       },
       "devDependencies": {
@@ -225,6 +238,8 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.19.12", "", { "os": "win32", "cpu": "ia32" }, "sha512-+ZOE6pUkMOJfmxmBZElNOx72NKpIa/HFOMGzu8fqzQJ5kgf6aTGrcJaFsNiVMH4JKpMipyK+7k0n2UXN7a8YKQ=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.19.12", "", { "os": "win32", "cpu": "x64" }, "sha512-T1QyPSDCyMXaO3pzBkF96E8xMkiRYbUEZADd29SyPGabqxMViNoii+NcK7eWJAEoU6RZyEm5lVSIjTmcdoB9HA=="],
+
+    "@flytrace/airspace": ["@flytrace/airspace@workspace:packages/airspace"],
 
     "@flytrace/api": ["@flytrace/api@workspace:apps/api"],
 

@@ -70,15 +70,15 @@ export class RemoteSecretProvider extends BaseSecretProvider {
 
 export interface SecretConfig {
   /** env | infisical | vault (defaults to env). */
-  SECRET_PROVIDER?: string;
-  INFISICAL_API_URL?: string;
-  INFISICAL_TOKEN?: string;
-  INFISICAL_PROJECT_ID?: string;
-  INFISICAL_ENV?: string;
-  VAULT_ADDR?: string;
-  VAULT_TOKEN?: string;
-  VAULT_KV_MOUNT?: string;
-  VAULT_SECRET_PATH?: string;
+  SECRET_PROVIDER?: string | undefined;
+  INFISICAL_API_URL?: string | undefined;
+  INFISICAL_TOKEN?: string | undefined;
+  INFISICAL_PROJECT_ID?: string | undefined;
+  INFISICAL_ENV?: string | undefined;
+  VAULT_ADDR?: string | undefined;
+  VAULT_TOKEN?: string | undefined;
+  VAULT_KV_MOUNT?: string | undefined;
+  VAULT_SECRET_PATH?: string | undefined;
 }
 
 type Fetcher = typeof fetch;
