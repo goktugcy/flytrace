@@ -25,6 +25,12 @@ describe('schema', () => {
       'auditLogs',
       'settings',
       'outbox',
+      'geofences',
+      'userMfa',
+      'mfaBackupCodes',
+      'refreshTokens',
+      'userDevices',
+      'auditLog',
     ] as const;
     for (const name of expected) {
       expect(schema[name]).toBeDefined();

@@ -27,6 +27,9 @@ source of truth; Redis holds only ephemeral/derived state.
 ```
 users ──1:n── sessions
 users ──1:n── accounts            (Better Auth: OAuth/credential links)
+users ──1:1── user_mfa
+users ──1:n── user_devices ──1:n── refresh_tokens
+users ──1:n── mfa_backup_codes
 users ──1:n── watchlist_items ──n:1── flights
 users ──1:n── favorites            (polymorphic: route|aircraft|airport)
 users ──1:n── notification_channels (telegram|webpush|email)
@@ -43,6 +46,7 @@ flights ──1:1── flight_status      (latest normalized provider status)
 providers ──1:n── provider_logs
 providers ──1:n── provider_cache
 (system) ──── audit_logs, settings, outbox
+(security) ─── audit_log
 ```
 
 ## 5.3 Reference / catalog tables
@@ -74,6 +78,14 @@ Indexes: `unique(iata)`, `unique(icao)`, `idx(provider_key)`.
 | timezone | text | IANA tz (`Europe/Istanbul`) |
 | runways | jsonb | array {designator,length_ft,surface,heading} |
 Indexes: `unique(icao)`, `unique(iata)`, **GIST(location)** (nearest-airport, geofence).
+
+### `geofences` — *why:* airspace polygons for entered-airspace events and lookups.
+`id uuid PK, name text, type text(FIR|TMA|CTA|CTR), icao_class text null,
+lower_ft int null, upper_ft int null, frequency text null, geom geometry(Geometry,4326) null,
+geojson jsonb null, source text null`.
+Indexes: **GIST(geom)** for PostGIS containment/intersection queries, `idx(type)` for scoped
+airspace lookups. `geojson` keeps the app read path simple when PostGIS round-tripping is not
+needed.
 
 ### `aircraft` — *why:* aircraft pages, enrichment, type/registration display.
 | column | type | notes |
@@ -185,6 +197,25 @@ refresh_token text null, expires_at timestamptz null, password_hash text null`.
 `id uuid PK, user_id FK→users, token text unique, ip inet null, user_agent text null,
 expires_at timestamptz, created_at`. `idx(user_id)`, `unique(token)`, `idx(expires_at)`.
 
+### `user_mfa` — *why:* TOTP enrollment state.
+`user_id uuid PK FK→users, secret_ciphertext text, enabled bool, confirmed_at timestamptz null,
+created_at`. The shared TOTP secret is stored only as an encrypted/base64 envelope; the database
+does not store the raw secret.
+
+### `mfa_backup_codes` — *why:* one-time recovery codes.
+`id uuid PK, user_id FK→users, code_hash text, used_at timestamptz null, created_at`.
+Codes are stored as hashes and marked consumed with `used_at`. Index: `idx(user_id)`.
+
+### `user_devices` — *why:* trusted-device and refresh-token device binding.
+`id uuid PK, user_id FK→users, fingerprint text, ua text null, last_ip inet null, trusted bool,
+last_seen_at, created_at`. Indexes: `idx(user_id)`, `unique(user_id, fingerprint)`.
+
+### `refresh_tokens` — *why:* opaque refresh-token rotation.
+`id uuid PK, user_id FK→users, device_id FK→user_devices, token_hash text unique,
+family_id text, expires_at, revoked_at null, replaced_by uuid null`.
+Only deterministic token hashes are stored. Indexes: `idx(user_id)`, `idx(family_id)`,
+`idx(device_id)`.
+
 ### `user_settings` — *why:* preferences (theme, locale, units, quiet hours).
 `user_id uuid PK FK→users, theme text, locale text, distance_unit text(km|mi|nm),
 time_format text, quiet_hours jsonb {tz,start,end}, default_channels jsonb`.
@@ -269,6 +300,11 @@ entity text, entity_id text, before jsonb null, after jsonb null, ip inet null,
 correlation_id text, created_at`. Indexes: `idx(actor_user_id, created_at)`, `idx(entity, entity_id)`.
 Append-only (no updates/deletes); partitioned by `created_at`.
 
+### `audit_log` — *why:* security-focused audit trail for auth/admin flows.
+`id uuid PK, actor_id uuid null, action text, target text null, ip inet null, meta jsonb null,
+created_at`. It deliberately avoids an FK to `users` so rows survive account deletion and
+unauthenticated/system actions can be recorded. Index: `idx(actor_id, created_at)`.
+
 ### `settings` — *why:* runtime feature flags / operational config editable by admins.
 `key text PK, value jsonb, description text, updated_by uuid null, updated_at`.
 Examples: `opensky.poll_interval_ms`, `map.max_markers`, `providers.thy.enabled`,
@@ -310,6 +346,10 @@ provider_health= up | degraded | down
   deploy (see [14](./14-infrastructure.md)); never auto-migrate in app boot in prod.
 - **Extensions bootstrapped** in first migration: `postgis`, `pg_trgm`, `citext`,
   (`timescaledb` if used).
+- **Phase 7 migration:** `0001_dusty_madrox.sql` adds geofences plus security tables
+  (`user_mfa`, `mfa_backup_codes`, `refresh_tokens`, `user_devices`, `audit_log`) as an
+  additive, backward-compatible migration. `src/schema/migration-safety.test.ts` keeps the
+  expected table/index set and the `secret_ciphertext` guarantee under the normal test pipeline.
 - **Seed data:** airlines (TK/PC/AJ/LH/BA…), major airports (IATA/ICAO/geo/tz), aircraft type
   lookup — from static reference datasets, idempotent seed script.
 

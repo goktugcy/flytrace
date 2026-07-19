@@ -3,16 +3,17 @@ import { users } from './auth.ts';
 
 /**
  * Per-user MFA (TOTP) enrolment state (docs/15 §7a). One row per user; the row
- * exists once enrolment begins (secret stored, `enabled=false`) and flips to
- * `enabled=true` on the first successful token confirmation.
+ * exists once enrolment begins (encrypted secret stored, `enabled=false`) and
+ * flips to `enabled=true` on the first successful token confirmation.
  */
 export const userMfa = pgTable('user_mfa', {
   userId: uuid('user_id')
     .primaryKey()
     .references(() => users.id, { onDelete: 'cascade' }),
-  // Base32-encoded shared secret (RFC 4648). Stored server-side; never returned
-  // after enrolment confirmation.
-  secret: text('secret').notNull(),
+  // Encrypted/base64 envelope for the Base32 shared secret. The service port
+  // works with plaintext only after a repo decrypts it; the database never
+  // stores the raw TOTP secret.
+  secretCiphertext: text('secret_ciphertext').notNull(),
   enabled: boolean('enabled').notNull().default(false),
   confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
