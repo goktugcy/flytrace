@@ -15,6 +15,7 @@ import { tracingMiddleware } from './monitoring/request-tracing.ts';
 import { createMonitoringRoutes } from './monitoring/routes.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { createTelegramRoutes } from './notify/telegram.ts';
+import { InMemoryRateLimiter, rateLimitMiddleware } from './security/edge/index.ts';
 import { createUserRoutes } from './user/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
@@ -64,6 +65,19 @@ export function createApp(ctx: AppContext) {
 
   // Wrap every request in a tracing span (noop unless OTEL_* configured).
   app.use('*', tracingMiddleware(tracer));
+
+  // Rate limit the public API (in-memory by default; RATE_LIMIT_BACKEND=redis
+  // for cross-node). Keyed by client IP; generous default so it's non-breaking.
+  const rateLimiter = new InMemoryRateLimiter();
+  app.use(
+    '/api/*',
+    rateLimitMiddleware({
+      limiter: rateLimiter,
+      keyFn: (c) => c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'anon',
+      max: ctx.config.RATE_LIMIT_MAX ?? 100,
+      windowMs: ctx.config.RATE_LIMIT_WINDOW_MS ?? 60_000,
+    }),
+  );
 
   app.use('*', secureHeaders());
   // In local dev, also reflect private-LAN origins so a phone on the same

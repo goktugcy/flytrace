@@ -149,6 +149,28 @@ const infraSchema = z.object({
   SMTP_URL: z.string().optional(),
 });
 
+// WebSocket horizontal scaling (Phase 3 §3).
+const wsSchema = z.object({
+  WS_PUBSUB_BACKEND: z.string().default('memory'),
+  WS_PRESENCE_BACKEND: z.string().default('memory'),
+  WS_SHARD_COUNT: z.coerce.number().int().positive().default(64),
+  WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  WS_MAX_CONNS_PER_IP: z.coerce.number().int().positive().default(10),
+  WS_MAX_MSGS_PER_SEC: z.coerce.number().int().positive().default(20),
+});
+
+// Security hardening (Phase 3 §7): edge + session.
+const securitySchema = z.object({
+  TURNSTILE_SECRET: z.string().optional(),
+  RATE_LIMIT_BACKEND: z.enum(['memory', 'redis']).default('memory'),
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  AUDIT_BACKEND: z.enum(['memory', 'db']).default('memory'),
+  SESSION_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  IMPOSSIBLE_TRAVEL_MAX_KMH: z.coerce.number().positive().default(900),
+  MFA_ISSUER: z.string().default('FlyTrace'),
+});
+
 /** Compose the schemas an app needs; each app validates only its slice. */
 export const configSchemas = {
   base: baseSchema,
@@ -161,6 +183,8 @@ export const configSchemas = {
   telegram: telegramSchema,
   email: emailSchema,
   infra: infraSchema,
+  ws: wsSchema,
+  security: securitySchema,
   boolish,
 };
 
@@ -173,7 +197,9 @@ const fullSchema = baseSchema
   .merge(webPushSchema)
   .merge(telegramSchema)
   .merge(emailSchema)
-  .merge(infraSchema);
+  .merge(infraSchema)
+  .merge(wsSchema)
+  .merge(securitySchema);
 
 export type Config = z.infer<typeof fullSchema>;
 
