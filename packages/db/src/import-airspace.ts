@@ -24,6 +24,7 @@ async function main() {
     kind: config.AIRSPACE_PROVIDER,
     openaipDatasetPath: config.OPENAIP_DATASET_PATH,
     openaipApiKey: config.OPENAIP_API_KEY,
+    openaipGlobalImport: config.OPENAIP_GLOBAL_IMPORT,
     openaipBaseUrl: config.OPENAIP_BASE_URL,
     openaipCountry: config.OPENAIP_COUNTRY,
     openaipBbox: config.OPENAIP_BBOX,

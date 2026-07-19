@@ -173,6 +173,7 @@ export function parseOpenAipDataset(text: string | null, logger?: Logger): Airsp
 
 export interface OpenAipApiOptions {
   apiKey?: string | undefined;
+  globalImport?: boolean | undefined;
   country?: string | undefined;
   bbox?: string | undefined;
   baseUrl?: string | undefined;
@@ -203,8 +204,8 @@ function buildAirspacesApiUrl(opts: OpenAipApiOptions, page: number): string {
   return url.toString();
 }
 
-function hasApiAoi(opts: OpenAipApiOptions): boolean {
-  return Boolean(opts.country?.trim() || opts.bbox?.trim());
+function hasApiImportScope(opts: OpenAipApiOptions): boolean {
+  return Boolean(opts.globalImport || opts.country?.trim() || opts.bbox?.trim());
 }
 
 export class OpenAipAirspaceProvider extends BaseAirspaceProvider {
@@ -218,12 +219,14 @@ export class OpenAipAirspaceProvider extends BaseAirspaceProvider {
   }
 
   protected async fetch(): Promise<Airspace[]> {
-    if (!this.datasetPath && this.api.apiKey && hasApiAoi(this.api)) {
+    if (!this.datasetPath && this.api.apiKey && hasApiImportScope(this.api)) {
       return await this.fetchApiPages();
     }
 
-    if (!this.datasetPath && this.api.apiKey && !hasApiAoi(this.api)) {
-      this.logger?.warn('airspace(openaip): OPENAIP_API_KEY set but no OPENAIP_COUNTRY/BBOX AOI');
+    if (!this.datasetPath && this.api.apiKey && !hasApiImportScope(this.api)) {
+      this.logger?.warn(
+        'airspace(openaip): OPENAIP_API_KEY set but no OPENAIP_COUNTRY/BBOX or OPENAIP_GLOBAL_IMPORT=true',
+      );
     }
 
     const headers = apiKeyHeaders(this.api.apiKey);

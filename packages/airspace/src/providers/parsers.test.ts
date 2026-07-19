@@ -127,6 +127,39 @@ describe('openAIP parser', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('allows explicit global API import without country or bbox filters', async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = '';
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      requestedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          page: 1,
+          limit: 1,
+          totalCount: 1,
+          totalPages: 1,
+          items: [{ _id: 'global-1', name: 'GLOBAL FIR', type: 10, geometry: polygon }],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const provider = new OpenAipAirspaceProvider(undefined, undefined, undefined, {
+        apiKey: 'open-aip-secret',
+        baseUrl: 'https://api.core.openaip.net/api',
+        globalImport: true,
+      });
+      await provider.load();
+      expect(provider.allAirspaces()).toHaveLength(1);
+      const url = new URL(requestedUrl);
+      expect(url.searchParams.has('country')).toBe(false);
+      expect(url.searchParams.has('bbox')).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe('open-flightmaps parser', () => {

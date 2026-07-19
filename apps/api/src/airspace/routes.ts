@@ -38,6 +38,7 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
         AIRSPACE_PROVIDER?: string;
         OPENAIP_DATASET_PATH?: string;
         OPENAIP_API_KEY?: string;
+        OPENAIP_GLOBAL_IMPORT?: boolean;
         OPENAIP_BASE_URL?: string;
         OPENAIP_COUNTRY?: string;
         OPENAIP_BBOX?: string;
@@ -65,6 +66,14 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
             : {}),
           ...((config?.OPENAIP_API_KEY ?? process.env.OPENAIP_API_KEY)
             ? { openaipApiKey: config?.OPENAIP_API_KEY ?? process.env.OPENAIP_API_KEY }
+            : {}),
+          ...((config?.OPENAIP_GLOBAL_IMPORT ?? process.env.OPENAIP_GLOBAL_IMPORT)
+            ? {
+                openaipGlobalImport:
+                  config?.OPENAIP_GLOBAL_IMPORT === true ||
+                  process.env.OPENAIP_GLOBAL_IMPORT === 'true' ||
+                  process.env.OPENAIP_GLOBAL_IMPORT === '1',
+              }
             : {}),
           ...((config?.OPENAIP_BASE_URL ?? process.env.OPENAIP_BASE_URL)
             ? { openaipBaseUrl: config?.OPENAIP_BASE_URL ?? process.env.OPENAIP_BASE_URL }

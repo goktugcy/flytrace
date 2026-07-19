@@ -32,6 +32,8 @@ export interface AirspaceProviderOptions {
   openaipDatasetPath?: string | undefined;
   /** openAIP Core API key (config `OPENAIP_API_KEY`). */
   openaipApiKey?: string | undefined;
+  /** Allow openAIP API import without country/bbox filters (config `OPENAIP_GLOBAL_IMPORT`). */
+  openaipGlobalImport?: boolean | undefined;
   /** openAIP Core API base URL (config `OPENAIP_BASE_URL`). */
   openaipBaseUrl?: string | undefined;
   /** ISO alpha-2 country filter for openAIP API mode (config `OPENAIP_COUNTRY`). */
@@ -108,6 +110,7 @@ export async function selectAirspaceProvider(
         const { OpenAipAirspaceProvider } = await import('./openaip.ts');
         return new OpenAipAirspaceProvider(opts.openaipDatasetPath, opts.cellDeg, logger, {
           apiKey: opts.openaipApiKey,
+          globalImport: opts.openaipGlobalImport,
           baseUrl: opts.openaipBaseUrl,
           country: opts.openaipCountry,
           bbox: opts.openaipBbox,

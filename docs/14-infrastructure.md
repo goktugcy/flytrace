@@ -160,6 +160,9 @@ Branch protection: all gates green + review required to merge to `main`.
   `AIRSPACE_PROVIDER=openaip`, `OPENAIP_API_KEY`, and either `OPENAIP_COUNTRY` (for example `TR`)
   or `OPENAIP_BBOX`. The key is sent server-side with `x-openaip-api-key`; do not expose it to
   the web app.
+- For a global OpenAIP import, set `OPENAIP_GLOBAL_IMPORT=true` and leave `OPENAIP_COUNTRY` /
+  `OPENAIP_BBOX` empty. This paginates the full `/airspaces` list, so run it as a scheduled import
+  job and avoid app-start imports.
 - Import command: `bun run --cwd packages/db airspace:import`. It loads the provider dataset,
   validates geometry through PostGIS, reports invalid polygons, and upserts by
   `(provider,dataset_version,source_id)`.

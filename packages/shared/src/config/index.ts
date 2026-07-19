@@ -142,6 +142,7 @@ const infraSchema = z.object({
   // Airspace (Phase 3 §1): provider + optional dataset paths.
   AIRSPACE_PROVIDER: z.string().default('mock'),
   OPENAIP_API_KEY: z.string().optional(),
+  OPENAIP_GLOBAL_IMPORT: boolish.default('false'),
   OPENAIP_BASE_URL: z.string().url().default('https://api.core.openaip.net/api'),
   OPENAIP_COUNTRY: z.string().optional(),
   OPENAIP_BBOX: z.string().optional(),
