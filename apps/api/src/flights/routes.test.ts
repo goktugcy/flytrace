@@ -160,12 +160,12 @@ describe('flight read routes', () => {
   test('GET /flights/id/adsb:<hex> returns live ADS-B detail', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
-      expect(String(url)).toContain('/hex/4bc854');
+      expect(String(url)).toContain('/hex/4bc855');
       return new Response(
         JSON.stringify({
           ac: [
             {
-              hex: '4bc854',
+              hex: '4bc855',
               flight: 'PGT438B ',
               lat: 41.16,
               lon: 27.71,
@@ -186,15 +186,15 @@ describe('flight read routes', () => {
 
     try {
       const res = await createApp(fakeCtx(new FakeRedis())).request(
-        '/api/v1/flights/id/adsb%3A4bc854',
+        '/api/v1/flights/id/adsb%3A4bc855',
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         data: { flight: { flightId: string; callsign: string }; live: { icao24?: string } };
       };
-      expect(body.data.flight.flightId).toBe('adsb:4bc854');
+      expect(body.data.flight.flightId).toBe('adsb:4bc855');
       expect(body.data.flight.callsign).toBe('PGT438B');
-      expect(body.data.live.icao24).toBe('4bc854');
+      expect(body.data.live.icao24).toBe('4bc855');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -208,6 +208,15 @@ describe('flight read routes', () => {
     const body = (await res.json()) as { data: { points: unknown[]; count: number } };
     expect(body.data.points).toEqual([]);
     expect(body.data.count).toBe(0);
+  });
+
+  test('POST /flights/live/promote requires auth', async () => {
+    const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/live/promote', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+      body: JSON.stringify({ flightId: 'adsb:4bc854' }),
+    });
+    expect(res.status).toBe(401);
   });
 
   test('GET /flights/:callsign/:date → 404 when unknown', async () => {

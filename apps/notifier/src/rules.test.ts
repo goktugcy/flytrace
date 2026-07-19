@@ -8,7 +8,10 @@ describe('rules helpers', () => {
     expect(isCritical('delay')).toBe(true);
     expect(isCritical('gate_change')).toBe(true);
     expect(isCritical('cancelled')).toBe(true);
-    expect(isCritical('takeoff')).toBe(false);
+    expect(isCritical('takeoff')).toBe(true);
+    expect(isCritical('landing')).toBe(true);
+    expect(isCritical('flight_ended')).toBe(true);
+    expect(isCritical('top_of_climb')).toBe(false);
   });
 
   test('localHhMm formats in the given tz', () => {
@@ -34,7 +37,13 @@ describe('evaluate', () => {
 
   test('non-critical suppressed in quiet hours', () => {
     expect(
-      evaluate({ dbType: 'takeoff', nowMs: AT_2213_UTC, quietHours: q, recentCount: 0, cap: 5 }),
+      evaluate({
+        dbType: 'top_of_climb',
+        nowMs: AT_2213_UTC,
+        quietHours: q,
+        recentCount: 0,
+        cap: 5,
+      }),
     ).toEqual({
       deliver: false,
       reason: 'quiet_hours',
@@ -43,7 +52,13 @@ describe('evaluate', () => {
 
   test('non-critical suppressed over the cap', () => {
     expect(
-      evaluate({ dbType: 'takeoff', nowMs: AT_2213_UTC, quietHours: null, recentCount: 5, cap: 5 }),
+      evaluate({
+        dbType: 'top_of_climb',
+        nowMs: AT_2213_UTC,
+        quietHours: null,
+        recentCount: 5,
+        cap: 5,
+      }),
     ).toEqual({
       deliver: false,
       reason: 'frequency_cap',

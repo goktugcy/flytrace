@@ -107,12 +107,23 @@ export function createNotifyRepo(db: Database) {
     },
 
     /** Active watches for a flight (rule matcher entry point). */
-    async watchesForFlight(flightId: string): Promise<WatchlistItem[]> {
+    async watchesForFlight(flightId: string, icao24?: string | null): Promise<WatchlistItem[]> {
+      const hex = icao24?.trim().toLowerCase() || null;
       return db.execute(sql`
-        select id, user_id as "userId", flight_id as "flightId",
-               event_types as "eventTypes", channels
-        from watchlist_items
-        where flight_id = ${flightId} and active = true and deleted_at is null
+        select w.id, w.user_id as "userId", w.flight_id as "flightId",
+               w.event_types as "eventTypes", w.channels
+        from watchlist_items w
+        left join flights f on f.id = w.flight_id
+        where w.active = true
+          and w.deleted_at is null
+          and (
+            w.flight_id = ${flightId}
+            or (
+              ${hex}::text is not null
+              and f.status = 'active'
+              and lower(w.match->>'icao24') = ${hex}
+            )
+          )
       `) as unknown as Promise<WatchlistItem[]>;
     },
 

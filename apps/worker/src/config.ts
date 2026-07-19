@@ -7,6 +7,17 @@ const workerSchema = z.object({
   WORKER_BATCH_SIZE: z.coerce.number().int().positive().default(200),
   WORKER_BLOCK_MS: z.coerce.number().int().positive().default(5000),
   WORKER_MAX_POSITION_BATCH: z.coerce.number().int().positive().default(500),
+  WATCH_MONITOR_ENABLED: configSchemas.boolish.default('true'),
+  WATCH_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  WATCH_MONITOR_BATCH_SIZE: z.coerce.number().int().positive().default(40),
+  WATCH_MONITOR_REQUEST_DELAY_MS: z.coerce.number().int().nonnegative().default(750),
+  WATCH_MONITOR_MAX_POSITION_AGE_MS: z.coerce.number().int().positive().default(90_000),
+  WATCH_MONITOR_END_AFTER_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 60_000),
+  WATCH_MONITOR_ADSB_API_URL: z.string().default('https://api.adsb.lol/v2'),
   /** Register a fixture provider for these airline IATAs (offline/demo). */
   WORKER_FIXTURE_PROVIDER_IATAS: z
     .string()

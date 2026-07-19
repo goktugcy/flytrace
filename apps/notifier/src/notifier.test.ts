@@ -36,6 +36,45 @@ function takeoff(dedupe = `${FLIGHT}:takeoff`): EventEnvelope {
   );
 }
 
+function flightEnded(reason: 'landed' | 'timeout' = 'landed'): EventEnvelope {
+  return makeEnvelope(
+    {
+      type: 'FlightEnded',
+      occurredAt: '2023-11-14T22:35:00.000Z',
+      dedupeKey: `${FLIGHT}:ended:${reason}`,
+      partitionKey: FLIGHT,
+      payload: {
+        flightId: FLIGHT,
+        icao24: '4bb1a2',
+        endedAt: '2023-11-14T22:35:00.000Z',
+        reason,
+      },
+    },
+    { producer: 'tracker', clock },
+  );
+}
+
+function topOfClimb(): EventEnvelope {
+  return makeEnvelope(
+    {
+      type: 'ClimbDetected',
+      occurredAt: '2023-11-14T22:25:00.000Z',
+      dedupeKey: `${FLIGHT}:vphase:top_of_climb:1`,
+      partitionKey: FLIGHT,
+      payload: {
+        flightId: FLIGHT,
+        phase: 'top_of_climb',
+        at: '2023-11-14T22:25:00.000Z',
+        altFt: 33000,
+        vrateFpm: 0,
+        confidence: 0.8,
+        source: 'fixture',
+      },
+    },
+    { producer: 'tracker', clock },
+  );
+}
+
 class FakeRepo implements NotifierRepo {
   watches: WatchlistItem[] = [];
   endpoints: ChannelEndpoint[] = [];
@@ -212,10 +251,10 @@ describe('Notifier', () => {
 
   test('suppresses a non-critical alert during quiet hours', async () => {
     const { repo, webpush, notifier } = make();
-    repo.watches = [watch()];
+    repo.watches = [watch({ eventTypes: ['top_of_climb'] })];
     repo.endpoints = [endpoint('c1')];
     repo.quietHours = ALWAYS_QUIET;
-    await notifier.handle(takeoff());
+    await notifier.handle(topOfClimb());
     expect(webpush.sent).toHaveLength(0);
     expect(repo.suppressed[0]?.reason).toBe('quiet_hours');
   });
@@ -231,10 +270,10 @@ describe('Notifier', () => {
 
   test('suppresses non-critical over the frequency cap', async () => {
     const { repo, webpush, notifier } = make();
-    repo.watches = [watch()];
+    repo.watches = [watch({ eventTypes: ['top_of_climb'] })];
     repo.endpoints = [endpoint('c1')];
     repo.recentCount = 5; // == cap
-    await notifier.handle(takeoff());
+    await notifier.handle(topOfClimb());
     expect(webpush.sent).toHaveLength(0);
     expect(repo.suppressed[0]?.reason).toBe('frequency_cap');
   });
@@ -255,6 +294,27 @@ describe('Notifier', () => {
     );
     await notifier.handle(pos);
     expect(webpush.sent).toHaveLength(0);
+  });
+
+  test('does not duplicate landed FlightEnded when landing is also watched', async () => {
+    const { repo, webpush, notifier } = make();
+    repo.watches = [watch({ eventTypes: ['landing', 'flight_ended'] })];
+    repo.endpoints = [endpoint('c1')];
+
+    await notifier.handle(flightEnded('landed'));
+    expect(webpush.sent).toHaveLength(0);
+
+    await notifier.handle(flightEnded('timeout'));
+    expect(webpush.sent).toHaveLength(1);
+  });
+
+  test('delivers timeout FlightEnded to legacy landing watches', async () => {
+    const { repo, webpush, notifier } = make();
+    repo.watches = [watch({ eventTypes: ['landing'] })];
+    repo.endpoints = [endpoint('c1')];
+
+    await notifier.handle(flightEnded('timeout'));
+    expect(webpush.sent).toHaveLength(1);
   });
 });
 

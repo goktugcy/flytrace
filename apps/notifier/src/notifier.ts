@@ -16,7 +16,7 @@ const HOUR_MS = 60 * 60 * 1000;
 
 /** The slice of the notify repo the core needs (full NotifyRepo satisfies it). */
 export interface NotifierRepo {
-  watchesForFlight(flightId: string): Promise<WatchlistItem[]>;
+  watchesForFlight(flightId: string, icao24?: string | null): Promise<WatchlistItem[]>;
   insertQueued(input: {
     userId: string;
     watchlistItemId: string;
@@ -77,9 +77,9 @@ export class Notifier {
     dbType: DbEventTypeName,
     message: RenderedMessage,
   ): Promise<void> {
-    const items = await this.deps.repo.watchesForFlight(env.partitionKey);
+    const items = await this.deps.repo.watchesForFlight(env.partitionKey, eventIcao24(env));
     for (const item of items) {
-      if (!item.eventTypes.includes(dbType)) continue;
+      if (!watchMatchesEvent(item, dbType, env.payload)) continue;
       for (const channelKey of item.channels) {
         if (!this.deps.channels.has(channelKey)) continue; // adapter not enabled
         await this.deliverChannel(env, dbType, message, item, channelKey);
@@ -154,6 +154,22 @@ export class Notifier {
       await this.deps.repo.markFailed(row.id, `all ${channelKey} sends failed`);
     }
   }
+}
+
+function eventIcao24(env: EventEnvelope): string | null {
+  const raw = (env.payload as { icao24?: unknown }).icao24;
+  return typeof raw === 'string' && /^[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : null;
+}
+
+function watchMatchesEvent(
+  item: WatchlistItem,
+  dbType: DbEventTypeName,
+  payload: unknown,
+): boolean {
+  if (dbType !== 'flight_ended') return item.eventTypes.includes(dbType);
+  const reason = (payload as { reason?: unknown })?.reason;
+  if (reason === 'landed' && item.eventTypes.includes('landing')) return false;
+  return item.eventTypes.includes('flight_ended') || item.eventTypes.includes('landing');
 }
 
 /** Derive notifiable sub-events from a provider status change (docs/07 §7.4). */

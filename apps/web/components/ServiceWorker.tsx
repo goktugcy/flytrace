@@ -6,9 +6,12 @@ import { useEffect } from 'react';
 export function ServiceWorker() {
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        /* SW registration is best-effort */
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => registration.update().catch(() => undefined))
+        .catch(() => {
+          /* SW registration is best-effort */
+        });
     }
   }, []);
   return null;

@@ -1,5 +1,5 @@
-import { createNotifyRepo } from '@flytrace/db';
-import { HttpEmailTransport } from '@flytrace/notifications';
+import { createFlightReadRepo, createNotifyRepo } from '@flytrace/db';
+import { HttpEmailTransport, WebPushChannel } from '@flytrace/notifications';
 import { AppError, DB_EVENT_TYPES } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -41,6 +41,7 @@ const emailVerifySchema = z.object({ token: z.string().min(1) });
  */
 export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
   const repo = createNotifyRepo(ctx.db);
+  const flights = createFlightReadRepo(ctx.db);
   const app = new Hono<AppEnv>();
   const ok = (c: Context<AppEnv>, data: unknown, status = 200) =>
     c.json({ data, meta: { requestId: c.get('requestId') } }, status as 200);
@@ -64,10 +65,11 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     const parsed = createWatchSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success)
       throw new AppError('VALIDATION_ERROR', 'invalid watch', { details: parsed.error.issues });
+    const match = await enrichWatchMatch(parsed.data.match, parsed.data.flightId);
     const created = await repo.createWatch({
       userId: user.id,
       flightId: parsed.data.flightId,
-      match: parsed.data.match,
+      match,
       eventTypes: parsed.data.eventTypes,
       channels: parsed.data.channels,
     });
@@ -105,6 +107,49 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
       });
     await repo.upsertWebPush(user.id, parsed.data);
     return ok(c, { ok: true }, 201);
+  });
+
+  app.post('/channels/webpush/test', async (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    if (!ctx.config.WEB_PUSH_PUBLIC_KEY || !ctx.config.WEB_PUSH_PRIVATE_KEY) {
+      throw new AppError('UPSTREAM_UNAVAILABLE', 'Web Push is not configured on the server');
+    }
+
+    const endpoints = await repo.channelEndpoints(user.id, 'webpush');
+    if (endpoints.length === 0) {
+      throw new AppError('NOT_FOUND', 'No active browser push endpoint is connected');
+    }
+
+    const channel = new WebPushChannel({
+      publicKey: ctx.config.WEB_PUSH_PUBLIC_KEY,
+      privateKey: ctx.config.WEB_PUSH_PRIVATE_KEY,
+      subject: ctx.config.WEB_PUSH_SUBJECT,
+    });
+    let sent = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const endpoint of endpoints) {
+      const result = await channel.send(endpoint.address, {
+        title: 'FlyTrace test',
+        body: 'Server push delivery is working for this browser.',
+        url: '/settings/notifications',
+      });
+      if (result.ok) {
+        sent += 1;
+        continue;
+      }
+      failed += 1;
+      errors.push(result.error);
+      if (result.gone) await repo.disableChannel(endpoint.channelId);
+    }
+
+    if (sent === 0) {
+      throw new AppError('UPSTREAM_UNAVAILABLE', 'Browser push test failed', {
+        details: { failed, errors: errors.slice(0, 3) },
+      });
+    }
+    return ok(c, { sent, failed }, 201);
   });
 
   app.patch('/channels/:id', requireUser(), async (c) => {
@@ -178,4 +223,13 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   return app;
+
+  async function enrichWatchMatch(
+    base: Record<string, unknown>,
+    flightId: string,
+  ): Promise<Record<string, unknown>> {
+    const latest = await flights.getLatestPosition(flightId).catch(() => null);
+    const icao24 = latest?.icao24?.trim().toLowerCase();
+    return icao24 ? { ...base, icao24 } : base;
+  }
 }

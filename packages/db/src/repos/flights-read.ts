@@ -20,6 +20,7 @@ export interface FlightRow {
 
 export interface PositionRow {
   ts: string;
+  icao24?: string | null;
   lat: number | null;
   lon: number | null;
   altitudeFt: number | null;
@@ -78,9 +79,25 @@ function createReadRepo(db: Database) {
       return rows[0] ?? null;
     },
 
+    async getRecentFlightByIcao24(icao24: string, since: Date): Promise<FlightRow | null> {
+      const hex = icao24.trim().toLowerCase();
+      const sinceIso = since.toISOString();
+      const rows = (await db.execute(sql`
+        select f.id, f.callsign, f.flight_number as "flightNumber", f.status,
+               to_char(f.flight_date, 'YYYY-MM-DD') as "flightDate",
+               f.source, f.last_seen_at as "lastSeenAt", f.created_at as "createdAt"
+        from flights f
+        join flight_positions fp on fp.flight_id = f.id
+        where fp.icao24 = ${hex} and fp.ts >= ${sinceIso}::timestamptz
+        order by fp.ts desc
+        limit 1
+      `)) as unknown as FlightRow[];
+      return rows[0] ?? null;
+    },
+
     async getLatestPosition(flightId: string): Promise<PositionRow | null> {
       const rows = (await db.execute(sql`
-        select ts,
+        select ts, icao24,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
                altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
                heading_deg as "headingDeg",
@@ -96,7 +113,7 @@ function createReadRepo(db: Database) {
 
     async getTrack(flightId: string, limit: number): Promise<PositionRow[]> {
       return (await db.execute(sql`
-        select ts,
+        select ts, icao24,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
                altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
                heading_deg as "headingDeg",

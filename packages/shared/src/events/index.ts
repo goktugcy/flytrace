@@ -110,6 +110,8 @@ export type VerticalPhase = z.infer<typeof verticalPhaseSchema>;
 
 export const phaseEventPayloadSchema = z.object({
   flightId: z.string().uuid(),
+  icao24: z.string().optional(),
+  callsign: z.string().nullable().optional(),
   phase: verticalPhaseSchema,
   at: z.string().datetime(),
   altFt: z.number().nullable(),
@@ -123,6 +125,7 @@ export type PhaseEventPayload = z.infer<typeof phaseEventPayloadSchema>;
 export const transitionPayloadSchema = z.object({
   flightId: z.string().uuid(),
   icao24: z.string(),
+  callsign: z.string().nullable().optional(),
   at: z.string().datetime(),
   lat: z.number(),
   lon: z.number(),
@@ -148,6 +151,7 @@ export type FlightEndReason = z.infer<typeof flightEndReasonSchema>;
 export const flightEndedPayloadSchema = z.object({
   flightId: z.string().uuid(),
   icao24: z.string(),
+  callsign: z.string().nullable().optional(),
   endedAt: z.string().datetime(),
   reason: flightEndReasonSchema,
 });

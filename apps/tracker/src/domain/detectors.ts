@@ -338,6 +338,7 @@ function transitionEvent(
     payload: {
       flightId,
       icao24: obs.icao24,
+      callsign: obs.callsign,
       at: obs.ts,
       lat: obs.lat,
       lon: obs.lon,
@@ -376,6 +377,8 @@ function verticalEvent(
     partitionKey: flightId,
     payload: {
       flightId,
+      icao24: obs.icao24,
+      callsign: obs.callsign,
       phase,
       at: obs.ts,
       altFt: obs.altFt,
@@ -407,6 +410,7 @@ export function endFlightEvent(
     payload: {
       flightId: state.flightId,
       icao24: state.icao24,
+      callsign: state.callsign,
       endedAt,
       reason,
     },

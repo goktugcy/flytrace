@@ -39,6 +39,14 @@ describe('notify routes', () => {
     expect(res.status).toBe(401);
   });
 
+  test('POST /channels/webpush/test requires auth', async () => {
+    const res = await createApp(fakeCtx()).request('/api/v1/channels/webpush/test', {
+      method: 'POST',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(res.status).toBe(401);
+  });
+
   test('PATCH /watchlist/:id requires auth', async () => {
     const res = await createApp(fakeCtx()).request(
       '/api/v1/watchlist/00000000-0000-7000-8000-000000000001',

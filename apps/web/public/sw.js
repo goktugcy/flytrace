@@ -1,14 +1,16 @@
 // FlyTrace service worker — Web Push + a network-first offline shell.
-const CACHE = 'flytrace-v1';
+const CACHE = 'flytrace-v2';
 
-self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+    caches.keys().then(async (keys) => {
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    }),
   );
-  self.clients.claim();
 });
 
 // Network-first for navigations; fall back to the last-seen page when offline.
@@ -38,6 +40,8 @@ self.addEventListener('push', (event) => {
       body: data.body,
       icon: '/icon.svg',
       badge: '/icon.svg',
+      tag: data.tag,
+      renotify: Boolean(data.tag),
       data: { url: data.url },
     }),
   );

@@ -3,12 +3,14 @@ import {
   type SearchResultRow,
   createCatalogRepo,
   createFlightReadRepo,
+  createFlightRepo,
   createFlightStatusRepo,
 } from '@flytrace/db';
-import { AppError, type FlightDetail, type LiveFlight } from '@flytrace/shared';
+import { AppError, type FlightDetail, type LiveFlight, uuidv7 } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
+import { requireUser } from '../auth/routes.ts';
 import type { AppContext } from '../context.ts';
 import { type Bbox, inBbox } from '../ws/channels.ts';
 import { createHotState } from './hot-state.ts';
@@ -60,10 +62,12 @@ const ADSB_LIVE_API_URL = (process.env.ADSB_API_URL ?? 'https://api.adsb.lol/v2'
   /\/+$/,
   '',
 );
-const ADSB_VIEWPORT_TTL_MS = 5_000;
+const ADSB_VIEWPORT_TTL_MS = 15_000;
 const ADSB_VIEWPORT_MAX_RADIUS_NM = 250;
 const ADSB_VIEWPORT_MIN_RADIUS_NM = 8;
 const ADSB_VIEWPORT_FRESH_MS = 90_000;
+const ADSB_DETAIL_TTL_MS = 2 * 60 * 1000;
+const PROMOTED_FLIGHT_REUSE_MS = 6 * 60 * 60 * 1000;
 
 interface AdsbViewportAircraft extends AdsbAircraft {
   alt_baro?: number | 'ground' | null;
@@ -85,6 +89,7 @@ interface ViewportLiveLookup {
 }
 
 const viewportLiveCache = new Map<string, { exp: number; value: ViewportLiveLookup }>();
+const liveByIcaoCache = new Map<string, { exp: number; value: LiveFlight }>();
 
 function toEndpoint(a: AdsbdbAirport): FlightRoute['origin'] | null {
   if (typeof a.latitude !== 'number' || typeof a.longitude !== 'number') return null;
@@ -106,6 +111,44 @@ const bboxSchema = z.string().transform((v, ctx) => {
   }
   return parts as [number, number, number, number];
 });
+const nullableNumberSchema = z.number().nullable().optional();
+const promoteLiveSchema = z
+  .object({
+    flightId: z.string().optional(),
+    icao24: z
+      .string()
+      .regex(/^[0-9a-fA-F]{6}$/)
+      .optional(),
+    snapshot: z
+      .object({
+        flightId: z.string().optional(),
+        icao24: z.string().regex(/^[0-9a-fA-F]{6}$/),
+        callsign: z.string().nullable().optional(),
+        lat: z.number(),
+        lon: z.number(),
+        altitudeFt: nullableNumberSchema,
+        geoAltitudeFt: nullableNumberSchema,
+        headingDeg: nullableNumberSchema,
+        groundSpeedKt: nullableNumberSchema,
+        verticalRateFpm: nullableNumberSchema,
+        onGround: z.boolean().optional(),
+        squawk: z.string().nullable().optional(),
+        category: z.string().nullable().optional(),
+        qualityState: z.string().optional(),
+        source: z.string().nullable().optional(),
+        sourceTimestamp: z.string().optional(),
+        ageMs: z.number().optional(),
+        qualityScore: z.number().optional(),
+        positionSource: z.string().optional(),
+        isMlat: z.boolean().optional(),
+        receivedAt: z.string().optional(),
+        ts: z.string(),
+      })
+      .optional(),
+  })
+  .refine((v) => v.snapshot || v.icao24 || v.flightId?.startsWith('adsb:'), {
+    message: 'snapshot, icao24 or adsb flightId is required',
+  });
 
 /**
  * Public flight read endpoints (docs/11 §11.6). Live reads come from Redis hot
@@ -115,6 +158,7 @@ const bboxSchema = z.string().transform((v, ctx) => {
  */
 export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   const read = createFlightReadRepo(ctx.db);
+  const write = createFlightRepo(ctx.db);
   const catalog = createCatalogRepo(ctx.db);
   const statusRead = createFlightStatusRepo(ctx.db);
   const hot = createHotState(ctx.redis, ctx.redisPrefix);
@@ -247,6 +291,24 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     });
   });
 
+  app.post('/flights/live/promote', requireUser(), async (c) => {
+    const parsed = promoteLiveSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid live flight', {
+        details: parsed.error.issues,
+      });
+
+    const live =
+      liveFromPromoteSnapshot(parsed.data.snapshot, ctx.clock.now()) ??
+      (await lookupLiveIcao(extractAdsbIcao(parsed.data), ctx.clock.now()));
+    if (!live) throw new AppError('FLIGHT_NOT_FOUND', 'live flight not found');
+
+    const persisted = await promoteLiveFlight(read, write, live, ctx.clock.now());
+    const flight = await read.getFlightById(persisted.flightId);
+    if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'promoted flight not found');
+    return ok(c, { flightId: persisted.flightId, detail: await detailFor(flight) }, true);
+  });
+
   // Typeahead search over flights (callsign / flight number). OpenSky stores
   // ICAO callsigns (THY281); if the query looks like an IATA flight number
   // (TK281), resolve the airline's ICAO prefix and search that variant too.
@@ -301,6 +363,9 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     ]);
     const persistedLive: FlightDetail['live'] = dbLive
       ? {
+          flightId: flight.id,
+          ...(dbLive.icao24 ? { icao24: dbLive.icao24 } : {}),
+          callsign: flight.callsign,
           lat: dbLive.lat,
           lon: dbLive.lon,
           altitudeFt: dbLive.altitudeFt,
@@ -325,7 +390,7 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
         source: flight.source,
       },
       live,
-      statusSnapshot,
+      statusSnapshot: statusSnapshot ?? derivedStatusSnapshot(flight, live),
       timeline: events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt,
@@ -345,7 +410,15 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
       source: live.source ?? 'adsb',
     },
     live: detailLiveFromHot(live),
-    statusSnapshot: null,
+    statusSnapshot: derivedStatusSnapshot(
+      {
+        status: live.onGround ? 'landed' : 'active',
+        source: live.source ?? 'adsb',
+        lastSeenAt: live.ts,
+        createdAt: live.ts,
+      },
+      detailLiveFromHot(live),
+    ),
     timeline: [],
   });
 
@@ -433,6 +506,142 @@ function detailLiveFromHot(live: LiveFlight): NonNullable<FlightDetail['live']> 
   };
 }
 
+function extractAdsbIcao(input: z.infer<typeof promoteLiveSchema>): string {
+  const raw =
+    input.snapshot?.icao24 ??
+    input.icao24 ??
+    (input.flightId?.startsWith('adsb:') ? input.flightId.slice('adsb:'.length) : '');
+  const icao24 = raw.trim().toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(icao24)) throw new AppError('BAD_REQUEST', 'hex must be 6 hex digits');
+  return icao24;
+}
+
+function liveFromPromoteSnapshot(
+  snapshot: z.infer<typeof promoteLiveSchema>['snapshot'],
+  nowMs: number,
+): LiveFlight | null {
+  if (!snapshot) return null;
+  const icao24 = snapshot.icao24.trim().toLowerCase();
+  const tsMs = Date.parse(snapshot.ts);
+  if (!Number.isFinite(tsMs)) return null;
+  const ageMs = Math.max(0, nowMs - tsMs);
+  return {
+    flightId: snapshot.flightId ?? `adsb:${icao24}`,
+    icao24,
+    callsign: snapshot.callsign?.trim() || null,
+    lat: snapshot.lat,
+    lon: snapshot.lon,
+    altitudeFt: snapshot.altitudeFt ?? null,
+    geoAltitudeFt: snapshot.geoAltitudeFt ?? null,
+    headingDeg: snapshot.headingDeg ?? null,
+    groundSpeedKt: snapshot.groundSpeedKt ?? null,
+    verticalRateFpm: snapshot.verticalRateFpm ?? null,
+    onGround: snapshot.onGround ?? false,
+    squawk: snapshot.squawk ?? null,
+    category: snapshot.category ?? null,
+    qualityState: qualityStateForAge(ageMs),
+    source: snapshot.source ?? 'adsb',
+    ...(snapshot.sourceTimestamp ? { sourceTimestamp: snapshot.sourceTimestamp } : {}),
+    ageMs: Math.round(ageMs),
+    qualityScore: qualityScoreForAge(ageMs),
+    ...(snapshot.positionSource ? { positionSource: snapshot.positionSource } : {}),
+    ...(snapshot.isMlat !== undefined ? { isMlat: snapshot.isMlat } : {}),
+    receivedAt: new Date(nowMs).toISOString(),
+    ts: snapshot.ts,
+  };
+}
+
+async function promoteLiveFlight(
+  read: ReturnType<typeof createFlightReadRepo>,
+  write: ReturnType<typeof createFlightRepo>,
+  live: LiveFlight,
+  nowMs: number,
+): Promise<{ flightId: string }> {
+  const since = new Date(nowMs - PROMOTED_FLIGHT_REUSE_MS);
+  const flightDate = live.ts.slice(0, 10);
+  const existingByCallsign = live.callsign ? await read.getFlight(live.callsign, flightDate) : null;
+  const reusableByCallsign = existingByCallsign?.status === 'active' ? existingByCallsign : null;
+  const existingByIcao =
+    !reusableByCallsign && !live.callsign
+      ? await read.getRecentFlightByIcao24(live.icao24, since)
+      : null;
+  const reusableByIcao = existingByIcao?.status === 'active' ? existingByIcao : null;
+  const flightId = reusableByCallsign?.id ?? reusableByIcao?.id ?? uuidv7(nowMs);
+  const lastSeenAt = validDate(live.ts) ?? new Date(nowMs);
+
+  await write.upsertFlight({
+    flightId,
+    callsign: live.callsign ?? live.icao24.toUpperCase(),
+    flightDate,
+    source: live.source ?? 'adsb',
+    lastSeenAt,
+  });
+  await write.insertPositions([positionFromLive(flightId, live)]);
+  await write.insertEvent({
+    flightId,
+    type: 'flight_detected',
+    occurredAt: lastSeenAt,
+    confidence: 1,
+    source: live.source ?? 'adsb',
+    payload: {
+      flightId,
+      icao24: live.icao24,
+      callsign: live.callsign,
+      firstPosition: { lat: live.lat, lon: live.lon, ts: live.ts },
+      source: live.source ?? 'adsb',
+    },
+    dedupeKey: `${flightId}:detected`,
+  });
+  return { flightId };
+}
+
+function derivedStatusSnapshot(
+  flight: Pick<FlightRow, 'status' | 'source' | 'lastSeenAt' | 'createdAt'>,
+  live: FlightDetail['live'],
+): NonNullable<FlightDetail['statusSnapshot']> {
+  return {
+    providerKey: live?.source ?? flight.source ?? 'derived',
+    status: live?.onGround
+      ? 'landed'
+      : flight.status === 'unknown' && live
+        ? 'active'
+        : flight.status,
+    gate: null,
+    terminal: null,
+    baggageBelt: null,
+    scheduledDeparture: null,
+    estimatedDeparture: null,
+    actualDeparture: null,
+    scheduledArrival: null,
+    estimatedArrival: null,
+    actualArrival: null,
+    fetchedAt: live?.ts ?? flight.lastSeenAt ?? flight.createdAt,
+  };
+}
+
+function positionFromLive(flightId: string, live: LiveFlight) {
+  return {
+    flightId,
+    ts: validDate(live.ts) ?? new Date(),
+    icao24: live.icao24,
+    lon: live.lon,
+    lat: live.lat,
+    altitudeFt: live.altitudeFt,
+    geoAltitudeFt: live.geoAltitudeFt ?? null,
+    headingDeg: live.headingDeg,
+    groundSpeedKt: live.groundSpeedKt,
+    verticalRateFpm: live.verticalRateFpm ?? null,
+    onGround: live.onGround,
+    squawk: live.squawk ?? null,
+    source: live.source ?? 'adsb',
+  };
+}
+
+function validDate(iso: string): Date | null {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function clampBbox([west, south, east, north]: Bbox): Bbox {
   if (![west, south, east, north].every(Number.isFinite) || south >= north) {
     throw new AppError('BAD_REQUEST', 'invalid bbox');
@@ -473,6 +682,7 @@ async function lookupViewportLive(bbox: Bbox, nowMs: number): Promise<ViewportLi
     if (!flight || !inBbox(flight.lat, flight.lon, bbox)) continue;
     if (seenIcao.has(flight.icao24)) continue;
     seenIcao.add(flight.icao24);
+    cacheLiveByIcao(flight, nowMs);
     flights.push(flight);
   }
 
@@ -662,6 +872,8 @@ async function lookupLiveCallsign(
 async function lookupLiveIcao(icao24: string, nowMs: number): Promise<LiveFlight | null> {
   const hex = icao24.trim().toLowerCase();
   if (!/^[0-9a-f]{6}$/.test(hex)) throw new AppError('BAD_REQUEST', 'hex must be 6 hex digits');
+  const cached = cachedLiveByIcao(hex, nowMs);
+  if (cached) return cached;
   try {
     const res = await fetch(`${ADSB_LIVE_API_URL}/hex/${encodeURIComponent(hex)}`, {
       headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
@@ -671,13 +883,52 @@ async function lookupLiveIcao(icao24: string, nowMs: number): Promise<LiveFlight
     const ac = ((await res.json()) as { ac?: AdsbViewportAircraft[] }).ac ?? [];
     for (const raw of ac) {
       const live = liveFlightFromAdsb(raw, nowMs);
-      if (live?.icao24 === hex) return live;
+      if (live?.icao24 === hex) {
+        cacheLiveByIcao(live, nowMs);
+        return live;
+      }
     }
     return null;
   } catch (err) {
     if (err instanceof AppError) throw err;
     return null;
   }
+}
+
+function cacheLiveByIcao(live: LiveFlight, nowMs: number): void {
+  liveByIcaoCache.set(live.icao24, { exp: nowMs + ADSB_DETAIL_TTL_MS, value: live });
+  if (liveByIcaoCache.size <= 1000) return;
+  for (const [key, cached] of liveByIcaoCache) {
+    if (cached.exp <= nowMs) liveByIcaoCache.delete(key);
+  }
+  while (liveByIcaoCache.size > 1000) {
+    const oldest = liveByIcaoCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    liveByIcaoCache.delete(oldest);
+  }
+}
+
+function cachedLiveByIcao(icao24: string, nowMs: number): LiveFlight | null {
+  const cached = liveByIcaoCache.get(icao24);
+  if (!cached) return null;
+  if (cached.exp <= nowMs) {
+    liveByIcaoCache.delete(icao24);
+    return null;
+  }
+  return refreshLiveAge(cached.value, nowMs);
+}
+
+function refreshLiveAge(live: LiveFlight, nowMs: number): LiveFlight {
+  const tsMs = Date.parse(live.ts);
+  if (!Number.isFinite(tsMs)) return live;
+  const ageMs = Math.max(0, nowMs - tsMs);
+  return {
+    ...live,
+    ageMs: Math.round(ageMs),
+    qualityScore: qualityScoreForAge(ageMs),
+    qualityState: qualityStateForAge(ageMs),
+    receivedAt: new Date(nowMs).toISOString(),
+  };
 }
 
 async function requireFlight(c: Context<AppEnv>, read: ReturnType<typeof createFlightReadRepo>) {

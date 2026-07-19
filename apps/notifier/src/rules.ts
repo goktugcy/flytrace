@@ -6,6 +6,9 @@ import type { DbEventTypeName } from '@flytrace/shared';
  * deliver, bypassing both. Pure + clock-injected for deterministic tests.
  */
 export const CRITICAL_TYPES: ReadonlySet<DbEventTypeName> = new Set([
+  'takeoff',
+  'landing',
+  'flight_ended',
   'delay',
   'gate_change',
   'cancelled',

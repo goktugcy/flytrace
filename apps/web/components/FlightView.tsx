@@ -9,14 +9,20 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
 import { readLiveFlightDetail } from '@/lib/live-detail-cache';
 import type { FlightDetail } from '@flytrace/shared';
-import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, RadioTower } from 'lucide-react';
+import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, Info, RadioTower } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
 
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
-const WATCH_EVENT_TYPES = ['takeoff', 'landing', 'top_of_climb', 'top_of_descent'] as const;
+const WATCH_EVENT_TYPES = [
+  'takeoff',
+  'landing',
+  'top_of_climb',
+  'top_of_descent',
+  'flight_ended',
+] as const;
 const CHANNEL_KEYS = ['telegram', 'webpush', 'email'] as const;
 
 type Live = NonNullable<FlightDetail['live']>;
@@ -74,6 +80,7 @@ function statusVariant(status: string): 'success' | 'warning' | 'destructive' | 
 }
 
 export function FlightView({ flightId }: { flightId: string }) {
+  const routeFlightId = decodeFlightId(flightId);
   const [detail, setDetail] = useState<FlightDetail | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -91,9 +98,13 @@ export function FlightView({ flightId }: { flightId: string }) {
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/flights/id/${encodeURIComponent(flightId)}`);
+        const res = await fetch(
+          `${API_BASE}/api/v1/flights/id/${encodeURIComponent(routeFlightId)}`,
+        );
         if (!res.ok) {
-          const cached = flightId.startsWith('adsb:') ? readLiveFlightDetail(flightId) : null;
+          const cached = routeFlightId.startsWith('adsb:')
+            ? readLiveFlightDetail(routeFlightId)
+            : null;
           if (cached) {
             setDetail(cached);
             setLive(cached.live);
@@ -152,14 +163,14 @@ export function FlightView({ flightId }: { flightId: string }) {
         }
       }
     });
-    void client.connect().then(() => client.subscribe(`flight:${flightId}`));
+    void client.connect().then(() => client.subscribe(`flight:${routeFlightId}`));
 
     return () => {
       cancelled = true;
       off();
       client.close();
     };
-  }, [flightId]);
+  }, [routeFlightId]);
 
   const airspaceKey =
     live?.lat != null && live.lon != null
@@ -203,31 +214,41 @@ export function FlightView({ flightId }: { flightId: string }) {
   }, [airspaceKey]);
 
   async function onWatch() {
-    if (flightId.startsWith('adsb:')) {
-      setWatchState('error');
-      setWatchMsg('Live ADS-B aircraft must be persisted before alerts can be created.');
-      return;
-    }
     setWatchState('working');
     try {
+      if (!detail) throw new Error('Flight detail is not ready');
       const session = await fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' });
       const user = ((await session.json()) as { data: { user: unknown } }).data.user;
       if (!user) {
-        window.location.href = `/signin?next=/flights/id/${flightId}`;
+        window.location.href = `/signin?next=/flights/id/${encodeURIComponent(routeFlightId)}`;
         return;
       }
       const channels = await preferredWatchChannels();
+      let watchFlightId = detail.flight.flightId;
+      if (watchFlightId.startsWith('adsb:')) {
+        const promoted = await promoteLiveFlightForAlerts(detail);
+        watchFlightId = promoted.flightId;
+        setDetail(promoted.detail);
+        setLive(promoted.detail.live);
+        setTimeline(timelineFromDetail(promoted.detail));
+        window.history.replaceState(null, '', `/flights/id/${watchFlightId}`);
+      }
       const res = await fetch(`${API_BASE}/api/v1/watchlist`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          flightId,
+          flightId: watchFlightId,
           eventTypes: WATCH_EVENT_TYPES,
           channels,
         }),
       });
-      if (!res.ok) throw new Error(`watch ${res.status}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: { message?: string; code?: string };
+        };
+        throw new Error(body.error?.message ?? body.error?.code ?? `watch ${res.status}`);
+      }
       setWatchState('watching');
       setWatchMsg(`Watching — alerts will use ${channels.map(channelLabel).join(', ')}.`);
     } catch (e) {
@@ -261,8 +282,6 @@ export function FlightView({ flightId }: { flightId: string }) {
     );
   }
 
-  const canWatch = !detail.flight.flightId.startsWith('adsb:');
-
   return (
     <Container>
       <BackLink />
@@ -275,24 +294,22 @@ export function FlightView({ flightId }: { flightId: string }) {
         {detail.flight.flightNumber && (
           <span className="text-muted-foreground">{detail.flight.flightNumber}</span>
         )}
-        {canWatch && (
-          <div className="ml-auto">
-            <Button
-              type="button"
-              onClick={onWatch}
-              disabled={watchState === 'working' || watchState === 'watching'}
-              variant={watchState === 'watching' ? 'secondary' : 'default'}
-            >
-              {watchState === 'working' && <Spinner />}
-              {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
-              {watchState === 'watching'
-                ? 'Watching'
-                : watchState === 'working'
-                  ? 'Setting up…'
-                  : 'Watch'}
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto">
+          <Button
+            type="button"
+            onClick={onWatch}
+            disabled={watchState === 'working' || watchState === 'watching'}
+            variant={watchState === 'watching' ? 'secondary' : 'default'}
+          >
+            {watchState === 'working' && <Spinner />}
+            {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
+            {watchState === 'watching'
+              ? 'Watching'
+              : watchState === 'working'
+                ? 'Setting up…'
+                : 'Watch'}
+          </Button>
+        </div>
       </header>
       {watchMsg && (
         <p
@@ -428,6 +445,14 @@ function BackLink() {
   );
 }
 
+function decodeFlightId(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function liveFromPositionPayload(raw: unknown, prev: Live | null): Live | null {
   if (!raw || typeof raw !== 'object') return prev;
   const p = raw as {
@@ -551,6 +576,7 @@ function SignalPanel({ live }: { live: Live }) {
 }
 
 function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
+  const telemetryOnly = snapshot ? isTelemetryOnlySnapshot(snapshot) : false;
   return (
     <Card>
       <CardHeader>
@@ -571,6 +597,12 @@ function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
                 Fetched {dateTimeShort(snapshot.fetchedAt)}
               </span>
             </div>
+            {telemetryOnly && (
+              <div className="flex gap-2 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+                <Info className="mt-0.5 size-4 shrink-0" />
+                <span>ADS-B telemetry only. Gate, terminal and schedule data are unavailable.</span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
               <Field label="Gate" value={snapshot.gate ?? '—'} />
               <Field label="Terminal" value={snapshot.terminal ?? '—'} />
@@ -589,6 +621,22 @@ function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
       </CardContent>
     </Card>
   );
+}
+
+function isTelemetryOnlySnapshot(snapshot: StatusSnapshot): boolean {
+  const telemetryProviders = new Set(['adsb', 'adsb-watch', 'derived']);
+  if (!telemetryProviders.has(snapshot.providerKey)) return false;
+  return [
+    snapshot.gate,
+    snapshot.terminal,
+    snapshot.baggageBelt,
+    snapshot.scheduledDeparture,
+    snapshot.estimatedDeparture,
+    snapshot.actualDeparture,
+    snapshot.scheduledArrival,
+    snapshot.estimatedArrival,
+    snapshot.actualArrival,
+  ].every((value) => value == null || value === '');
 }
 
 function TimelineMeta({ entry }: { entry: TimelineEntry }) {
@@ -811,6 +859,41 @@ function FlightSkeleton() {
   );
 }
 
+async function promoteLiveFlightForAlerts(
+  detail: FlightDetail,
+): Promise<{ flightId: string; detail: FlightDetail }> {
+  const live = detail.live;
+  if (!live?.icao24 || live.lat == null || live.lon == null) {
+    throw new Error('Live flight position is missing.');
+  }
+  const res = await fetch(`${API_BASE}/api/v1/flights/live/promote`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      flightId: detail.flight.flightId,
+      snapshot: live,
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    data?: { flightId: string; detail: FlightDetail };
+    error?: { message?: string; code?: string };
+  };
+  if (!res.ok || !body.data) {
+    throw new Error(body.error?.message ?? body.error?.code ?? `promote ${res.status}`);
+  }
+  return body.data;
+}
+
+function timelineFromDetail(detail: FlightDetail): TimelineEntry[] {
+  return detail.timeline.map((e) => ({
+    type: e.type,
+    occurredAt: e.occurredAt,
+    confidence: e.confidence,
+    source: e.source,
+  }));
+}
+
 async function preferredWatchChannels(): Promise<ChannelKey[]> {
   const settingsRes = await fetch(`${API_BASE}/api/v1/settings`, { credentials: 'include' });
   const settingsBody = (await settingsRes.json().catch(() => ({}))) as {
@@ -864,19 +947,27 @@ async function subscribeWebPush(): Promise<void> {
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('Notification permission denied');
 
-  const reg = await navigator.serviceWorker.register('/sw.js');
-  await navigator.serviceWorker.ready;
+  const reg = await registerServiceWorker();
 
   const keyRes = await fetch(`${API_BASE}/api/v1/config/webpush`);
   const publicKey = ((await keyRes.json()) as { data: { publicKey: string | null } }).data
     .publicKey;
   if (!publicKey) throw new Error('Web Push is not configured on the server');
 
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
+  let existing = await reg.pushManager.getSubscription();
+  if (
+    existing &&
+    !sameApplicationServerKey(existing.options.applicationServerKey, applicationServerKey)
+  ) {
+    await existing.unsubscribe();
+    existing = null;
+  }
   const sub =
-    (await reg.pushManager.getSubscription()) ??
+    existing ??
     (await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      applicationServerKey,
     }));
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
   if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
@@ -889,6 +980,25 @@ async function subscribeWebPush(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
   });
+}
+
+async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  await reg.update().catch(() => undefined);
+  return navigator.serviceWorker.ready;
+}
+
+function sameApplicationServerKey(
+  current: ArrayBuffer | null | undefined,
+  expected: Uint8Array<ArrayBuffer>,
+): boolean {
+  if (!current) return false;
+  const actual = new Uint8Array(current);
+  if (actual.length !== expected.length) return false;
+  for (let i = 0; i < actual.length; i += 1) {
+    if (actual[i] !== expected[i]) return false;
+  }
+  return true;
 }
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {

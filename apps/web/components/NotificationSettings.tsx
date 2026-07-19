@@ -42,6 +42,7 @@ const EVENT_ORDER = [
   'top_of_climb',
   'top_of_descent',
   'landing',
+  'flight_ended',
   'delay',
   'gate_change',
   'cancelled',
@@ -106,6 +107,7 @@ const EVENT_LABELS: Record<string, string> = {
   top_of_climb: 'Cruise reached',
   top_of_descent: 'Descent started',
   landing: 'Landing',
+  flight_ended: 'Flight ended',
   delay: 'Delay',
   gate_change: 'Gate change',
   cancelled: 'Cancelled',
@@ -122,7 +124,7 @@ const EVENT_GROUPS: {
   {
     id: 'phase',
     label: 'Flight phase',
-    events: ['takeoff', 'top_of_climb', 'top_of_descent', 'landing'],
+    events: ['takeoff', 'top_of_climb', 'top_of_descent', 'landing', 'flight_ended'],
   },
   {
     id: 'ops',
@@ -274,6 +276,23 @@ export function NotificationSettings() {
     });
   }
 
+  async function testWebPush() {
+    await runAction('webpush:test', async () => {
+      await showLocalWebPushTest();
+      const result = await api<{ sent: number; failed: number }>('/channels/webpush/test', {
+        method: 'POST',
+      });
+      setMsg({
+        text:
+          result.failed > 0
+            ? `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s); ${result.failed} failed.`
+            : `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s).`,
+        tone: result.failed > 0 ? 'err' : 'ok',
+      });
+      await refreshData();
+    });
+  }
+
   async function savePreferences() {
     if (defaultChannels.length === 0) {
       setMsg({ text: 'Choose at least one default channel.', tone: 'err' });
@@ -419,6 +438,7 @@ export function NotificationSettings() {
                     : 'not_configured'
                 }
                 onConnect={connectWebPush}
+                onTest={testWebPush}
                 onToggle={updateChannel}
                 onDelete={deleteChannel}
               />
@@ -484,6 +504,7 @@ function ChannelPanel({
   email,
   onEmailChange,
   onConnect,
+  onTest,
   onToggle,
   onDelete,
 }: {
@@ -494,6 +515,7 @@ function ChannelPanel({
   email?: string;
   onEmailChange?: (value: string) => void;
   onConnect: () => void;
+  onTest?: () => void;
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
 }) {
@@ -502,6 +524,7 @@ function ChannelPanel({
   const pending = channels.some((ch) => !ch.verified);
   const Icon = meta.icon;
   const connectBusy = busy === kind;
+  const testBusy = busy === `${kind}:test`;
 
   return (
     <Card>
@@ -533,21 +556,40 @@ function ChannelPanel({
             </Button>
           </div>
         ) : (
-          <Button
-            type="button"
-            variant={ready ? 'outline' : 'secondary'}
-            onClick={onConnect}
-            disabled={connectBusy || status === 'unsupported' || status === 'not_configured'}
-          >
-            {connectBusy ? (
-              <Loader2 className="animate-spin" />
-            ) : ready ? (
-              <CheckCircle2 />
-            ) : (
-              <Send />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={ready ? 'outline' : 'secondary'}
+              onClick={onConnect}
+              disabled={connectBusy || status === 'unsupported' || status === 'not_configured'}
+            >
+              {connectBusy ? (
+                <Loader2 className="animate-spin" />
+              ) : ready ? (
+                <CheckCircle2 />
+              ) : (
+                <Send />
+              )}
+              {ready ? 'Add another endpoint' : 'Connect'}
+            </Button>
+            {kind === 'webpush' && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onTest}
+                disabled={
+                  testBusy ||
+                  status === 'unsupported' ||
+                  status === 'not_configured' ||
+                  status === 'denied'
+                }
+                title="Send a browser push test"
+              >
+                {testBusy ? <Loader2 className="animate-spin" /> : <BellRing />}
+                Test
+              </Button>
             )}
-            {ready ? 'Add another endpoint' : 'Connect'}
-          </Button>
+          </div>
         )}
 
         {channels.length === 0 ? (
@@ -1139,18 +1181,25 @@ async function subscribeWebPush(): Promise<void> {
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('Notification permission is blocked.');
 
-  const reg = await navigator.serviceWorker.register('/sw.js');
-  await navigator.serviceWorker.ready;
+  const reg = await registerServiceWorker();
 
   const { publicKey } = await api<{ publicKey: string | null }>('/config/webpush');
   if (!publicKey) throw new Error('Web Push is not configured on the server.');
 
-  const existing = await reg.pushManager.getSubscription();
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
+  let existing = await reg.pushManager.getSubscription();
+  if (
+    existing &&
+    !sameApplicationServerKey(existing.options.applicationServerKey, applicationServerKey)
+  ) {
+    await existing.unsubscribe();
+    existing = null;
+  }
   const sub =
     existing ??
     (await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      applicationServerKey,
     }));
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
 
@@ -1162,6 +1211,46 @@ async function subscribeWebPush(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
   });
+}
+
+async function showLocalWebPushTest(): Promise<void> {
+  if (
+    !('serviceWorker' in navigator) ||
+    !('PushManager' in window) ||
+    !('Notification' in window)
+  ) {
+    throw new Error('Web Push is not supported in this browser.');
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Notification permission is blocked.');
+
+  const reg = await registerServiceWorker();
+  await reg.showNotification('FlyTrace test', {
+    body: 'Chrome can display notifications for this site.',
+    icon: '/icon.svg',
+    badge: '/icon.svg',
+    tag: 'flytrace-local-test',
+    data: { url: '/settings/notifications' },
+  });
+}
+
+async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  await reg.update().catch(() => undefined);
+  return navigator.serviceWorker.ready;
+}
+
+function sameApplicationServerKey(
+  current: ArrayBuffer | null | undefined,
+  expected: Uint8Array<ArrayBuffer>,
+): boolean {
+  if (!current) return false;
+  const actual = new Uint8Array(current);
+  if (actual.length !== expected.length) return false;
+  for (let i = 0; i < actual.length; i += 1) {
+    if (actual[i] !== expected[i]) return false;
+  }
+  return true;
 }
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {

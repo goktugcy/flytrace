@@ -36,6 +36,7 @@ import {
   startProviderFetchWorker,
 } from './queues.ts';
 import { ProviderScheduler } from './scheduler.ts';
+import { WatchedFlightMonitor } from './watch-monitor.ts';
 
 export interface WorkerContext {
   config: WorkerConfig;
@@ -195,6 +196,22 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     new AirspaceImportService({ db, config, logger }),
     logger,
   );
+  const watchMonitor = config.WATCH_MONITOR_ENABLED
+    ? new WatchedFlightMonitor({
+        db,
+        logger,
+        emit,
+        options: {
+          apiUrl: config.WATCH_MONITOR_ADSB_API_URL,
+          intervalMs: config.WATCH_MONITOR_INTERVAL_MS,
+          batchSize: config.WATCH_MONITOR_BATCH_SIZE,
+          requestDelayMs: config.WATCH_MONITOR_REQUEST_DELAY_MS,
+          maxPositionAgeMs: config.WATCH_MONITOR_MAX_POSITION_AGE_MS,
+          endAfterMs: config.WATCH_MONITOR_END_AFTER_MS,
+        },
+      })
+    : null;
+  watchMonitor?.start();
 
   return {
     config,
@@ -206,6 +223,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     airspaceImportQueue,
     registry,
     close: async () => {
+      watchMonitor?.stop();
       consumer.stop();
       await airspaceImportWorker.close();
       await providerWorker.close();

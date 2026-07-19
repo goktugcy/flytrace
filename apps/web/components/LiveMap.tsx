@@ -284,8 +284,8 @@ const AIRSPACE_MIN_ZOOM = 5.2;
 const AIRSPACE_TYPES_QUERY = 'CTR,TMA,CTA,RESTRICTED,DANGER,PROHIBITED';
 const EMPTY_FEATURES: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 const AIRPORT_POLL_MS = 12_000;
-const VIEWPORT_LIVE_MIN_ZOOM = 4.5;
-const VIEWPORT_LIVE_POLL_MS = 8_000;
+const VIEWPORT_LIVE_MIN_ZOOM = 3;
+const VIEWPORT_LIVE_POLL_MS = 5_000;
 
 const AIRSPACE_FILL_COLOR: maplibregl.ExpressionSpecification = [
   'match',
@@ -642,6 +642,7 @@ export function LiveMap() {
     let viewportLiveSeq = 0;
     let viewportLiveTimer: ReturnType<typeof setTimeout> | null = null;
     let viewportLiveInterval: ReturnType<typeof setInterval> | null = null;
+    let viewportLiveAbort: AbortController | null = null;
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -714,13 +715,18 @@ export function LiveMap() {
     const loadViewportLive = async () => {
       const seq = ++viewportLiveSeq;
       if (map.getZoom() < VIEWPORT_LIVE_MIN_ZOOM) return;
+      viewportLiveAbort?.abort();
+      const controller = new AbortController();
+      viewportLiveAbort = controller;
       try {
         const bbox = viewportBbox(map);
         if (!bbox) return;
         const params = new URLSearchParams({
           bbox: bbox.map((v) => v.toFixed(5)).join(','),
         });
-        const res = await fetch(`${API_BASE}/api/v1/flights/live/viewport?${params.toString()}`);
+        const res = await fetch(`${API_BASE}/api/v1/flights/live/viewport?${params.toString()}`, {
+          signal: controller.signal,
+        });
         if (!res.ok) throw new Error(`viewport live ${res.status}`);
         const data = (
           (await res.json()) as {
@@ -731,16 +737,19 @@ export function LiveMap() {
         const flights = Array.isArray(data?.flights) ? data.flights : [];
         client.store.applySnapshot(flights.map(liveFlightToSnapshot), {
           generatedAt: new Date().toISOString(),
+          scope: { kind: 'viewport', bbox },
         });
         setCount(client.store.size);
       } catch {
         /* live viewport is supplemental; keep realtime feed/UI running */
+      } finally {
+        if (viewportLiveAbort === controller) viewportLiveAbort = null;
       }
     };
 
-    const scheduleViewportLive = () => {
+    const scheduleViewportLive = (delayMs = 80) => {
       if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
-      viewportLiveTimer = setTimeout(() => void loadViewportLive(), 250);
+      viewportLiveTimer = setTimeout(() => void loadViewportLive(), delayMs);
     };
 
     const setAirportMapData = (data: GeoJSON.FeatureCollection) => {
@@ -1368,8 +1377,12 @@ export function LiveMap() {
       }
     }, 4500);
 
+    map.on('move', () => {
+      scheduleViewportLive(420);
+    });
     map.on('moveend', () => {
       sendViewport();
+      scheduleViewportLive(0);
       scheduleAirportLoad();
       scheduleAirspaceLoad();
     });
@@ -1390,6 +1403,7 @@ export function LiveMap() {
       if (airspaceTimer) clearTimeout(airspaceTimer);
       if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
       if (viewportLiveInterval) clearInterval(viewportLiveInterval);
+      viewportLiveAbort?.abort();
       cancelAnimationFrame(raf);
       ro.disconnect();
       unsub();
