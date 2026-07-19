@@ -157,6 +157,59 @@ describe('flight read routes', () => {
     expect(body.error.code).toBe('FLIGHT_NOT_FOUND');
   });
 
+  test('GET /flights/id/adsb:<hex> returns live ADS-B detail', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+      expect(String(url)).toContain('/hex/4bc854');
+      return new Response(
+        JSON.stringify({
+          ac: [
+            {
+              hex: '4bc854',
+              flight: 'PGT438B ',
+              lat: 41.16,
+              lon: 27.71,
+              alt_baro: 22875,
+              alt_geom: 23500,
+              gs: 335.4,
+              track: 98.2,
+              baro_rate: -64,
+              squawk: '2142',
+              category: 'A3',
+              seen_pos: 1,
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const res = await createApp(fakeCtx(new FakeRedis())).request(
+        '/api/v1/flights/id/adsb%3A4bc854',
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        data: { flight: { flightId: string; callsign: string }; live: { icao24?: string } };
+      };
+      expect(body.data.flight.flightId).toBe('adsb:4bc854');
+      expect(body.data.flight.callsign).toBe('PGT438B');
+      expect(body.data.live.icao24).toBe('4bc854');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('GET /flights/id/adsb:<hex>/track returns an empty transient track', async () => {
+    const res = await createApp(fakeCtx(new FakeRedis())).request(
+      '/api/v1/flights/id/adsb%3A4bc854/track',
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { points: unknown[]; count: number } };
+    expect(body.data.points).toEqual([]);
+    expect(body.data.count).toBe(0);
+  });
+
   test('GET /flights/:callsign/:date → 404 when unknown', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/TK1/2023-11-14');
     expect(res.status).toBe(404);

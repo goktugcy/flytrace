@@ -335,15 +335,39 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     };
   };
 
+  const detailForLive = (live: LiveFlight): FlightDetail => ({
+    flight: {
+      flightId: live.flightId,
+      callsign: live.callsign ?? live.icao24.toUpperCase(),
+      flightNumber: null,
+      status: 'active',
+      flightDate: live.ts.slice(0, 10),
+      source: live.source ?? 'adsb',
+    },
+    live: detailLiveFromHot(live),
+    statusSnapshot: null,
+    timeline: [],
+  });
+
   // By flightId (map/WS use uuids) — static `id` segment precedes :callsign.
   app.get('/flights/id/:flightId', async (c) => {
-    const flight = await read.getFlightById(c.req.param('flightId'));
+    const flightId = decodePathParam(c.req.param('flightId'));
+    if (flightId.startsWith('adsb:')) {
+      const icao24 = flightId.slice('adsb:'.length).toLowerCase();
+      const live = await lookupLiveIcao(icao24, ctx.clock.now());
+      if (!live) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
+      return ok(c, detailForLive(live), true);
+    }
+
+    const flight = await read.getFlightById(flightId);
     if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
     return ok(c, await detailFor(flight));
   });
 
   app.get('/flights/id/:flightId/track', async (c) => {
-    const flight = await read.getFlightById(c.req.param('flightId'));
+    const flightId = decodePathParam(c.req.param('flightId'));
+    if (flightId.startsWith('adsb:')) return ok(c, { flightId, points: [], count: 0 }, true);
+    const flight = await read.getFlightById(flightId);
     if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
     const limit = Math.min(Number(c.req.query('limit') ?? 5000) || 5000, 10_000);
     const points = await read.getTrack(flight.id, limit);
@@ -351,7 +375,9 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   app.get('/flights/id/:flightId/events', async (c) => {
-    const flight = await read.getFlightById(c.req.param('flightId'));
+    const flightId = decodePathParam(c.req.param('flightId'));
+    if (flightId.startsWith('adsb:')) return ok(c, { flightId, events: [] }, true);
+    const flight = await read.getFlightById(flightId);
     if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
     return ok(c, { flightId: flight.id, events: await read.getEvents(flight.id) });
   });
@@ -592,6 +618,14 @@ function adsbCategory(cat: string | null | undefined): string | null {
   }
 }
 
+function decodePathParam(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 /**
  * Look up a callsign on the live adsb.lol feed and shape it like a search
  * result (id prefixed `adsb:` so the client knows it's a live, unpersisted
@@ -621,6 +655,27 @@ async function lookupLiveCallsign(
       lon: hit.lon as number,
     };
   } catch {
+    return null;
+  }
+}
+
+async function lookupLiveIcao(icao24: string, nowMs: number): Promise<LiveFlight | null> {
+  const hex = icao24.trim().toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(hex)) throw new AppError('BAD_REQUEST', 'hex must be 6 hex digits');
+  try {
+    const res = await fetch(`${ADSB_LIVE_API_URL}/hex/${encodeURIComponent(hex)}`, {
+      headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const ac = ((await res.json()) as { ac?: AdsbViewportAircraft[] }).ac ?? [];
+    for (const raw of ac) {
+      const live = liveFlightFromAdsb(raw, nowMs);
+      if (live?.icao24 === hex) return live;
+    }
+    return null;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
     return null;
   }
 }

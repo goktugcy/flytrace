@@ -67,6 +67,35 @@ export function createNotifyRepo(db: Database) {
       `) as unknown as unknown[];
     },
 
+    /** Update an owner-scoped watch without changing historical notification rows. */
+    async updateWatch(
+      id: string,
+      userId: string,
+      patch: {
+        eventTypes?: DbEventType[] | undefined;
+        channels?: ChannelKey[] | undefined;
+        active?: boolean | undefined;
+      },
+    ): Promise<boolean> {
+      const rows = (await db
+        .update(watchlistItems)
+        .set({
+          ...(patch.eventTypes !== undefined ? { eventTypes: patch.eventTypes } : {}),
+          ...(patch.channels !== undefined ? { channels: patch.channels } : {}),
+          ...(patch.active !== undefined ? { active: patch.active } : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(watchlistItems.id, id),
+            eq(watchlistItems.userId, userId),
+            sql`${watchlistItems.deletedAt} is null`,
+          ),
+        )
+        .returning({ id: watchlistItems.id })) as { id: string }[];
+      return rows.length > 0;
+    },
+
     /** Soft-delete, scoped to the owner (returns false if not theirs). */
     async deleteWatch(id: string, userId: string): Promise<boolean> {
       const rows = (await db
@@ -116,6 +145,10 @@ export function createNotifyRepo(db: Database) {
     // ── Telegram deep-link linking (docs/10 §10.6) ──
     /** Create a pending, unverified telegram channel holding a one-time token. */
     async createTelegramLink(userId: string, token: string): Promise<void> {
+      await db.execute(sql`
+        delete from notification_channels
+        where user_id = ${userId} and channel = 'telegram' and verified = false
+      `);
       await db.insert(notificationChannels).values({
         userId,
         channel: 'telegram',
@@ -141,6 +174,12 @@ export function createNotifyRepo(db: Database) {
     // ── Email double opt-in ──
     /** Create a pending, unverified email channel holding a verification token. */
     async createEmailChannel(userId: string, email: string, token: string): Promise<void> {
+      await db.execute(sql`
+        delete from notification_channels
+        where user_id = ${userId} and channel = 'email'
+          and verified = false
+          and lower(address->>'email') = lower(${email})
+      `);
       await db.insert(notificationChannels).values({
         userId,
         channel: 'email',
@@ -174,6 +213,27 @@ export function createNotifyRepo(db: Database) {
         .update(notificationChannels)
         .set({ enabled: false, updatedAt: new Date() })
         .where(eq(notificationChannels.id, channelId));
+    },
+
+    async updateChannelEnabled(
+      channelId: string,
+      userId: string,
+      enabled: boolean,
+    ): Promise<boolean> {
+      const rows = (await db
+        .update(notificationChannels)
+        .set({ enabled, updatedAt: new Date() })
+        .where(and(eq(notificationChannels.id, channelId), eq(notificationChannels.userId, userId)))
+        .returning({ id: notificationChannels.id })) as { id: string }[];
+      return rows.length > 0;
+    },
+
+    async deleteChannel(channelId: string, userId: string): Promise<boolean> {
+      const rows = (await db
+        .delete(notificationChannels)
+        .where(and(eq(notificationChannels.id, channelId), eq(notificationChannels.userId, userId)))
+        .returning({ id: notificationChannels.id })) as { id: string }[];
+      return rows.length > 0;
     },
 
     // ── notifications ledger ──
@@ -252,7 +312,7 @@ export function createNotifyRepo(db: Database) {
 
     async listForUser(userId: string, limit: number): Promise<unknown[]> {
       return db.execute(sql`
-        select id, channel, status, title, body, flight_id as "flightId",
+        select id, channel, status, title, body, error, payload, flight_id as "flightId",
                created_at as "createdAt", sent_at as "sentAt"
         from notifications
         where user_id = ${userId}

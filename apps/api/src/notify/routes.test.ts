@@ -39,6 +39,41 @@ describe('notify routes', () => {
     expect(res.status).toBe(401);
   });
 
+  test('PATCH /watchlist/:id requires auth', async () => {
+    const res = await createApp(fakeCtx()).request(
+      '/api/v1/watchlist/00000000-0000-7000-8000-000000000001',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+        body: JSON.stringify({ active: false }),
+      },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  test('PATCH /channels/:id requires auth', async () => {
+    const res = await createApp(fakeCtx()).request(
+      '/api/v1/channels/00000000-0000-7000-8000-000000000001',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  test('DELETE /channels/:id requires auth', async () => {
+    const res = await createApp(fakeCtx()).request(
+      '/api/v1/channels/00000000-0000-7000-8000-000000000001',
+      {
+        method: 'DELETE',
+        headers: { origin: 'http://localhost:3000' },
+      },
+    );
+    expect(res.status).toBe(401);
+  });
+
   test('GET /config/webpush is public and returns the VAPID key', async () => {
     const res = await createApp(fakeCtx()).request('/api/v1/config/webpush');
     expect(res.status).toBe(200);

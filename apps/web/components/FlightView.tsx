@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
+import { readLiveFlightDetail } from '@/lib/live-detail-cache';
 import type { FlightDetail } from '@flytrace/shared';
 import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, RadioTower } from 'lucide-react';
 import Link from 'next/link';
@@ -15,9 +16,12 @@ import { RealtimeClient } from '../lib/realtime-client';
 
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
+const WATCH_EVENT_TYPES = ['takeoff', 'landing', 'top_of_climb', 'top_of_descent'] as const;
+const CHANNEL_KEYS = ['telegram', 'webpush', 'email'] as const;
 
 type Live = NonNullable<FlightDetail['live']>;
 type StatusSnapshot = NonNullable<FlightDetail['statusSnapshot']>;
+type ChannelKey = (typeof CHANNEL_KEYS)[number];
 interface TimelineEntry {
   type: string;
   occurredAt: string;
@@ -87,8 +91,22 @@ export function FlightView({ flightId }: { flightId: string }) {
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/flights/id/${flightId}`);
+        const res = await fetch(`${API_BASE}/api/v1/flights/id/${encodeURIComponent(flightId)}`);
         if (!res.ok) {
+          const cached = flightId.startsWith('adsb:') ? readLiveFlightDetail(flightId) : null;
+          if (cached) {
+            setDetail(cached);
+            setLive(cached.live);
+            setTimeline(
+              cached.timeline.map((e) => ({
+                type: e.type,
+                occurredAt: e.occurredAt,
+                confidence: e.confidence,
+                source: e.source,
+              })),
+            );
+            return;
+          }
           setError(res.status === 404 ? 'Flight not found' : `Error ${res.status}`);
           return;
         }
@@ -185,6 +203,11 @@ export function FlightView({ flightId }: { flightId: string }) {
   }, [airspaceKey]);
 
   async function onWatch() {
+    if (flightId.startsWith('adsb:')) {
+      setWatchState('error');
+      setWatchMsg('Live ADS-B aircraft must be persisted before alerts can be created.');
+      return;
+    }
     setWatchState('working');
     try {
       const session = await fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' });
@@ -193,20 +216,20 @@ export function FlightView({ flightId }: { flightId: string }) {
         window.location.href = `/signin?next=/flights/id/${flightId}`;
         return;
       }
-      await subscribeWebPush();
+      const channels = await preferredWatchChannels();
       const res = await fetch(`${API_BASE}/api/v1/watchlist`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           flightId,
-          eventTypes: ['takeoff', 'landing', 'top_of_climb', 'top_of_descent'],
-          channels: ['webpush'],
+          eventTypes: WATCH_EVENT_TYPES,
+          channels,
         }),
       });
       if (!res.ok) throw new Error(`watch ${res.status}`);
       setWatchState('watching');
-      setWatchMsg('Watching — you’ll get a push on takeoff, cruise, descent & landing.');
+      setWatchMsg(`Watching — alerts will use ${channels.map(channelLabel).join(', ')}.`);
     } catch (e) {
       setWatchState('error');
       setWatchMsg(e instanceof Error ? e.message : 'Failed to set up the watch');
@@ -238,6 +261,8 @@ export function FlightView({ flightId }: { flightId: string }) {
     );
   }
 
+  const canWatch = !detail.flight.flightId.startsWith('adsb:');
+
   return (
     <Container>
       <BackLink />
@@ -250,22 +275,24 @@ export function FlightView({ flightId }: { flightId: string }) {
         {detail.flight.flightNumber && (
           <span className="text-muted-foreground">{detail.flight.flightNumber}</span>
         )}
-        <div className="ml-auto">
-          <Button
-            type="button"
-            onClick={onWatch}
-            disabled={watchState === 'working' || watchState === 'watching'}
-            variant={watchState === 'watching' ? 'secondary' : 'default'}
-          >
-            {watchState === 'working' && <Spinner />}
-            {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
-            {watchState === 'watching'
-              ? 'Watching'
-              : watchState === 'working'
-                ? 'Setting up…'
-                : 'Watch'}
-          </Button>
-        </div>
+        {canWatch && (
+          <div className="ml-auto">
+            <Button
+              type="button"
+              onClick={onWatch}
+              disabled={watchState === 'working' || watchState === 'watching'}
+              variant={watchState === 'watching' ? 'secondary' : 'default'}
+            >
+              {watchState === 'working' && <Spinner />}
+              {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
+              {watchState === 'watching'
+                ? 'Watching'
+                : watchState === 'working'
+                  ? 'Setting up…'
+                  : 'Watch'}
+            </Button>
+          </div>
+        )}
       </header>
       {watchMsg && (
         <p
@@ -784,6 +811,51 @@ function FlightSkeleton() {
   );
 }
 
+async function preferredWatchChannels(): Promise<ChannelKey[]> {
+  const settingsRes = await fetch(`${API_BASE}/api/v1/settings`, { credentials: 'include' });
+  const settingsBody = (await settingsRes.json().catch(() => ({}))) as {
+    data?: { settings?: { defaultChannels?: unknown } };
+  };
+  const defaults = normalizeChannels(settingsBody.data?.settings?.defaultChannels);
+  const requested: ChannelKey[] = defaults.length > 0 ? defaults : ['webpush'];
+
+  const channelsRes = await fetch(`${API_BASE}/api/v1/channels`, { credentials: 'include' });
+  const channelsBody = (await channelsRes.json().catch(() => ({}))) as {
+    data?: { items?: { channel: string; verified: boolean; enabled: boolean }[] };
+  };
+  const readyChannels = new Set<ChannelKey>(
+    (channelsBody.data?.items ?? [])
+      .filter((item) => item.verified && item.enabled && isChannelKey(item.channel))
+      .map((item) => item.channel as ChannelKey),
+  );
+
+  if (requested.includes('webpush')) {
+    await subscribeWebPush();
+    readyChannels.add('webpush');
+  }
+
+  const selected = requested.filter((channel) => readyChannels.has(channel));
+  if (selected.length === 0) {
+    throw new Error('Connect a notification channel in settings first.');
+  }
+  return selected;
+}
+
+function normalizeChannels(value: unknown): ChannelKey[] {
+  if (!Array.isArray(value)) return [];
+  return CHANNEL_KEYS.filter((channel) => value.includes(channel));
+}
+
+function isChannelKey(value: string): value is ChannelKey {
+  return CHANNEL_KEYS.includes(value as ChannelKey);
+}
+
+function channelLabel(channel: ChannelKey): string {
+  if (channel === 'webpush') return 'Push';
+  if (channel === 'telegram') return 'Telegram';
+  return 'Email';
+}
+
 /** Register the service worker + create a Web Push subscription (docs/10 §10.6). */
 async function subscribeWebPush(): Promise<void> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -800,11 +872,16 @@ async function subscribeWebPush(): Promise<void> {
     .publicKey;
   if (!publicKey) throw new Error('Web Push is not configured on the server');
 
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
-  });
+  const sub =
+    (await reg.pushManager.getSubscription()) ??
+    (await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    }));
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
+    throw new Error('Browser returned an incomplete push subscription');
+  }
 
   await fetch(`${API_BASE}/api/v1/channels/webpush/subscribe`, {
     method: 'POST',

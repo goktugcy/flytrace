@@ -14,6 +14,17 @@ const createWatchSchema = z.object({
   eventTypes: z.array(z.enum(DB_EVENT_TYPES)).min(1),
   channels: z.array(z.enum(['telegram', 'webpush', 'email'])).min(1),
 });
+const updateWatchSchema = z
+  .object({
+    eventTypes: z.array(z.enum(DB_EVENT_TYPES)).min(1).optional(),
+    channels: z
+      .array(z.enum(['telegram', 'webpush', 'email']))
+      .min(1)
+      .optional(),
+    active: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'empty patch' });
+const channelPatchSchema = z.object({ enabled: z.boolean() });
 
 const webPushSchema = z.object({
   endpoint: z.string().url(),
@@ -71,6 +82,19 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { ok: true });
   });
 
+  app.patch('/watchlist/:id', async (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    const parsed = updateWatchSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid watch update', {
+        details: parsed.error.issues,
+      });
+    const updated = await repo.updateWatch(c.req.param('id'), user.id, parsed.data);
+    if (!updated) throw new AppError('NOT_FOUND', 'watch not found');
+    return ok(c, { ok: true });
+  });
+
   app.post('/channels/webpush/subscribe', async (c) => {
     const user = c.get('user');
     if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
@@ -81,6 +105,31 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
       });
     await repo.upsertWebPush(user.id, parsed.data);
     return ok(c, { ok: true }, 201);
+  });
+
+  app.patch('/channels/:id', requireUser(), async (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    const parsed = channelPatchSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid channel update', {
+        details: parsed.error.issues,
+      });
+    const updated = await repo.updateChannelEnabled(
+      c.req.param('id'),
+      user.id,
+      parsed.data.enabled,
+    );
+    if (!updated) throw new AppError('NOT_FOUND', 'channel not found');
+    return ok(c, { ok: true });
+  });
+
+  app.delete('/channels/:id', requireUser(), async (c) => {
+    const user = c.get('user');
+    if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
+    const removed = await repo.deleteChannel(c.req.param('id'), user.id);
+    if (!removed) throw new AppError('NOT_FOUND', 'channel not found');
+    return ok(c, { ok: true });
   });
 
   app.get('/notifications', async (c) => {

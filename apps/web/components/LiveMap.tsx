@@ -2,12 +2,13 @@
 
 import { apiBase } from '@/lib/api';
 
-import type { LiveFlight } from '@flytrace/shared';
+import type { FlightDetail, LiveFlight } from '@flytrace/shared';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
 import { ErrorState } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
+import { saveLiveFlightDetail } from '@/lib/live-detail-cache';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
 import {
@@ -470,6 +471,51 @@ function liveFlightToSnapshot(f: LiveFlight) {
     lastAcceptedAt: f.receivedAt,
     lastTs: f.ts,
   };
+}
+
+function liveDetailFromSelection(sel: SelInfo): FlightDetail {
+  const live: NonNullable<FlightDetail['live']> = {
+    flightId: sel.flightId,
+    icao24: sel.icao24,
+    callsign: sel.callsign,
+    lat: sel.lat,
+    lon: sel.lon,
+    altitudeFt: sel.altFt,
+    geoAltitudeFt: sel.geoAltitudeFt,
+    headingDeg: sel.heading,
+    groundSpeedKt: sel.gsKt,
+    verticalRateFpm: sel.verticalRateFpm,
+    onGround: sel.onGround,
+    squawk: sel.squawk,
+    category: sel.category,
+    qualityState: sel.qualityState,
+    source: sel.source,
+    ts: sel.ts,
+    ...(sel.sourceTimestamp ? { sourceTimestamp: sel.sourceTimestamp } : {}),
+    ...(sel.ageMs != null ? { ageMs: Math.max(0, Math.round(sel.ageMs)) } : {}),
+    ...(sel.qualityScore != null ? { qualityScore: sel.qualityScore } : {}),
+    ...(sel.positionSource ? { positionSource: sel.positionSource } : {}),
+    ...(sel.isMlat != null ? { isMlat: sel.isMlat } : {}),
+    receivedAt: new Date().toISOString(),
+  };
+
+  return {
+    flight: {
+      flightId: sel.flightId,
+      callsign: sel.callsign,
+      flightNumber: null,
+      status: sel.onGround ? 'landed' : 'active',
+      flightDate: sel.ts.slice(0, 10),
+      source: sel.source ?? 'adsb',
+    },
+    live,
+    statusSnapshot: null,
+    timeline: [],
+  };
+}
+
+function cacheSelectedLiveDetail(sel: SelInfo): void {
+  saveLiveFlightDetail(liveDetailFromSelection(sel));
 }
 
 export function LiveMap() {
@@ -1656,16 +1702,13 @@ export function LiveMap() {
                 <Metric label={t('map.squawk')} value={sel.squawk ?? '—'} />
               </div>
 
-              {/* Live adsb.lol hits (id `adsb:*`) aren't persisted, so they have
-                  no detail page — the on-map card is the whole experience. */}
-              {!sel.flightId.startsWith('adsb:') && (
-                <Link
-                  href={`/flights/id/${sel.flightId}`}
-                  className="mt-4 flex h-9 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-                >
-                  {t('common.details')}
-                </Link>
-              )}
+              <Link
+                href={`/flights/id/${encodeURIComponent(sel.flightId)}`}
+                onClick={() => cacheSelectedLiveDetail(sel)}
+                className="mt-4 flex h-9 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                {t('common.details')}
+              </Link>
             </div>
           </div>
         </div>
