@@ -76,6 +76,49 @@ describe('flight read routes', () => {
     expect(body.data.count).toBe(1);
   });
 
+  test('GET /flights/live/viewport merges live ADS-B aircraft for the visible region', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+      expect(String(url)).toContain('/lat/');
+      return new Response(
+        JSON.stringify({
+          ac: [
+            {
+              hex: '4bc854',
+              flight: 'PGT438B ',
+              lat: 41.16,
+              lon: 27.71,
+              alt_baro: 22875,
+              alt_geom: 23500,
+              gs: 335.4,
+              track: 98.2,
+              baro_rate: -64,
+              squawk: '2142',
+              category: 'A3',
+              seen_pos: 1,
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const res = await createApp(fakeCtx(new FakeRedis())).request(
+        '/api/v1/flights/live/viewport?bbox=27.5,40.3,30.5,42.1',
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        data: { count: number; flights: Array<{ flightId: string; source?: string }> };
+      };
+      expect(body.data.count).toBe(1);
+      expect(body.data.flights[0]?.flightId).toBe('adsb:4bc854');
+      expect(body.data.flights[0]?.source).toBe('adsb');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('GET /flights/live rejects a malformed bbox', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request(
       '/api/v1/flights/live?bbox=1,2,3',

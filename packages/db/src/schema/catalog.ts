@@ -36,18 +36,27 @@ export const airports = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     iata: char('iata', { length: 3 }).unique(),
-    icao: char('icao', { length: 4 }).notNull().unique(),
+    icao: text('icao').notNull().unique(),
     name: text('name').notNull(),
+    type: text('type'),
     city: text('city'),
     country: text('country'),
     location: geographyPoint('location', { srid: 4326 }),
     elevationFt: integer('elevation_ft'),
     timezone: text('timezone'),
     runways: jsonb('runways'),
+    scheduledService: boolean('scheduled_service').notNull().default(false),
+    homeUrl: text('home_url'),
+    wikipediaUrl: text('wikipedia_url'),
+    keywords: text('keywords'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_airports_location').using('gist', t.location)],
+  (t) => [
+    index('idx_airports_location').using('gist', t.location),
+    index('idx_airports_type').on(t.type),
+    index('idx_airports_scheduled_service').on(t.scheduledService),
+  ],
 );
 
 /** Aircraft — enrichment, aircraft pages, ADS-B join key (icao24). */

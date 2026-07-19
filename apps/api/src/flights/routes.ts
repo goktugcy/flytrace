@@ -10,7 +10,7 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
 import type { AppContext } from '../context.ts';
-import type { Bbox } from '../ws/channels.ts';
+import { type Bbox, inBbox } from '../ws/channels.ts';
 import { createHotState } from './hot-state.ts';
 
 const PLANESPOTTERS_UA = 'FlyTrace/1.0 (+https://flytrace.app; live flight tracker)';
@@ -55,6 +55,36 @@ interface AdsbAircraft {
   lat?: number;
   lon?: number;
 }
+
+const ADSB_LIVE_API_URL = (process.env.ADSB_API_URL ?? 'https://api.adsb.lol/v2').replace(
+  /\/+$/,
+  '',
+);
+const ADSB_VIEWPORT_TTL_MS = 5_000;
+const ADSB_VIEWPORT_MAX_RADIUS_NM = 250;
+const ADSB_VIEWPORT_MIN_RADIUS_NM = 8;
+const ADSB_VIEWPORT_FRESH_MS = 90_000;
+
+interface AdsbViewportAircraft extends AdsbAircraft {
+  alt_baro?: number | 'ground' | null;
+  alt_geom?: number | null;
+  gs?: number | null;
+  track?: number | null;
+  baro_rate?: number | null;
+  squawk?: string | null;
+  category?: string | null;
+  mlat?: unknown[] | null;
+  seen_pos?: number | null;
+}
+
+interface ViewportLiveLookup {
+  flights: LiveFlight[];
+  center: { lat: number; lon: number };
+  radiusNm: number;
+  clipped: boolean;
+}
+
+const viewportLiveCache = new Map<string, { exp: number; value: ViewportLiveLookup }>();
 
 function toEndpoint(a: AdsbdbAirport): FlightRoute['origin'] | null {
   if (typeof a.latitude !== 'number' || typeof a.longitude !== 'number') return null;
@@ -173,6 +203,48 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     }
     const flights = await hot.live(bbox);
     return ok(c, { flights, count: flights.length }, true);
+  });
+
+  // Live flights for the current map viewport. The persistent tracker can only
+  // ingest a bounded area; this endpoint widens browsing coverage by fetching
+  // the visible region on demand from adsb.lol and merging it with Redis.
+  app.get('/flights/live/viewport', async (c) => {
+    const raw = c.req.query('bbox');
+    if (raw === undefined) throw new AppError('BAD_REQUEST', 'bbox is required');
+    const parsed = bboxSchema.safeParse(raw);
+    if (!parsed.success)
+      throw new AppError('BAD_REQUEST', 'invalid bbox', { details: parsed.error.issues });
+    const bbox = clampBbox(parsed.data);
+
+    const cachedFlights = await hot.live(bbox).catch((err) => {
+      ctx.logger.warn('viewport live hot state unavailable', { err: String(err) });
+      return [] as LiveFlight[];
+    });
+
+    let lookup: ViewportLiveLookup | null = null;
+    try {
+      lookup = await lookupViewportLive(bbox, ctx.clock.now());
+    } catch (err) {
+      ctx.logger.warn('viewport ADS-B lookup unavailable', { bbox, err: String(err) });
+    }
+
+    const byIcao = new Set(cachedFlights.map((f) => f.icao24.toLowerCase()));
+    const flights = [...cachedFlights];
+    if (lookup) {
+      for (const f of lookup.flights) {
+        if (byIcao.has(f.icao24.toLowerCase())) continue;
+        byIcao.add(f.icao24.toLowerCase());
+        flights.push(f);
+      }
+    }
+
+    return ok(c, {
+      flights,
+      count: flights.length,
+      viewport: lookup
+        ? { center: lookup.center, radiusNm: lookup.radiusNm, clipped: lookup.clipped }
+        : null,
+    });
   });
 
   // Typeahead search over flights (callsign / flight number). OpenSky stores
@@ -333,6 +405,191 @@ function detailLiveFromHot(live: LiveFlight): NonNullable<FlightDetail['live']> 
     ...(live.isMlat !== undefined ? { isMlat: live.isMlat } : {}),
     ts: live.ts,
   };
+}
+
+function clampBbox([west, south, east, north]: Bbox): Bbox {
+  if (![west, south, east, north].every(Number.isFinite) || south >= north) {
+    throw new AppError('BAD_REQUEST', 'invalid bbox');
+  }
+  const clampedSouth = Math.max(-90, Math.min(90, south));
+  const clampedNorth = Math.max(-90, Math.min(90, north));
+  if (clampedSouth >= clampedNorth) throw new AppError('BAD_REQUEST', 'invalid bbox');
+  const height = Math.abs(north - south);
+  const rawWidth = Math.abs(east - west);
+  if (rawWidth >= 360 || height >= 180) {
+    return [-180, clampedSouth, 180, clampedNorth];
+  }
+  return [wrapLon(west), clampedSouth, wrapLon(east), clampedNorth];
+}
+
+async function lookupViewportLive(bbox: Bbox, nowMs: number): Promise<ViewportLiveLookup> {
+  const viewport = viewportCircle(bbox);
+  const key = [
+    Math.round(viewport.center.lat * 20) / 20,
+    Math.round(viewport.center.lon * 20) / 20,
+    Math.ceil(viewport.radiusNm / 10) * 10,
+  ].join(':');
+  const cached = viewportLiveCache.get(key);
+  if (cached && cached.exp > nowMs) return cached.value;
+
+  const url = `${ADSB_LIVE_API_URL}/lat/${viewport.center.lat.toFixed(5)}/lon/${viewport.center.lon.toFixed(5)}/dist/${viewport.radiusNm}`;
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`adsb viewport failed: ${res.status}`);
+
+  const raw = ((await res.json()) as { ac?: AdsbViewportAircraft[] }).ac ?? [];
+  const flights: LiveFlight[] = [];
+  const seenIcao = new Set<string>();
+  for (const ac of raw) {
+    const flight = liveFlightFromAdsb(ac, nowMs);
+    if (!flight || !inBbox(flight.lat, flight.lon, bbox)) continue;
+    if (seenIcao.has(flight.icao24)) continue;
+    seenIcao.add(flight.icao24);
+    flights.push(flight);
+  }
+
+  const value = { flights, ...viewport };
+  viewportLiveCache.set(key, { exp: nowMs + ADSB_VIEWPORT_TTL_MS, value });
+  trimViewportCache(nowMs);
+  return value;
+}
+
+function liveFlightFromAdsb(a: AdsbViewportAircraft, nowMs: number): LiveFlight | null {
+  const icao24 = typeof a.hex === 'string' ? a.hex.trim().toLowerCase() : '';
+  if (!/^[0-9a-f]{6}$/.test(icao24)) return null;
+  if (!finiteNumber(a.lat) || !finiteNumber(a.lon)) return null;
+  const seenPosMs = finiteNumber(a.seen_pos) ? Math.max(0, a.seen_pos * 1000) : 0;
+  if (seenPosMs > ADSB_VIEWPORT_FRESH_MS) return null;
+
+  const onGround = a.alt_baro === 'ground';
+  const ts = new Date(nowMs - seenPosMs).toISOString();
+  const isMlat = Array.isArray(a.mlat) && a.mlat.length > 0;
+  const callsign = typeof a.flight === 'string' ? a.flight.trim() || null : null;
+  const altitudeFt = finiteNumber(a.alt_baro) ? Math.round(a.alt_baro) : onGround ? 0 : null;
+  const headingDeg = finiteNumber(a.track) ? normalizeHeading(a.track) : null;
+  const groundSpeedKt = finiteNumber(a.gs) ? round(a.gs, 1) : null;
+
+  return {
+    flightId: `adsb:${icao24}`,
+    icao24,
+    callsign,
+    lat: a.lat,
+    lon: a.lon,
+    altitudeFt,
+    geoAltitudeFt: finiteNumber(a.alt_geom) ? Math.round(a.alt_geom) : null,
+    headingDeg,
+    groundSpeedKt,
+    verticalRateFpm: finiteNumber(a.baro_rate) ? Math.round(a.baro_rate) : null,
+    onGround,
+    squawk: typeof a.squawk === 'string' ? a.squawk : null,
+    category: adsbCategory(a.category),
+    qualityState: qualityStateForAge(seenPosMs),
+    source: 'adsb',
+    sourceTimestamp: ts,
+    ageMs: Math.round(seenPosMs),
+    qualityScore: qualityScoreForAge(seenPosMs),
+    positionSource: isMlat ? 'mlat' : 'adsb',
+    isMlat,
+    receivedAt: new Date(nowMs).toISOString(),
+    ts,
+  };
+}
+
+function viewportCircle(bbox: Bbox): Omit<ViewportLiveLookup, 'flights'> {
+  const [west, south, east, north] = bbox;
+  const center = {
+    lat: (south + north) / 2,
+    lon: west <= east ? (west + east) / 2 : wrapLon((west + east + 360) / 2),
+  };
+  const corners: [number, number][] = [
+    [west, south],
+    [west, north],
+    [east, south],
+    [east, north],
+  ];
+  const neededRadius = Math.ceil(
+    Math.max(...corners.map(([lon, lat]) => distanceNm(center.lat, center.lon, lat, lon))) + 20,
+  );
+  const radiusNm = Math.min(
+    ADSB_VIEWPORT_MAX_RADIUS_NM,
+    Math.max(ADSB_VIEWPORT_MIN_RADIUS_NM, neededRadius),
+  );
+  return { center, radiusNm, clipped: neededRadius > ADSB_VIEWPORT_MAX_RADIUS_NM };
+}
+
+function trimViewportCache(nowMs: number): void {
+  if (viewportLiveCache.size <= 200) return;
+  for (const [key, cached] of viewportLiveCache) {
+    if (cached.exp <= nowMs) viewportLiveCache.delete(key);
+  }
+  while (viewportLiveCache.size > 200) {
+    const oldest = viewportLiveCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    viewportLiveCache.delete(oldest);
+  }
+}
+
+function distanceNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rNm = 3440.065;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * rNm * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function toRad(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+function wrapLon(lon: number): number {
+  return ((((lon + 180) % 360) + 360) % 360) - 180;
+}
+
+function normalizeHeading(deg: number): number {
+  return Math.round((((deg % 360) + 360) % 360) * 10) / 10;
+}
+
+function finiteNumber(n: unknown): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+function round(n: number, dp = 0): number {
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
+}
+
+function qualityStateForAge(ageMs: number): NonNullable<LiveFlight['qualityState']> {
+  if (ageMs <= 15_000) return 'live';
+  if (ageMs <= 30_000) return 'delayed';
+  if (ageMs <= 60_000) return 'stale';
+  return 'signal_lost';
+}
+
+function qualityScoreForAge(ageMs: number): number {
+  return round(Math.max(0, Math.min(1, 1 - ageMs / ADSB_VIEWPORT_FRESH_MS)), 2);
+}
+
+function adsbCategory(cat: string | null | undefined): string | null {
+  switch ((cat ?? '').toUpperCase()) {
+    case 'A1':
+    case 'A2':
+    case 'B4':
+      return 'light';
+    case 'A5':
+      return 'heavy';
+    case 'A7':
+      return 'helo';
+    case 'A3':
+    case 'A4':
+    case 'A6':
+      return 'jet';
+    default:
+      return null;
+  }
 }
 
 /**

@@ -2,6 +2,7 @@
 
 import { apiBase } from '@/lib/api';
 
+import type { LiveFlight } from '@flytrace/shared';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
@@ -9,7 +10,15 @@ import { ErrorState } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
-import { Layers, LocateFixed, Plane, RadioTower, X } from 'lucide-react';
+import {
+  ExternalLink,
+  Layers,
+  LocateFixed,
+  Plane,
+  RadioTower,
+  TowerControl,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { type RenderedFlight, stepRenderedFlight } from '../lib/flight-motion';
@@ -181,6 +190,21 @@ function makeHeloImage(size = 64): ImageData {
   return ctx.getImageData(0, 0, size, size);
 }
 
+/** Compact airport marker: runway + terminal block, SDF-tinted by airport type. */
+function makeAirportImage(size = 64): ImageData {
+  const { ctx, s } = blankCtx(size);
+  if (!ctx) return new ImageData(size, size);
+  const r = (x: number, y: number, w: number, h: number) =>
+    ctx.fillRect(x * s, y * s, w * s, h * s);
+  r(29, 5, 6, 54); // runway
+  r(23, 11, 18, 4);
+  r(23, 49, 18, 4);
+  r(12, 24, 40, 16); // terminal
+  r(18, 19, 8, 26);
+  r(38, 19, 8, 26);
+  return ctx.getImageData(0, 0, size, size);
+}
+
 const CAT_SIZE: Record<string, number> = { light: 0.72, jet: 1.0, heavy: 1.35, helo: 0.9 };
 
 /** Faint lat/lon graticule for depth. */
@@ -258,6 +282,9 @@ const ICON_SIZE: maplibregl.ExpressionSpecification = [
 const AIRSPACE_MIN_ZOOM = 5.2;
 const AIRSPACE_TYPES_QUERY = 'CTR,TMA,CTA,RESTRICTED,DANGER,PROHIBITED';
 const EMPTY_FEATURES: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+const AIRPORT_POLL_MS = 12_000;
+const VIEWPORT_LIVE_MIN_ZOOM = 4.5;
+const VIEWPORT_LIVE_POLL_MS = 8_000;
 
 const AIRSPACE_FILL_COLOR: maplibregl.ExpressionSpecification = [
   'match',
@@ -295,7 +322,23 @@ const AIRSPACE_LINE_COLOR: maplibregl.ExpressionSpecification = [
   '#94a3b8',
 ];
 
-interface Airport {
+const AIRPORT_COLOR: maplibregl.ExpressionSpecification = [
+  'match',
+  ['get', 'type'],
+  'large_airport',
+  '#f8fafc',
+  'medium_airport',
+  '#7dd3fc',
+  'small_airport',
+  '#86efac',
+  'heliport',
+  '#fbbf24',
+  'seaplane_base',
+  '#67e8f9',
+  '#cbd5e1',
+];
+
+interface RouteAirport {
   iata: string;
   name: string;
   city: string | null;
@@ -304,8 +347,38 @@ interface Airport {
 }
 interface RouteInfo {
   airline: string | null;
-  origin: Airport;
-  destination: Airport;
+  origin: RouteAirport;
+  destination: RouteAirport;
+}
+
+interface AirportPhoto {
+  url: string;
+  pageUrl: string | null;
+  source: string;
+}
+
+interface AirportDetail {
+  id: string;
+  iata: string | null;
+  icao: string;
+  name: string;
+  type: string | null;
+  city: string | null;
+  country: string | null;
+  timezone: string | null;
+  elevationFt: number | null;
+  lat: number | null;
+  lon: number | null;
+  runways: unknown;
+  scheduledService: boolean;
+  homeUrl: string | null;
+  wikipediaUrl: string | null;
+  keywords: string | null;
+  photo: AirportPhoto | null;
+}
+
+interface AirportFeatureCollection extends GeoJSON.FeatureCollection {
+  count?: number;
 }
 
 /** Great-circle polyline between two [lon,lat] points (curved route line). */
@@ -353,6 +426,52 @@ function buildFilter(f: { band: Band; airline: string }): maplibregl.FilterSpeci
   return ['all', ...parts] as unknown as maplibregl.FilterSpecification;
 }
 
+function viewportBbox(map: maplibregl.Map): [number, number, number, number] | null {
+  const b = map.getBounds();
+  const rawWest = b.getWest();
+  const rawEast = b.getEast();
+  const south = clampLat(b.getSouth());
+  const north = clampLat(b.getNorth());
+  if (south >= north) return null;
+  if (Math.abs(rawEast - rawWest) >= 360) return [-180, south, 180, north];
+  return [wrapLng(rawWest), south, wrapLng(rawEast), north];
+}
+
+function clampLat(lat: number): number {
+  return Math.max(-90, Math.min(90, lat));
+}
+
+function wrapLng(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
+}
+
+function liveFlightToSnapshot(f: LiveFlight) {
+  return {
+    flightId: f.flightId,
+    icao24: f.icao24,
+    callsign: f.callsign,
+    lat: f.lat,
+    lon: f.lon,
+    headingDeg: f.headingDeg,
+    altFt: f.altitudeFt,
+    geoAltitudeFt: f.geoAltitudeFt,
+    gsKt: f.groundSpeedKt,
+    verticalRateFpm: f.verticalRateFpm,
+    onGround: f.onGround,
+    squawk: f.squawk,
+    category: f.category,
+    source: f.source,
+    sourceTimestamp: f.sourceTimestamp,
+    ageMs: f.ageMs,
+    qualityScore: f.qualityScore,
+    positionSource: f.positionSource,
+    isMlat: f.isMlat,
+    qualityState: f.qualityState,
+    lastAcceptedAt: f.receivedAt,
+    lastTs: f.ts,
+  };
+}
+
 export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef<(id: string | null) => void>(() => {});
@@ -363,6 +482,15 @@ export function LiveMap() {
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [route, setRoute] = useState<RouteInfo | null>(null);
+  const [airportsEnabled, setAirportsEnabled] = useState(true);
+  const [airportCount, setAirportCount] = useState(0);
+  const [airportStatus, setAirportStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
+  const [selAirport, setSelAirport] = useState<AirportDetail | null>(null);
+  const [selectedAirportStatus, setSelectedAirportStatus] = useState<
+    'idle' | 'loading' | 'ready' | 'error'
+  >('idle');
   const [airspaceEnabled, setAirspaceEnabled] = useState(false);
   const [airspaceCount, setAirspaceCount] = useState(0);
   const [airspaceStatus, setAirspaceStatus] = useState<
@@ -376,6 +504,9 @@ export function LiveMap() {
   const [airline, setAirline] = useState('');
   const filterRef = useRef<{ band: Band; airline: string }>({ band: 'all', airline: '' });
   const applyFilterRef = useRef<() => void>(() => {});
+  const airportsEnabledRef = useRef(true);
+  const applyAirportsRef = useRef<() => void>(() => {});
+  const airportDetailSeqRef = useRef(0);
   const airspaceEnabledRef = useRef(false);
   const applyAirspaceRef = useRef<() => void>(() => {});
   const selectedAirspaceRef = useRef<SelInfo | null>(null);
@@ -396,6 +527,12 @@ export function LiveMap() {
     airspaceEnabledRef.current = next;
     setAirspaceEnabled(next);
     applyAirspaceRef.current();
+  };
+  const toggleAirports = () => {
+    const next = !airportsEnabledRef.current;
+    airportsEnabledRef.current = next;
+    setAirportsEnabled(next);
+    applyAirportsRef.current();
   };
 
   useEffect(() => {
@@ -446,12 +583,19 @@ export function LiveMap() {
       'selected',
       'route',
       'route-ends',
+      'airports',
       'airspaces',
     ]);
     let selectedId: string | null = null;
     let pulse = 0;
+    let airportSeq = 0;
+    let airportTimer: ReturnType<typeof setTimeout> | null = null;
+    let airportInterval: ReturnType<typeof setInterval> | null = null;
     let airspaceSeq = 0;
     let airspaceTimer: ReturnType<typeof setTimeout> | null = null;
+    let viewportLiveSeq = 0;
+    let viewportLiveTimer: ReturnType<typeof setTimeout> | null = null;
+    let viewportLiveInterval: ReturnType<typeof setInterval> | null = null;
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -516,8 +660,95 @@ export function LiveMap() {
     };
 
     const sendViewport = () => {
-      const b = map.getBounds();
-      client.setViewport([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+      const bbox = viewportBbox(map);
+      if (bbox) client.setViewport(bbox);
+      scheduleViewportLive();
+    };
+
+    const loadViewportLive = async () => {
+      const seq = ++viewportLiveSeq;
+      if (map.getZoom() < VIEWPORT_LIVE_MIN_ZOOM) return;
+      try {
+        const bbox = viewportBbox(map);
+        if (!bbox) return;
+        const params = new URLSearchParams({
+          bbox: bbox.map((v) => v.toFixed(5)).join(','),
+        });
+        const res = await fetch(`${API_BASE}/api/v1/flights/live/viewport?${params.toString()}`);
+        if (!res.ok) throw new Error(`viewport live ${res.status}`);
+        const data = (
+          (await res.json()) as {
+            data?: { flights?: LiveFlight[] };
+          }
+        ).data;
+        if (seq !== viewportLiveSeq) return;
+        const flights = Array.isArray(data?.flights) ? data.flights : [];
+        client.store.applySnapshot(flights.map(liveFlightToSnapshot), {
+          generatedAt: new Date().toISOString(),
+        });
+        setCount(client.store.size);
+      } catch {
+        /* live viewport is supplemental; keep realtime feed/UI running */
+      }
+    };
+
+    const scheduleViewportLive = () => {
+      if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
+      viewportLiveTimer = setTimeout(() => void loadViewportLive(), 250);
+    };
+
+    const setAirportMapData = (data: GeoJSON.FeatureCollection) => {
+      const src = map.getSource('airports') as maplibregl.GeoJSONSource | undefined;
+      if (src) src.setData(data);
+    };
+
+    const setAirportVisibility = () => {
+      const visibility = airportsEnabledRef.current ? 'visible' : 'none';
+      for (const layer of ['airports', 'airport-labels']) {
+        if (map.getLayer(layer)) map.setLayoutProperty(layer, 'visibility', visibility);
+      }
+    };
+
+    const loadAirports = async () => {
+      const seq = ++airportSeq;
+      if (!airportsEnabledRef.current) {
+        setAirportMapData(EMPTY_FEATURES);
+        setAirportCount(0);
+        setAirportStatus('idle');
+        return;
+      }
+      try {
+        setAirportStatus('loading');
+        const bbox = viewportBbox(map);
+        if (!bbox) return;
+        const params = new URLSearchParams({
+          bbox: bbox.map((v) => v.toFixed(5)).join(','),
+          zoom: map.getZoom().toFixed(2),
+          limit: '1600',
+        });
+        const res = await fetch(`${API_BASE}/api/v1/airports/viewport?${params.toString()}`);
+        if (!res.ok) throw new Error(`airports ${res.status}`);
+        const data = ((await res.json()) as { data: AirportFeatureCollection }).data;
+        if (seq !== airportSeq) return;
+        setAirportMapData(data);
+        setAirportCount(data.count ?? data.features.length);
+        setAirportStatus('ready');
+      } catch {
+        if (seq !== airportSeq) return;
+        setAirportMapData(EMPTY_FEATURES);
+        setAirportCount(0);
+        setAirportStatus('error');
+      }
+    };
+
+    const scheduleAirportLoad = () => {
+      if (airportTimer) clearTimeout(airportTimer);
+      airportTimer = setTimeout(() => void loadAirports(), 220);
+    };
+
+    applyAirportsRef.current = () => {
+      setAirportVisibility();
+      scheduleAirportLoad();
     };
 
     const setAirspaceMapData = (data: GeoJSON.FeatureCollection) => {
@@ -656,6 +887,9 @@ export function LiveMap() {
     const select = (id: string | null) => {
       selectedId = id;
       if (id) {
+        airportDetailSeqRef.current += 1;
+        setSelAirport(null);
+        setSelectedAirportStatus('idle');
         void loadTrail(id);
         const s = client.store.get(id);
         setSel(s ? toSel(s) : null);
@@ -670,6 +904,29 @@ export function LiveMap() {
       }
     };
     selectRef.current = select;
+
+    const selectAirport = async (id: string) => {
+      const seq = ++airportDetailSeqRef.current;
+      selectedId = null;
+      clearTrail();
+      setRouteData(null);
+      setSel(null);
+      setRoute(null);
+      setSelAirport(null);
+      setSelectedAirportStatus('loading');
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/airports/id/${encodeURIComponent(id)}`);
+        if (!res.ok) throw new Error(`airport detail ${res.status}`);
+        const data = ((await res.json()) as { data: { airport: AirportDetail } }).data.airport;
+        if (seq !== airportDetailSeqRef.current) return;
+        setSelAirport(data);
+        setSelectedAirportStatus('ready');
+      } catch {
+        if (seq !== airportDetailSeqRef.current) return;
+        setSelAirport(null);
+        setSelectedAirportStatus('error');
+      }
+    };
 
     // ── Search → focus: fly to a searched aircraft and select it, instead of
     // opening its detail page. Live hits are selected in place; a hit that
@@ -779,6 +1036,9 @@ export function LiveMap() {
         map.addImage('prop', makePropImage(64), { sdf: true, pixelRatio: 2 });
         map.addImage('helo', makeHeloImage(64), { sdf: true, pixelRatio: 2 });
       }
+      if (!map.hasImage('airport')) {
+        map.addImage('airport', makeAirportImage(64), { sdf: true, pixelRatio: 2 });
+      }
 
       if (!map.getSource('airspaces')) {
         map.addSource('airspaces', { type: 'geojson', data: EMPTY_FEATURES });
@@ -820,6 +1080,50 @@ export function LiveMap() {
             'text-halo-color': '#050912',
             'text-halo-width': 1.2,
             'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 0.86],
+          },
+        });
+      }
+
+      if (!map.getSource('airports')) {
+        map.addSource('airports', { type: 'geojson', data: EMPTY_FEATURES });
+        map.addLayer({
+          id: 'airports',
+          type: 'symbol',
+          source: 'airports',
+          layout: {
+            visibility: airportsEnabledRef.current ? 'visible' : 'none',
+            'icon-image': 'airport',
+            'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.24, 7, 0.38, 11, 0.56],
+            'icon-allow-overlap': false,
+            'icon-ignore-placement': false,
+          },
+          paint: {
+            'icon-color': AIRPORT_COLOR,
+            'icon-halo-color': '#050912',
+            'icon-halo-width': 1.2,
+            'icon-opacity': ['case', ['==', ['get', 'scheduledService'], true], 0.95, 0.72],
+          },
+        });
+        map.addLayer({
+          id: 'airport-labels',
+          type: 'symbol',
+          source: 'airports',
+          minzoom: 6.3,
+          layout: {
+            visibility: airportsEnabledRef.current ? 'visible' : 'none',
+            'text-field': ['coalesce', ['get', 'iata'], ['get', 'icao']],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 6, 9, 10, 11],
+            'text-offset': [0, 1.3],
+            'text-anchor': 'top',
+            'text-allow-overlap': false,
+            'text-ignore-placement': false,
+            'text-padding': 4,
+          },
+          paint: {
+            'text-color': '#dbeafe',
+            'text-halo-color': '#050912',
+            'text-halo-width': 1.1,
+            'text-opacity': ['interpolate', ['linear'], ['zoom'], 6.3, 0, 7.2, 0.9],
           },
         });
       }
@@ -953,11 +1257,15 @@ export function LiveMap() {
       if (started) return;
       started = true;
       void client.connect().then(sendViewport);
+      airportInterval = setInterval(scheduleAirportLoad, AIRPORT_POLL_MS);
+      viewportLiveInterval = setInterval(scheduleViewportLive, VIEWPORT_LIVE_POLL_MS);
       raf = requestAnimationFrame(tick);
     };
 
     map.on('style.load', () => {
       void ensureLayers().then(() => {
+        setAirportVisibility();
+        scheduleAirportLoad();
         setAirspaceVisibility();
         scheduleAirspaceLoad();
         startFeed();
@@ -969,14 +1277,30 @@ export function LiveMap() {
       const id = e.features?.[0]?.properties?.flightId as string | undefined;
       if (id) select(id);
     });
+    map.on('click', 'airports', (e) => {
+      if (map.queryRenderedFeatures(e.point, { layers: ['flights'] }).length > 0) return;
+      const id = e.features?.[0]?.properties?.id as string | undefined;
+      if (id) void selectAirport(id);
+    });
     map.on('click', (e) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: ['flights'] });
-      if (hits.length === 0) select(null);
+      const hits = map.queryRenderedFeatures(e.point, { layers: ['flights', 'airports'] });
+      if (hits.length === 0) {
+        airportDetailSeqRef.current += 1;
+        select(null);
+        setSelAirport(null);
+        setSelectedAirportStatus('idle');
+      }
     });
     map.on('mouseenter', 'flights', () => {
       map.getCanvas().style.cursor = 'pointer';
     });
     map.on('mouseleave', 'flights', () => {
+      map.getCanvas().style.cursor = '';
+    });
+    map.on('mouseenter', 'airports', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'airports', () => {
       map.getCanvas().style.cursor = '';
     });
 
@@ -1000,6 +1324,7 @@ export function LiveMap() {
 
     map.on('moveend', () => {
       sendViewport();
+      scheduleAirportLoad();
       scheduleAirspaceLoad();
     });
     const unsub = client.store.subscribe(() => {
@@ -1013,7 +1338,12 @@ export function LiveMap() {
 
     return () => {
       clearTimeout(fallbackTimer);
+      airportDetailSeqRef.current += 1;
+      if (airportTimer) clearTimeout(airportTimer);
+      if (airportInterval) clearInterval(airportInterval);
       if (airspaceTimer) clearTimeout(airspaceTimer);
+      if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
+      if (viewportLiveInterval) clearInterval(viewportLiveInterval);
       cancelAnimationFrame(raf);
       ro.disconnect();
       unsub();
@@ -1158,6 +1488,27 @@ export function LiveMap() {
             placeholder={t('map.filter.airline')}
             className="h-8 w-40 rounded-md border border-border bg-card/85 px-2.5 text-xs shadow-soft-md backdrop-blur-md outline-none placeholder:text-muted-foreground focus-visible:border-ring"
           />
+          <button
+            type="button"
+            onClick={toggleAirports}
+            aria-pressed={airportsEnabled}
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
+              airportsEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <TowerControl className="size-3.5" />
+            {t('map.airports')}
+            {airportsEnabled && (
+              <span className="tabular-nums text-muted-foreground">
+                {airportStatus === 'loading'
+                  ? '...'
+                  : airportStatus === 'error'
+                    ? t('map.airports.error')
+                    : airportCount.toLocaleString()}
+              </span>
+            )}
+          </button>
           <button
             type="button"
             onClick={toggleAirspace}
@@ -1319,8 +1670,160 @@ export function LiveMap() {
           </div>
         </div>
       )}
+
+      {!sel && selectedAirportStatus === 'loading' && (
+        <div className="absolute inset-x-3 bottom-3 z-20 sm:inset-x-auto sm:left-4 sm:bottom-4 sm:w-80">
+          <div className="overflow-hidden rounded-xl border border-border bg-card/95 shadow-soft-lg backdrop-blur-md">
+            <div className="flex h-20 items-center justify-center bg-muted text-muted-foreground">
+              <TowerControl className="size-6" />
+            </div>
+            <div className="p-4">
+              <div className="h-5 w-40 animate-pulse rounded bg-muted" />
+              <div className="mt-2 h-3 w-56 animate-pulse rounded bg-muted" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!sel && selectedAirportStatus === 'error' && (
+        <div className="absolute inset-x-3 bottom-3 z-20 sm:inset-x-auto sm:left-4 sm:bottom-4 sm:w-80">
+          <div className="rounded-xl border border-border bg-card/95 p-4 shadow-soft-lg backdrop-blur-md">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="font-semibold">{t('map.airports.error')}</div>
+                <div className="mt-1 text-sm text-muted-foreground">{t('common.retry')}</div>
+              </div>
+              <button
+                type="button"
+                aria-label={t('common.close')}
+                onClick={() => {
+                  setSelectedAirportStatus('idle');
+                  setSelAirport(null);
+                }}
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!sel && selAirport && (
+        <div className="absolute inset-x-3 bottom-3 z-20 sm:inset-x-auto sm:left-4 sm:bottom-4 sm:w-80">
+          <div className="overflow-hidden rounded-xl border border-border bg-card/95 shadow-soft-lg backdrop-blur-md">
+            {selAirport.photo?.url ? (
+              <img
+                src={selAirport.photo.url}
+                alt={selAirport.name}
+                referrerPolicy="no-referrer"
+                className="h-36 w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-20 items-center justify-center bg-muted text-muted-foreground">
+                <TowerControl className="size-6" />
+              </div>
+            )}
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-lg font-semibold leading-tight">
+                    {airportCode(selAirport)}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">{selAirport.name}</div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {[selAirport.city, selAirport.country].filter(Boolean).join(', ') || '—'}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                      {airportTypeLabel(selAirport.type)}
+                    </span>
+                    <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                      {selAirport.scheduledService
+                        ? t('map.airport.scheduled')
+                        : t('map.airport.unscheduled')}
+                    </span>
+                    {selAirport.timezone && (
+                      <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {selAirport.timezone}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={t('common.close')}
+                  onClick={() => {
+                    airportDetailSeqRef.current += 1;
+                    setSelAirport(null);
+                    setSelectedAirportStatus('idle');
+                  }}
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <Metric label={t('map.airport.code')} value={selAirport.icao} />
+                <Metric label={t('map.altitude')} value={fmtFt(selAirport.elevationFt)} />
+                <Metric
+                  label={t('map.airport.runways')}
+                  value={String(runwayCount(selAirport.runways))}
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selAirport.iata && (
+                  <Link
+                    href={`/airports/${selAirport.iata}`}
+                    className="inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                  >
+                    {t('common.details')}
+                  </Link>
+                )}
+                {selAirport.homeUrl && (
+                  <a
+                    href={selAirport.homeUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {t('map.airport.website')}
+                    <ExternalLink className="size-3" />
+                  </a>
+                )}
+                {selAirport.wikipediaUrl && (
+                  <a
+                    href={selAirport.wikipediaUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {t('map.airport.wiki')}
+                    <ExternalLink className="size-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function airportCode(a: AirportDetail): string {
+  return a.iata ?? a.icao;
+}
+
+function airportTypeLabel(type: string | null): string {
+  if (!type) return 'Airport';
+  return type.replace(/_/g, ' ');
+}
+
+function runwayCount(runways: unknown): number {
+  return Array.isArray(runways) ? runways.length : 0;
 }
 
 function fmtFt(ft: number | null): string {

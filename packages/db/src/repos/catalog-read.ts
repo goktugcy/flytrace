@@ -12,6 +12,7 @@ export interface AirportDetail {
   iata: string | null;
   icao: string;
   name: string;
+  type: string | null;
   city: string | null;
   country: string | null;
   timezone: string | null;
@@ -19,6 +20,27 @@ export interface AirportDetail {
   lat: number | null;
   lon: number | null;
   runways: unknown;
+  scheduledService: boolean;
+  homeUrl: string | null;
+  wikipediaUrl: string | null;
+  keywords: string | null;
+}
+
+export interface AirportMapRow {
+  id: string;
+  iata: string | null;
+  icao: string;
+  name: string;
+  type: string | null;
+  city: string | null;
+  country: string | null;
+  elevationFt: number | null;
+  lat: number;
+  lon: number;
+  runwayCount: number;
+  scheduledService: boolean;
+  homeUrl: string | null;
+  wikipediaUrl: string | null;
 }
 
 /** A row on an airport's departures/arrivals board. */
@@ -75,12 +97,82 @@ function createCatalogReadRepo(db: Database) {
   return {
     async getAirportByIata(iata: string): Promise<AirportDetail | null> {
       const rows = (await db.execute(sql`
-        select id, iata, icao, name, city, country, timezone,
+        select id, iata, icao, name, type, city, country, timezone,
                elevation_ft as "elevationFt", runways,
+               scheduled_service as "scheduledService",
+               home_url as "homeUrl", wikipedia_url as "wikipediaUrl", keywords,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
         from airports where iata = ${iata.toUpperCase()} limit 1
       `)) as unknown as AirportDetail[];
       return rows[0] ?? null;
+    },
+
+    async getAirportById(id: string): Promise<AirportDetail | null> {
+      const rows = (await db.execute(sql`
+        select id, iata, icao, name, type, city, country, timezone,
+               elevation_ft as "elevationFt", runways,
+               scheduled_service as "scheduledService",
+               home_url as "homeUrl", wikipedia_url as "wikipediaUrl", keywords,
+               ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
+        from airports where id = ${id} limit 1
+      `)) as unknown as AirportDetail[];
+      return rows[0] ?? null;
+    },
+
+    async getAirportsInViewport(
+      bbox: readonly [west: number, south: number, east: number, north: number],
+      opts: { types?: string[]; includeClosed?: boolean; limit?: number } = {},
+    ): Promise<AirportMapRow[]> {
+      const [west, south, east, north] = bbox;
+      const lonFilter =
+        west <= east
+          ? sql`lon between ${west} and ${east}`
+          : sql`(lon >= ${west} or lon <= ${east})`;
+      const typeFilter =
+        opts.types && opts.types.length > 0
+          ? sql`and type in (${sql.join(
+              opts.types.map((t) => sql`${t}`),
+              sql`, `,
+            )})`
+          : sql``;
+      const closedFilter = opts.includeClosed ? sql`` : sql`and coalesce(type, '') <> 'closed'`;
+      const limit = Math.max(1, Math.min(opts.limit ?? 1200, 2500));
+      return (await db.execute(sql`
+        with placed as (
+          select id, iata, icao, name, type, city, country,
+                 elevation_ft as "elevationFt",
+                 scheduled_service as "scheduledService",
+                 home_url as "homeUrl", wikipedia_url as "wikipediaUrl",
+                 case
+                   when jsonb_typeof(runways) = 'array' then jsonb_array_length(runways)
+                   else 0
+                 end as "runwayCount",
+                 ST_Y(location::geometry) as lat,
+                 ST_X(location::geometry) as lon
+          from airports
+          where location is not null
+        )
+        select *
+        from placed
+        where lat between ${south} and ${north}
+          and ${lonFilter}
+          ${closedFilter}
+          ${typeFilter}
+        order by
+          case type
+            when 'large_airport' then 1
+            when 'medium_airport' then 2
+            when 'small_airport' then 3
+            when 'heliport' then 4
+            when 'seaplane_base' then 5
+            when 'balloonport' then 6
+            else 7
+          end,
+          "scheduledService" desc,
+          "runwayCount" desc,
+          name asc
+        limit ${limit}
+      `)) as unknown as AirportMapRow[];
     },
 
     /**
