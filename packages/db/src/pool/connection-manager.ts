@@ -45,6 +45,10 @@ export interface CreatePooledDbOptions {
   idleTimeout?: number;
   /** postgres-js connect_timeout (seconds) before a connect attempt fails. */
   connectTimeout?: number;
+  /** postgres-js max_lifetime (seconds) before a connection is recycled. */
+  maxLifetime?: number | null;
+  /** PostgreSQL statement_timeout startup parameter (milliseconds). */
+  statementTimeoutMs?: number;
   /** Surface NOTICE logs (default: silenced, matching createDb). */
   onNotice?: boolean;
 }
@@ -70,6 +74,10 @@ export function createPooledDb(opts: CreatePooledDbOptions) {
     max: opts.max ?? DEFAULT_MAX,
     idle_timeout: opts.idleTimeout ?? DEFAULT_IDLE_TIMEOUT,
     connect_timeout: opts.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT,
+    max_lifetime: opts.maxLifetime ?? null,
+    ...(opts.statementTimeoutMs
+      ? { connection: { statement_timeout: opts.statementTimeoutMs } }
+      : {}),
     // `prepare: false` both disables named prepared statements and prevents
     // postgres-js from caching statements per backend connection — the two
     // behaviours that are unsafe under transaction pooling.

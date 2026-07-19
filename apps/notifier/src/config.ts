@@ -15,6 +15,7 @@ const notifierSchema = z.object({
 const notifierConfigSchema = configSchemas.base
   .merge(configSchemas.database)
   .merge(configSchemas.redis)
+  .merge(configSchemas.infra)
   .merge(configSchemas.webPush)
   .merge(configSchemas.telegram)
   .merge(configSchemas.email)

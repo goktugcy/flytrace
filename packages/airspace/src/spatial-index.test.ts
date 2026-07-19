@@ -29,6 +29,7 @@ describe('SpatialIndex', () => {
   test('build records size', () => {
     const idx = SpatialIndex.build([box('a', 0, 0, 1, 1), box('b', 10, 10, 11, 11)]);
     expect(idx.size).toBe(2);
+    expect(idx.list().map((a) => a.id)).toEqual(['a', 'b']);
   });
 
   test('findContaining returns only the box that contains the point', () => {

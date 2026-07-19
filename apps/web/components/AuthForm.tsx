@@ -10,29 +10,66 @@ import { Spinner } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { CheckCircle2, Plane } from 'lucide-react';
-import { useState } from 'react';
+import Script from 'next/script';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 const API_BASE = apiBase();
+const TURNSTILE_ACTION = 'turnstile-spin-v1';
+const TURNSTILE_ENABLED = process.env.NEXT_PUBLIC_TURNSTILE_ENABLED === 'true';
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 type Mode = 'sign-in' | 'sign-up';
 
-export function AuthForm({ next }: { next: string }) {
+declare global {
+  interface Window {
+    turnstile?: {
+      render?: (container: HTMLElement, opts: { sitekey: string; action?: string }) => string;
+      reset?: () => void;
+    };
+  }
+}
+
+export function AuthForm({ next, nonce }: { next: string; nonce?: string | undefined }) {
   const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'busy' | 'success'>('idle');
+  const [turnstileReady, setTurnstileReady] = useState(false);
+  const turnstileRef = useRef<HTMLDivElement | null>(null);
   const t = useT();
+  const needsTurnstile = mode === 'sign-up' && TURNSTILE_ENABLED && Boolean(TURNSTILE_SITE_KEY);
 
-  async function submit(e: React.FormEvent) {
+  useEffect(() => {
+    if (window.turnstile) setTurnstileReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!needsTurnstile || !turnstileReady || !TURNSTILE_SITE_KEY || !turnstileRef.current) return;
+    if (turnstileRef.current.childElementCount > 0) return;
+    window.turnstile?.render?.(turnstileRef.current, {
+      sitekey: TURNSTILE_SITE_KEY,
+      action: TURNSTILE_ACTION,
+    });
+  }, [needsTurnstile, turnstileReady]);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setStatus('busy');
     setError(null);
     try {
+      const headers = new Headers({ 'content-type': 'application/json' });
+      if (needsTurnstile) {
+        const token = new FormData(e.currentTarget).get('cf-turnstile-response');
+        if (typeof token !== 'string' || token.length === 0) {
+          throw new Error('Bot verification required');
+        }
+        headers.set('cf-turnstile-response', token);
+      }
       const res = await fetch(`${API_BASE}/api/auth/${mode}`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
@@ -48,6 +85,7 @@ export function AuthForm({ next }: { next: string }) {
     } catch (err) {
       setStatus('idle');
       setError(err instanceof Error ? err.message : 'Something went wrong');
+      if (needsTurnstile) window.turnstile?.reset?.();
     }
   }
 
@@ -58,6 +96,14 @@ export function AuthForm({ next }: { next: string }) {
 
   return (
     <main className="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-md flex-col justify-center px-4 py-12 sm:px-6">
+      {TURNSTILE_ENABLED && TURNSTILE_SITE_KEY && (
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="lazyOnload"
+          nonce={nonce}
+          onLoad={() => setTurnstileReady(true)}
+        />
+      )}
       <div className="mb-6 flex flex-col items-center text-center">
         <span className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-soft">
           <Plane className="size-5" />
@@ -125,6 +171,12 @@ export function AuthForm({ next }: { next: string }) {
                 minLength={8}
               />
             </div>
+
+            {needsTurnstile && (
+              <div className="flex min-h-[65px] justify-center overflow-hidden">
+                <div ref={turnstileRef} />
+              </div>
+            )}
 
             {error && (
               <p

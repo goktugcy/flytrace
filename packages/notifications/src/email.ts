@@ -11,6 +11,7 @@ export interface OutboundEmail {
   subject: string;
   html: string;
   text: string;
+  idempotencyKey?: string | undefined;
 }
 
 /** Email transport port (docs/10 §10.6) — Resend/SES/SMTP behind one interface. */
@@ -25,9 +26,14 @@ export class HttpEmailTransport implements EmailTransport {
   ) {}
   async send(email: OutboundEmail): Promise<{ ok: boolean; status: number }> {
     const fetchImpl = this.opts.fetchImpl ?? fetch;
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.opts.apiKey}`,
+      'content-type': 'application/json',
+    };
+    if (email.idempotencyKey) headers['Idempotency-Key'] = email.idempotencyKey;
     const res = await fetchImpl(this.opts.apiUrl ?? 'https://api.resend.com/emails', {
       method: 'POST',
-      headers: { authorization: `Bearer ${this.opts.apiKey}`, 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify(email),
     });
     return { ok: res.ok, status: res.status };

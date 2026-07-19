@@ -80,12 +80,15 @@ Indexes: `unique(iata)`, `unique(icao)`, `idx(provider_key)`.
 Indexes: `unique(icao)`, `unique(iata)`, **GIST(location)** (nearest-airport, geofence).
 
 ### `geofences` — *why:* airspace polygons for entered-airspace events and lookups.
-`id uuid PK, name text, type text(FIR|TMA|CTA|CTR), icao_class text null,
+`id uuid PK, name text, type text(FIR|TMA|CTA|CTR|RESTRICTED|DANGER|PROHIBITED), icao_class text null,
 lower_ft int null, upper_ft int null, frequency text null, geom geometry(Geometry,4326) null,
-geojson jsonb null, source text null`.
+geojson jsonb null, source text null, provider text null, source_id text null,
+dataset_version text null, imported_at timestamptz, effective_from timestamptz null,
+effective_to timestamptz null`.
 Indexes: **GIST(geom)** for PostGIS containment/intersection queries, `idx(type)` for scoped
-airspace lookups. `geojson` keeps the app read path simple when PostGIS round-tripping is not
-needed.
+airspace lookups, `idx(provider,dataset_version)` and
+`unique(provider,dataset_version,source_id)` for idempotent dataset imports. `geojson` keeps the
+app read path simple when PostGIS round-tripping is not needed.
 
 ### `aircraft` — *why:* aircraft pages, enrichment, type/registration display.
 | column | type | notes |
@@ -350,6 +353,9 @@ provider_health= up | degraded | down
   (`user_mfa`, `mfa_backup_codes`, `refresh_tokens`, `user_devices`, `audit_log`) as an
   additive, backward-compatible migration. `src/schema/migration-safety.test.ts` keeps the
   expected table/index set and the `secret_ciphertext` guarantee under the normal test pipeline.
+- **Phase 15 migration:** `0002_violet_goliath.sql` adds geofence import metadata
+  (`provider`, `source_id`, `dataset_version`, import/effective timestamps) plus idempotency
+  indexes. Old dataset versions are closed by setting `effective_to`, not deleted.
 - **Seed data:** airlines (TK/PC/AJ/LH/BA…), major airports (IATA/ICAO/geo/tz), aircraft type
   lookup — from static reference datasets, idempotent seed script.
 

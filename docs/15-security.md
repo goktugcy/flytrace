@@ -13,10 +13,11 @@ untrusted clients, abusive bots, and third-party data sources.
   rotation on privilege change. No JWT in `localStorage` (XSS-exfiltration risk).
 - **WS auth:** short-lived single-use signed **WS ticket** minted from the session
   (see [12](./12-websocket.md) §12.7) — cookies aren't reliable for cross-origin WS.
-- **MFA-ready:** TOTP support enabled for admin accounts (Better Auth plugin) — required for
-  `role=admin`.
-- **Account security:** login rate limiting + lockout/backoff, breach-password check (k-anon
-  HIBP), device/session list with revoke, notification on new-device login.
+- **MFA-ready:** TOTP enrollment/confirm/verify routes are wired under `/api/v1/security`.
+  TOTP secrets are AES-GCM encrypted at rest; backup codes are stored as hashes and consumed
+  atomically.
+- **Account security:** device/session list with revoke, refresh-token family revoke, login rate
+  limiting hooks, and audit records for sensitive security changes.
 
 ## 15.2 Authorization
 
@@ -33,11 +34,10 @@ untrusted clients, abusive bots, and third-party data sources.
 ## 15.3 Transport & headers
 
 - **TLS everywhere** (proxy termination, HSTS with preload). HTTP→HTTPS redirect.
-- **Security headers** (via proxy + Hono middleware): `Content-Security-Policy` (strict:
-  self + explicit map/tile/CDN origins, `frame-ancestors 'none'`, no inline scripts — nonce/hash
-  based), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
-  `Permissions-Policy` (disable unused features), `X-Frame-Options: DENY`, COOP/COEP/CORP as
-  compatible with maps/3D.
+- **Security headers** (via proxy + Hono/Next middleware): CSP is feature-flagged with
+  `CSP_MODE=off|report-only|enforce`. The web middleware generates a nonce for scripts and includes
+  explicit WebSocket, MapLibre tile, analytics/custom, and Turnstile sources. Inline scripts are
+  not broadly allowed; inline styles remain allowed for current Next/MapLibre compatibility.
 - **CORS:** strict allowlist of known frontend origins; credentials only for those; no `*` with
   credentials.
 
@@ -52,7 +52,9 @@ untrusted clients, abusive bots, and third-party data sources.
 
 - **React auto-escaping**; **no `dangerouslySetInnerHTML`** except vetted, sanitized content
   (DOMPurify) — provider data is treated as untrusted and rendered as text.
-- Strict **CSP** (nonce-based, no `unsafe-inline`) as a second line of defense.
+- Strict **CSP** in report-only first, then enforce. Violation reports post to
+  `/api/v1/security/csp-report`, are size-limited, validated, and query/hash-stripped before audit
+  logging.
 - User-generated/free-text fields (names, search) escaped + length-limited; email/telegram
   templates escape interpolated values.
 
@@ -73,17 +75,18 @@ untrusted clients, abusive bots, and third-party data sources.
 
 ## 15.8 Rate limiting & abuse
 
-- **Redis-backed** sliding-window/token-bucket (Lua-atomic) at multiple scopes: per IP (global +
-  per sensitive route), per user, per session, per WS connection. Tiered limits (anon < user <
-  admin). Returns `429` + `Retry-After` + `X-RateLimit-*` ([11](./11-api.md) §11.8, [09](./09-redis.md) §9.9).
+- **Rate limiting:** in-memory default for local/test; Redis-backed ports exist for production
+  wiring. API/security routes and WS connections return `429`/rate errors with standard metadata.
 - **Auth endpoints** get strict throttling + exponential lockout to resist credential stuffing.
 - **WS:** connection caps per IP/user, subscription caps, message-rate caps.
 - **Search/live endpoints:** stricter buckets (they're cheap to abuse, costly to serve).
 
 ## 15.9 Bot protection
 
-- **CAPTCHA (Cloudflare Turnstile)** on sign-up, password reset, and abnormal login patterns —
-  privacy-friendly, low-friction. (Skill `turnstile-spin` available.)
+- **CAPTCHA (Cloudflare Turnstile)** is opt-in (`TURNSTILE_ENABLED=false` by default). When enabled,
+  sign-up sends a browser token, the API verifies it server-side, and action/hostname are checked.
+  Provider failures are fail-closed unless `TURNSTILE_FAIL_OPEN=true`; normal invalid tokens never
+  fail open.
 - Edge/WAF (Cloudflare) for DDoS/L7 mitigation, bot scoring, IP reputation; block/challenge
   abusive traffic before it reaches origin.
 - Honeypot fields + timing heuristics on public forms; progressive friction for suspicious IPs.

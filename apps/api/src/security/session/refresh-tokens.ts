@@ -51,11 +51,12 @@ export interface RefreshTokenRecord extends NewRefreshToken {
 export interface RefreshTokenRepo {
   insert(rec: NewRefreshToken): Promise<string>;
   findByHash(tokenHash: string): Promise<RefreshTokenRecord | null>;
-  /** Revoke `id` and point its `replaced_by` at the successor token. */
-  markReplaced(id: string, replacedBy: string, revokedAt: Date): Promise<void>;
+  /** Revoke `id` and point its `replaced_by` at the successor token. False means race/reuse. */
+  markReplaced(id: string, replacedBy: string, revokedAt: Date): Promise<boolean>;
   revoke(id: string, revokedAt: Date): Promise<void>;
   revokeFamily(familyId: string, revokedAt: Date): Promise<void>;
   revokeAllForUser(userId: string, revokedAt: Date): Promise<void>;
+  revokeAllForDevice(deviceId: string, revokedAt: Date): Promise<void>;
 }
 
 export interface RefreshTokenServiceDeps {
@@ -121,7 +122,13 @@ export class RefreshTokenService {
       familyId: rec.familyId,
       expiresAt: new Date(now.getTime() + this.deps.ttlMs),
     });
-    await this.deps.repo.markReplaced(rec.id, newId, now);
+    const replaced = await this.deps.repo.markReplaced(rec.id, newId, now);
+    if (!replaced) {
+      await this.deps.repo.revokeFamily(rec.familyId, now);
+      throw new AppError('UNAUTHENTICATED', 'refresh token reuse detected', {
+        details: { familyId: rec.familyId, reuse: true },
+      });
+    }
     return { token, expiresAt: new Date(now.getTime() + this.deps.ttlMs) };
   }
 
@@ -136,6 +143,10 @@ export class RefreshTokenService {
   /** Revoke every token for a user (global sign-out / credential change). */
   async revokeAllForUser(userId: string): Promise<void> {
     await this.deps.repo.revokeAllForUser(userId, new Date(this.deps.clock.now()));
+  }
+
+  async revokeAllForDevice(deviceId: string): Promise<void> {
+    await this.deps.repo.revokeAllForDevice(deviceId, new Date(this.deps.clock.now()));
   }
 }
 
@@ -160,7 +171,9 @@ export function createInMemoryRefreshTokenRepo(idGen?: Random): RefreshTokenRepo
     },
     async markReplaced(id, replacedBy, revokedAt) {
       const r = rows.get(id);
-      if (r) rows.set(id, { ...r, replacedBy, revokedAt });
+      if (!r || r.revokedAt !== null) return false;
+      rows.set(id, { ...r, replacedBy, revokedAt });
+      return true;
     },
     async revoke(id, revokedAt) {
       const r = rows.get(id);
@@ -174,6 +187,11 @@ export function createInMemoryRefreshTokenRepo(idGen?: Random): RefreshTokenRepo
     async revokeAllForUser(userId, revokedAt) {
       for (const [id, r] of rows) {
         if (r.userId === userId && r.revokedAt === null) rows.set(id, { ...r, revokedAt });
+      }
+    },
+    async revokeAllForDevice(deviceId, revokedAt) {
+      for (const [id, r] of rows) {
+        if (r.deviceId === deviceId && r.revokedAt === null) rows.set(id, { ...r, revokedAt });
       }
     },
   };

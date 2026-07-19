@@ -12,10 +12,12 @@
     "db:generate": "drizzle-kit generate && bun run scripts/fix-postgis-migration.ts",
     "db:migrate": "bun run src/migrate.ts",
     "db:seed": "bun run src/seed.ts",
+    "airspace:import": "bun run src/import-airspace.ts",
     "db:studio": "drizzle-kit studio",
     "test": "bun test"
   },
   "dependencies": {
+    "@flytrace/airspace": "workspace:*",
     "@flytrace/shared": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "postgres": "^3.4.5"

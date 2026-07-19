@@ -35,13 +35,15 @@ export class BrevoEmailProvider implements EmailProvider {
   }
 
   async send(msg: EmailMessage): Promise<EmailSendResult> {
+    const headers: Record<string, string> = {
+      'api-key': this.opts.apiKey,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    };
+    if (msg.idempotencyKey) headers['Idempotency-Key'] = msg.idempotencyKey;
     const res = await this.fetchImpl(this.apiUrl, {
       method: 'POST',
-      headers: {
-        'api-key': this.opts.apiKey,
-        'content-type': 'application/json',
-        accept: 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         sender: parseSender(msg.from),
         to: [{ email: msg.to }],

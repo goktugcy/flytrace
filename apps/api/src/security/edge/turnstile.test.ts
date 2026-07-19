@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import {
   CloudflareTurnstile,
   MockTurnstile,
+  type TurnstileVerifier,
   createTurnstileVerifier,
   turnstileMiddleware,
 } from './turnstile.ts';
@@ -24,11 +25,22 @@ describe('CloudflareTurnstile', () => {
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
       seenUrl = String(url);
       seenBody = String(init?.body);
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          hostname: 'app.flytrace.local',
+          action: 'turnstile-spin-v1',
+          'error-codes': [],
+        }),
+        { status: 200 },
+      );
     }) as typeof fetch;
     const v = new CloudflareTurnstile({ secret: 's3cret', fetchImpl });
     const result = await v.verify('token-abc', '203.0.113.7');
     expect(result.success).toBe(true);
+    expect(result.hostname).toBe('app.flytrace.local');
+    expect(result.action).toBe('turnstile-spin-v1');
+    expect(result.errorCodes).toEqual([]);
     expect(seenUrl).toContain('siteverify');
     expect(seenBody).toContain('secret=s3cret');
     expect(seenBody).toContain('response=token-abc');
@@ -39,7 +51,9 @@ describe('CloudflareTurnstile', () => {
     const fetchImpl = (async () =>
       new Response('nope', { status: 500 })) as unknown as typeof fetch;
     const v = new CloudflareTurnstile({ secret: 's', fetchImpl });
-    expect((await v.verify('t')).success).toBe(false);
+    const result = await v.verify('t');
+    expect(result.success).toBe(false);
+    expect(result.errorCodes).toEqual(['provider_http_error']);
   });
 
   it('fails closed when fetch throws', async () => {
@@ -47,7 +61,9 @@ describe('CloudflareTurnstile', () => {
       throw new Error('network down');
     }) as unknown as typeof fetch;
     const v = new CloudflareTurnstile({ secret: 's', fetchImpl });
-    expect((await v.verify('t')).success).toBe(false);
+    const result = await v.verify('t');
+    expect(result.success).toBe(false);
+    expect(result.errorCodes).toEqual(['provider_error']);
   });
 });
 
@@ -75,6 +91,16 @@ function fakeContext(headers: Record<string, string>): Context {
 
 describe('turnstileMiddleware', () => {
   const nextNoop = async () => {};
+
+  it('bypasses verification when disabled', async () => {
+    const mw = turnstileMiddleware(new MockTurnstile(), { enabled: false });
+    const c = fakeContext({});
+    let called = false;
+    await mw(c, async () => {
+      called = true;
+    });
+    expect(called).toBe(true);
+  });
 
   it('403s when no token is present', async () => {
     const mw = turnstileMiddleware(new MockTurnstile());
@@ -105,5 +131,61 @@ describe('turnstileMiddleware', () => {
       called = true;
     });
     expect(called).toBe(true);
+  });
+
+  it('enforces expected action and hostname', async () => {
+    const verifier: TurnstileVerifier = {
+      verify: async () => ({
+        success: true,
+        action: 'turnstile-spin-v1',
+        hostname: 'app.flytrace.local',
+      }),
+    };
+    const pass = turnstileMiddleware(verifier, {
+      expectedAction: 'turnstile-spin-v1',
+      expectedHostname: 'app.flytrace.local',
+    });
+    let called = false;
+    await pass(fakeContext({ 'cf-turnstile-response': 'good' }), async () => {
+      called = true;
+    });
+    expect(called).toBe(true);
+
+    const fail = turnstileMiddleware(verifier, {
+      expectedAction: 'wrong-action',
+      expectedHostname: 'app.flytrace.local',
+    });
+    let caught: unknown;
+    await fail(fakeContext({ 'cf-turnstile-response': 'good' }), nextNoop).catch((e) => {
+      caught = e;
+    });
+    expect((caught as AppError).code).toBe('FORBIDDEN');
+    expect((caught as AppError).message).toContain('action');
+  });
+
+  it('fails open only for provider errors when configured', async () => {
+    const providerError: TurnstileVerifier = {
+      verify: async () => ({ success: false, errorCodes: ['provider_error'] }),
+    };
+    let called = false;
+    await turnstileMiddleware(providerError, { failOpen: true })(
+      fakeContext({ 'cf-turnstile-response': 'good' }),
+      async () => {
+        called = true;
+      },
+    );
+    expect(called).toBe(true);
+
+    const invalidToken: TurnstileVerifier = {
+      verify: async () => ({ success: false, errorCodes: ['invalid-input-response'] }),
+    };
+    let caught: unknown;
+    await turnstileMiddleware(invalidToken, { failOpen: true })(
+      fakeContext({ 'cf-turnstile-response': 'bad' }),
+      nextNoop,
+    ).catch((e) => {
+      caught = e;
+    });
+    expect((caught as AppError).code).toBe('FORBIDDEN');
   });
 });

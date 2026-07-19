@@ -4,9 +4,29 @@ import { createApp } from './app.ts';
 import type { AppContext } from './context.ts';
 
 /** Minimal fake context — /health and routing don't touch db/redis. */
-function fakeCtx(): AppContext {
+function fakeCtx(config: Record<string, unknown> = {}): AppContext {
   return {
-    config: { CORS_ORIGINS: ['http://localhost:3000'] },
+    config: {
+      APP_ENV: 'local',
+      AUTH_SECRET: 'test-auth-secret-at-least-16-chars',
+      AUDIT_BACKEND: 'memory',
+      CORS_ORIGINS: ['http://localhost:3000'],
+      MFA_ISSUER: 'FlyTrace',
+      RATE_LIMIT_MAX: 100,
+      RATE_LIMIT_WINDOW_MS: 60_000,
+      SESSION_REFRESH_TTL_DAYS: 30,
+      CSP_MODE: 'off',
+      CSP_CONNECT_SRC: [],
+      CSP_IMG_SRC: [],
+      CSP_SCRIPT_SRC: [],
+      CSP_STYLE_SRC: [],
+      CSP_FONT_SRC: [],
+      CSP_FRAME_SRC: [],
+      TURNSTILE_ENABLED: false,
+      TURNSTILE_FAIL_OPEN: false,
+      TURNSTILE_EXPECTED_ACTION: 'turnstile-spin-v1',
+      ...config,
+    },
     logger: createLogger({ level: 'error' }),
     clock: systemClock,
     db: {},
@@ -33,6 +53,27 @@ describe('api app', () => {
     const body = (await res.json()) as { data: unknown; meta: { requestId: string } };
     expect(body.data).toBeDefined();
     expect(body.meta.requestId).toBeTruthy();
+  });
+
+  test('CSP is opt-in and supports report-only mode', async () => {
+    const off = await createApp(fakeCtx()).request('/health');
+    expect(off.headers.get('content-security-policy')).toBeNull();
+    expect(off.headers.get('content-security-policy-report-only')).toBeNull();
+
+    const reportOnly = await createApp(
+      fakeCtx({
+        CSP_MODE: 'report-only',
+        CSP_REPORT_URI: '/api/v1/security/csp-report',
+        CSP_CONNECT_SRC: ['https://api.flytrace.test', 'wss://api.flytrace.test'],
+        CSP_IMG_SRC: ['https://tiles.openfreemap.org'],
+      }),
+    ).request('/health');
+    expect(reportOnly.headers.get('content-security-policy')).toBeNull();
+    const csp = reportOnly.headers.get('content-security-policy-report-only') ?? '';
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain('https://api.flytrace.test');
+    expect(csp).toContain('https://tiles.openfreemap.org');
+    expect(csp).toContain('report-uri /api/v1/security/csp-report');
   });
 
   test('GET /metrics → Prometheus text', async () => {

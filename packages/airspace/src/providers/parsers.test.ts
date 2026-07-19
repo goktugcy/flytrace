@@ -47,6 +47,18 @@ describe('openAIP parser', () => {
     expect(a?.name).toBe('ANKARA TMA');
   });
 
+  test('normalizes special-use airspace types', () => {
+    expect(normalizeOpenAipRecord({ name: 'R-12 RESTRICTED AREA', geometry: polygon })?.type).toBe(
+      'RESTRICTED',
+    );
+    expect(normalizeOpenAipRecord({ name: 'DANGER AREA D-5', geometry: polygon })?.type).toBe(
+      'DANGER',
+    );
+    expect(normalizeOpenAipRecord({ name: 'PROHIBITED P-1', geometry: polygon })?.type).toBe(
+      'PROHIBITED',
+    );
+  });
+
   test('records without geometry are skipped', () => {
     expect(normalizeOpenAipRecord({ name: 'no geom' })).toBeNull();
   });
@@ -99,6 +111,16 @@ describe('open-flightmaps parser', () => {
     expect(a?.frequency).toBe('129.3');
   });
 
+  test('normalizes open-flightmaps special-use types', () => {
+    const a = normalizeOfmFeature({
+      type: 'Feature',
+      id: 'r1',
+      properties: { name: 'TRAINING RESTRICTED', type: 'restricted' },
+      geometry: polygon,
+    });
+    expect(a?.type).toBe('RESTRICTED');
+  });
+
   test('parseOfmDataset reads a FeatureCollection and skips geometry-less features', () => {
     const text = JSON.stringify({
       features: [
@@ -144,6 +166,15 @@ describe('AIXM parser', () => {
     expect(a?.lowerFt).toBe(0);
     expect(a?.upperFt).toBe(24500);
     expect(a?.polygon.type).toBe('Polygon');
+  });
+
+  test('normalizes AIXM special-use types', () => {
+    const block = `<aixm:Airspace gml:id="d-1">
+      <aixm:name>DANGER AREA</aixm:name>
+      <aixm:type>DANGER</aixm:type>
+      <gml:posList>40 28 40 30 42 30 42 28</gml:posList>
+    </aixm:Airspace>`;
+    expect(normalizeAixmBlock(block, 0)?.type).toBe('DANGER');
   });
 
   test('parseAixmDataset extracts every Airspace block; empty input → []', () => {

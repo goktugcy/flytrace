@@ -65,5 +65,8 @@ jobs:
       - name: Apply migrations
         run: bun run db:migrate
 
+      - name: Verify migration-backed repositories
+        run: bun --filter @flytrace/db test src/schema/migration-safety.test.ts src/repos/security.test.ts
+
       - name: Seed
         run: bun run db:seed

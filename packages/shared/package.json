@@ -12,7 +12,8 @@
     "./bus": "./src/bus/index.ts",
     "./contracts": "./src/contracts/index.ts",
     "./ids": "./src/ids/index.ts",
-    "./clock": "./src/clock/index.ts"
+    "./clock": "./src/clock/index.ts",
+    "./security": "./src/security/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

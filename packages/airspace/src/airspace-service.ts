@@ -115,13 +115,16 @@ export function withinBand(altFt: number, lowerFt: number | null, upperFt: numbe
   return true;
 }
 
-/** Group matches into the `{ fir, tma, cta, ctr }` buckets the API returns. */
+/** Group matches into the airspace-kind buckets the API returns. */
 export function groupByType(matches: Airspace[]): Record<Lowercase<AirspaceType>, Airspace[]> {
   const out = {
     fir: [] as Airspace[],
     tma: [] as Airspace[],
     cta: [] as Airspace[],
     ctr: [] as Airspace[],
+    restricted: [] as Airspace[],
+    danger: [] as Airspace[],
+    prohibited: [] as Airspace[],
   };
   for (const a of matches) {
     out[a.type.toLowerCase() as Lowercase<AirspaceType>].push(a);

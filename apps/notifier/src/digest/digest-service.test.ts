@@ -27,6 +27,7 @@ describe('DigestService', () => {
     expect(emailProvider.sent[0]!.to).toBe('u1@example.com');
     expect(emailProvider.sent[0]!.from).toBe('FlyTrace <d@f.test>');
     expect(emailProvider.sent[0]!.subject).toContain('This week');
+    expect(emailProvider.sent[0]!.idempotencyKey).toMatch(/^digest:u1:/);
   });
 
   test('skips when the model is null', async () => {

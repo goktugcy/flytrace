@@ -32,6 +32,11 @@ export class SpatialIndex {
     return this.all.length;
   }
 
+  /** All indexed airspaces, in load order. */
+  list(): Airspace[] {
+    return this.all.map((entry) => entry.airspace);
+  }
+
   /** Build an index from a list of airspaces (replaces any prior contents). */
   static build(airspaces: Airspace[], opts: SpatialIndexOptions = {}): SpatialIndex {
     const idx = new SpatialIndex(opts);

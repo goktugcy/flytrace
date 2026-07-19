@@ -1,11 +1,12 @@
 import {
   type Database,
   createCatalogRepo,
-  createDb,
   createFlightReadRepo,
   createFlightRepo,
   createFlightStatusRepo,
+  createPooledDb,
   createSystemRepo,
+  resolvePoolConfig,
 } from '@flytrace/db';
 import {
   ProviderRegistry,
@@ -48,7 +49,26 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   });
   const prefix = redisKeyPrefix(config.APP_ENV);
 
-  const { db, close: closeDb } = createDb({ url: config.DATABASE_URL });
+  const pool = resolvePoolConfig(config);
+  logger.info('db pool configured', {
+    pool_mode: pool.poolMode,
+    max: pool.max,
+    prepare: pool.prepare,
+    idle_timeout_sec: pool.idleTimeoutSec,
+    connect_timeout_sec: pool.connectTimeoutSec,
+    max_lifetime_sec: pool.maxLifetimeSec,
+    statement_timeout_ms: pool.statementTimeoutMs,
+  });
+  const { db, close: closeDb } = createPooledDb({
+    url: config.DATABASE_URL,
+    poolMode: pool.poolMode,
+    max: pool.max,
+    prepare: pool.prepare,
+    idleTimeout: pool.idleTimeoutSec,
+    connectTimeout: pool.connectTimeoutSec,
+    maxLifetime: pool.maxLifetimeSec,
+    statementTimeoutMs: pool.statementTimeoutMs,
+  });
   const redis = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: null, // required for blocking XREADGROUP + BullMQ
     retryStrategy: (times) => Math.min(times * 200, 2000),

@@ -110,8 +110,9 @@ Each event: **payload · producer · consumers · transport · retry strategy ·
 
 ### `EnteredAirspace`
 - **Meaning:** aircraft crossed into a watched geofence (airport TMA, FIR, custom).
-- **Payload:** `{ flightId, geofenceId, at, position }`
-- **Producer:** `tracker` (PostGIS/Redis geofence check). **Consumers:** `notifier`, `api`.
+- **Payload:** `{ flightId, geofenceId, airspaceName?, airspaceType?, at, position }`
+- **Producer:** `tracker` using the airspace service delta helper
+  (`enteredAirspaceEventInputs`). **Consumers:** `notifier`, `api`.
 - **Transport:** pub/sub + stream. **Retry:** 3×. **Idempotency:** `flightId:airspace:geofenceId`.
 
 ### `AircraftChanged`

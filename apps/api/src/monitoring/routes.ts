@@ -37,9 +37,7 @@ export function buildChecksFromContext(ctx: AppContext): HealthCheck[] {
     const queue = ctx.providerQueue;
     checks.push(queueCheck(() => queue.getWaitingCount()));
   }
-  // WS connection count isn't directly readable from the metrics Gauge; wire a
-  // best-effort informational probe (0 when unknown) so the check is present.
-  checks.push(wsCheck(() => 0));
+  checks.push(wsCheck(() => ctx.wsPresence?.count() ?? 0));
   checks.push(memoryCheck());
 
   return checks;

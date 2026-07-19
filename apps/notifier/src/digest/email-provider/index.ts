@@ -21,6 +21,8 @@ export interface EmailMessage {
   subject: string;
   html: string;
   text?: string;
+  /** Stable key used by retrying callers to prevent duplicate provider sends. */
+  idempotencyKey?: string | undefined;
 }
 
 /** Result of a successful send — the provider's message id. */

@@ -1,4 +1,4 @@
-import { type Database, createDb, createNotifyRepo } from '@flytrace/db';
+import { type Database, createNotifyRepo, createPooledDb, resolvePoolConfig } from '@flytrace/db';
 import {
   ChannelRegistry,
   EmailChannel,
@@ -35,7 +35,26 @@ export function createContext(config: NotifierConfig): NotifierContext {
   });
   const prefix = redisKeyPrefix(config.APP_ENV);
 
-  const { db, close: closeDb } = createDb({ url: config.DATABASE_URL });
+  const pool = resolvePoolConfig(config);
+  logger.info('db pool configured', {
+    pool_mode: pool.poolMode,
+    max: pool.max,
+    prepare: pool.prepare,
+    idle_timeout_sec: pool.idleTimeoutSec,
+    connect_timeout_sec: pool.connectTimeoutSec,
+    max_lifetime_sec: pool.maxLifetimeSec,
+    statement_timeout_ms: pool.statementTimeoutMs,
+  });
+  const { db, close: closeDb } = createPooledDb({
+    url: config.DATABASE_URL,
+    poolMode: pool.poolMode,
+    max: pool.max,
+    prepare: pool.prepare,
+    idleTimeout: pool.idleTimeoutSec,
+    connectTimeout: pool.connectTimeoutSec,
+    maxLifetime: pool.maxLifetimeSec,
+    statementTimeoutMs: pool.statementTimeoutMs,
+  });
   const redis = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: null, // blocking XREADGROUP
     retryStrategy: (times) => Math.min(times * 200, 2000),

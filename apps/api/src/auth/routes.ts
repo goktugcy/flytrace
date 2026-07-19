@@ -2,6 +2,7 @@ import { AppError } from '@flytrace/shared';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
+import { type TurnstileVerifier, turnstileMiddleware } from '../security/edge/turnstile.ts';
 import { clearSessionCookie, getSessionToken, setSessionCookie } from './cookie.ts';
 import type { AuthService } from './service.ts';
 
@@ -63,6 +64,13 @@ function csrfGuard(allowedOrigins: string[]): MiddlewareHandler<AppEnv> {
 export interface AuthRoutesOptions {
   allowedOrigins: string[];
   cookieSecure: boolean;
+  turnstile?: {
+    verifier: TurnstileVerifier;
+    enabled: boolean;
+    failOpen: boolean;
+    expectedAction: string;
+    expectedHostname?: string | undefined;
+  };
 }
 
 /** Better-Auth-shaped credentials routes under /api/auth (docs/11 §11.6). */
@@ -70,7 +78,16 @@ export function createAuthRoutes(service: AuthService, opts: AuthRoutesOptions):
   const app = new Hono<AppEnv>();
   app.use('*', csrfGuard(opts.allowedOrigins));
 
-  app.post('/sign-up', async (c) => {
+  const turnstileForSignUp = opts.turnstile
+    ? turnstileMiddleware(opts.turnstile.verifier, {
+        enabled: opts.turnstile.enabled,
+        failOpen: opts.turnstile.failOpen,
+        expectedAction: opts.turnstile.expectedAction,
+        expectedHostname: opts.turnstile.expectedHostname,
+      })
+    : undefined;
+
+  const signUpHandler: MiddlewareHandler<AppEnv> = async (c) => {
     const parsed = signUpSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success)
       throw new AppError('VALIDATION_ERROR', 'invalid sign-up', { details: parsed.error.issues });
@@ -83,7 +100,10 @@ export function createAuthRoutes(service: AuthService, opts: AuthRoutesOptions):
     });
     setSessionCookie(c, token, expiresAt, opts.cookieSecure);
     return c.json({ data: { user }, meta: { requestId: c.get('requestId') } }, 201);
-  });
+  };
+
+  if (turnstileForSignUp) app.post('/sign-up', turnstileForSignUp, signUpHandler);
+  else app.post('/sign-up', signUpHandler);
 
   app.post('/sign-in', async (c) => {
     const parsed = signInSchema.safeParse(await c.req.json().catch(() => null));

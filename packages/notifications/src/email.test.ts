@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { EmailChannel, FakeEmailTransport } from './email.ts';
+import { EmailChannel, FakeEmailTransport, HttpEmailTransport } from './email.ts';
 
 describe('EmailChannel', () => {
   test('sends HTML + text with deep link and unsubscribe footer', async () => {
@@ -32,5 +32,26 @@ describe('EmailChannel', () => {
     });
     const res = await ch.send({ email: 'bad@example.com' }, { title: 't', body: 'b', url: '/x' });
     expect(res).toEqual({ ok: false, gone: true, error: 'email 422' });
+  });
+
+  test('HTTP transport forwards idempotency keys to the provider', async () => {
+    let headers: Headers;
+    const transport = new HttpEmailTransport({
+      apiKey: 'k',
+      fetchImpl: (async (_url, init) => {
+        headers = new Headers(init?.headers);
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch,
+    });
+    const res = await transport.send({
+      from: 'a@f.test',
+      to: 'u@example.test',
+      subject: 's',
+      html: '<p>s</p>',
+      text: 's',
+      idempotencyKey: 'event:abc',
+    });
+    expect(res.ok).toBe(true);
+    expect(headers!.get('Idempotency-Key')).toBe('event:abc');
   });
 });

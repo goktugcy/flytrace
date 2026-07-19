@@ -25,12 +25,14 @@ export class ResendEmailProvider implements EmailProvider {
   }
 
   async send(msg: EmailMessage): Promise<EmailSendResult> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.opts.apiKey}`,
+      'content-type': 'application/json',
+    };
+    if (msg.idempotencyKey) headers['Idempotency-Key'] = msg.idempotencyKey;
     const res = await this.fetchImpl(this.apiUrl, {
       method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.opts.apiKey}`,
-        'content-type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         from: msg.from,
         to: msg.to,

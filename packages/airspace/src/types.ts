@@ -7,8 +7,8 @@
  * is provider-agnostic.
  */
 
-/** Controlled-airspace classes (ICAO Annex 11). `null` when the source omits it. */
-export type AirspaceType = 'FIR' | 'TMA' | 'CTA' | 'CTR';
+/** Controlled/special-use airspace kinds normalized across providers. */
+export type AirspaceType = 'FIR' | 'TMA' | 'CTA' | 'CTR' | 'RESTRICTED' | 'DANGER' | 'PROHIBITED';
 
 /** GeoJSON position — [longitude, latitude] (RFC 7946 §3.1.1). Altitude ignored. */
 export type Position2D = [number, number];
@@ -51,6 +51,12 @@ export interface Airspace {
   polygon: AirspaceGeometry;
   /** Provenance: which provider/dataset the record came from. */
   source?: string;
+  provider?: string;
+  sourceId?: string;
+  datasetVersion?: string;
+  importedAt?: string;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
 }
 
 /** Axis-aligned bounding box in [minLon, minLat, maxLon, maxLat] order. */

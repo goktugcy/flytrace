@@ -12,6 +12,7 @@ export interface SmtpTransport {
     subject: string;
     html: string;
     text?: string;
+    headers?: Record<string, string>;
   }): Promise<{ messageId: string }>;
 }
 
@@ -32,6 +33,9 @@ export class SmtpEmailProvider implements EmailProvider {
       subject: msg.subject,
       html: msg.html,
       ...(msg.text ? { text: msg.text } : {}),
+      ...(msg.idempotencyKey
+        ? { headers: { 'X-FlyTrace-Idempotency-Key': msg.idempotencyKey } }
+        : {}),
     });
     return { id: res.messageId };
   }

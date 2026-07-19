@@ -3,6 +3,7 @@ import type { AuthRepo, AuthUser, SessionWithUser } from '@flytrace/db';
 import { AppError, isAppError, systemClock } from '@flytrace/shared';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
+import { MockTurnstile } from '../security/edge/turnstile.ts';
 import { attachSession, createAuthRoutes } from './routes.ts';
 import { AuthService, type Hasher } from './service.ts';
 
@@ -41,7 +42,7 @@ class InMemoryAuthRepo implements AuthRepo {
   }
 }
 
-function buildApp() {
+function buildApp(opts: { turnstileEnabled?: boolean } = {}) {
   const service = new AuthService({
     repo: new InMemoryAuthRepo(),
     clock: systemClock,
@@ -56,7 +57,16 @@ function buildApp() {
   app.use('*', attachSession(service));
   app.route(
     '/',
-    createAuthRoutes(service, { allowedOrigins: ['http://localhost:3000'], cookieSecure: false }),
+    createAuthRoutes(service, {
+      allowedOrigins: ['http://localhost:3000'],
+      cookieSecure: false,
+      turnstile: {
+        verifier: new MockTurnstile(),
+        enabled: opts.turnstileEnabled ?? false,
+        failOpen: false,
+        expectedAction: 'turnstile-spin-v1',
+      },
+    }),
   );
   // Mirror the real app's error mapper so thrown AppErrors map to their status.
   app.onError((err, c) => {
@@ -134,5 +144,36 @@ describe('auth routes', () => {
       body: JSON.stringify({ email: 'not-an-email', password: 'short' }),
     });
     expect(res.status).toBe(422);
+  });
+
+  test('requires Turnstile on sign-up only when enabled', async () => {
+    const app = buildApp({ turnstileEnabled: true });
+    const missing = await app.request('/sign-up', {
+      method: 'POST',
+      headers: ORIGIN,
+      body: JSON.stringify({ email: 'a@example.com', password: 'hunter2!' }),
+    });
+    expect(missing.status).toBe(403);
+
+    const invalid = await app.request('/sign-up', {
+      method: 'POST',
+      headers: { ...ORIGIN, 'cf-turnstile-response': 'fail' },
+      body: JSON.stringify({ email: 'a@example.com', password: 'hunter2!' }),
+    });
+    expect(invalid.status).toBe(403);
+
+    const ok = await app.request('/sign-up', {
+      method: 'POST',
+      headers: { ...ORIGIN, 'cf-turnstile-response': 'pass' },
+      body: JSON.stringify({ email: 'a@example.com', password: 'hunter2!' }),
+    });
+    expect(ok.status).toBe(201);
+
+    const signIn = await app.request('/sign-in', {
+      method: 'POST',
+      headers: ORIGIN,
+      body: JSON.stringify({ email: 'a@example.com', password: 'hunter2!' }),
+    });
+    expect(signIn.status).toBe(200);
   });
 });

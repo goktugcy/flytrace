@@ -16,6 +16,8 @@ import type { Airspace } from '../types.ts';
 export interface AirspaceProvider {
   /** Load (and parse) the dataset. Idempotent; safe to call again to refresh. */
   load(): Promise<void>;
+  /** The loaded, normalized dataset. Empty until load() completes. */
+  allAirspaces(): Airspace[];
   /** All airspaces whose 2-D geometry contains the given point. */
   findContainingAirspace(lat: number, lon: number): Airspace[];
 }
@@ -25,16 +27,16 @@ export type AirspaceProviderKind = 'mock' | 'openaip' | 'openflightmaps' | 'aixm
 
 export interface AirspaceProviderOptions {
   /** Selected provider (config `AIRSPACE_PROVIDER`). Unknown ⇒ mock fallback. */
-  kind?: string;
+  kind?: string | undefined;
   /** openAIP dataset path or URL (config `OPENAIP_DATASET_PATH`). */
-  openaipDatasetPath?: string;
+  openaipDatasetPath?: string | undefined;
   /** open-flightmaps dataset path or URL (config `OPENFLIGHTMAPS_DATASET_PATH`). */
-  openflightmapsDatasetPath?: string;
+  openflightmapsDatasetPath?: string | undefined;
   /** AIXM dataset path or URL (config `AIXM_DATASET_PATH`). */
-  aixmDatasetPath?: string;
-  logger?: Logger;
+  aixmDatasetPath?: string | undefined;
+  logger?: Logger | undefined;
   /** Spatial-index grid cell size in degrees (advanced tuning). */
-  cellDeg?: number;
+  cellDeg?: number | undefined;
 }
 
 /**
@@ -57,6 +59,10 @@ export abstract class BaseAirspaceProvider implements AirspaceProvider {
   async load(): Promise<void> {
     const airspaces = await this.fetch();
     this.index = SpatialIndex.build(airspaces, this.cellDeg ? { cellDeg: this.cellDeg } : {});
+  }
+
+  allAirspaces(): Airspace[] {
+    return this.index.list();
   }
 
   findContainingAirspace(lat: number, lon: number): Airspace[] {

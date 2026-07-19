@@ -51,6 +51,9 @@ const NUMERIC_TYPE: Record<number, AirspaceType> = {
   1: 'TMA', // TMA in newer schema
   10: 'FIR',
   13: 'CTA',
+  2: 'RESTRICTED',
+  3: 'DANGER',
+  6: 'PROHIBITED',
 };
 
 /** openAIP numeric ICAO class code (0=A … 6=G). */
@@ -59,12 +62,18 @@ const NUMERIC_CLASS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 function normalizeType(raw: unknown, name: string): AirspaceType {
   if (typeof raw === 'number' && NUMERIC_TYPE[raw]) return NUMERIC_TYPE[raw] as AirspaceType;
   const s = String(raw ?? '').toUpperCase();
+  if (s.includes('PROHIBITED')) return 'PROHIBITED';
+  if (s.includes('DANGER')) return 'DANGER';
+  if (s.includes('RESTRICTED')) return 'RESTRICTED';
   if (s.includes('CTR')) return 'CTR';
   if (s.includes('TMA')) return 'TMA';
   if (s.includes('FIR')) return 'FIR';
   if (s.includes('CTA')) return 'CTA';
   // Heuristic from the airspace name.
   const n = name.toUpperCase();
+  if (n.includes('PROHIBITED')) return 'PROHIBITED';
+  if (n.includes('DANGER')) return 'DANGER';
+  if (n.includes('RESTRICTED')) return 'RESTRICTED';
   if (n.includes('CTR')) return 'CTR';
   if (n.includes('FIR')) return 'FIR';
   if (n.includes('CTA')) return 'CTA';
@@ -127,6 +136,8 @@ export function normalizeOpenAipRecord(raw: unknown): Airspace | null {
     upperFt: limitToFt(d.upperLimit),
     frequency: normalizeFrequency(d.frequency),
     source: 'openaip',
+    provider: 'openaip',
+    sourceId: d._id ?? d.id ?? `openaip:${name}`,
     polygon: d.geometry as AirspaceGeometry,
   };
 }

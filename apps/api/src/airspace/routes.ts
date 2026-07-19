@@ -16,9 +16,8 @@ import type { AppContext } from '../context.ts';
  * the tracker uses; defaults to the in-repo mock dataset so it works locally
  * with no external services.
  *
- * The provider is selected from env (AIRSPACE_PROVIDER / *_DATASET_PATH); until
- * those keys are added to the API config schema (see manifest) they are read
- * from process.env here, defaulting to the mock fallback.
+ * The provider is selected from config/env (AIRSPACE_PROVIDER / *_DATASET_PATH),
+ * defaulting to the mock fallback.
  */
 function summarize(a: Airspace) {
   return {
@@ -34,6 +33,14 @@ function summarize(a: Airspace) {
 
 export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const config = ctx.config as
+    | {
+        AIRSPACE_PROVIDER?: string;
+        OPENAIP_DATASET_PATH?: string;
+        OPENFLIGHTMAPS_DATASET_PATH?: string;
+        AIXM_DATASET_PATH?: string;
+      }
+    | undefined;
 
   // Lazily built once, shared across requests. The mock dataset load is cheap
   // and memoized behind the service's TTL cache.
@@ -42,15 +49,23 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
     if (!servicePromise) {
       servicePromise = (async () => {
         const provider = await selectAirspaceProvider({
-          ...(process.env.AIRSPACE_PROVIDER ? { kind: process.env.AIRSPACE_PROVIDER } : {}),
-          ...(process.env.OPENAIP_DATASET_PATH
-            ? { openaipDatasetPath: process.env.OPENAIP_DATASET_PATH }
+          ...((config?.AIRSPACE_PROVIDER ?? process.env.AIRSPACE_PROVIDER)
+            ? { kind: config?.AIRSPACE_PROVIDER ?? process.env.AIRSPACE_PROVIDER }
             : {}),
-          ...(process.env.OPENFLIGHTMAPS_DATASET_PATH
-            ? { openflightmapsDatasetPath: process.env.OPENFLIGHTMAPS_DATASET_PATH }
+          ...((config?.OPENAIP_DATASET_PATH ?? process.env.OPENAIP_DATASET_PATH)
+            ? {
+                openaipDatasetPath:
+                  config?.OPENAIP_DATASET_PATH ?? process.env.OPENAIP_DATASET_PATH,
+              }
             : {}),
-          ...(process.env.AIXM_DATASET_PATH
-            ? { aixmDatasetPath: process.env.AIXM_DATASET_PATH }
+          ...((config?.OPENFLIGHTMAPS_DATASET_PATH ?? process.env.OPENFLIGHTMAPS_DATASET_PATH)
+            ? {
+                openflightmapsDatasetPath:
+                  config?.OPENFLIGHTMAPS_DATASET_PATH ?? process.env.OPENFLIGHTMAPS_DATASET_PATH,
+              }
+            : {}),
+          ...((config?.AIXM_DATASET_PATH ?? process.env.AIXM_DATASET_PATH)
+            ? { aixmDatasetPath: config?.AIXM_DATASET_PATH ?? process.env.AIXM_DATASET_PATH }
             : {}),
           logger: ctx.logger,
         });
@@ -84,9 +99,17 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
     const matches = service.currentAirspace(lat, lon, altFt);
     const grouped = groupByType(matches);
 
-    // Primary controlling class/frequency: prefer the smallest (most specific)
-    // volume — CTR over TMA over CTA over FIR.
-    const priority: Record<Airspace['type'], number> = { CTR: 0, TMA: 1, CTA: 2, FIR: 3 };
+    // Primary controlling class/frequency: prefer the smallest/most operationally
+    // specific volume — CTR/special-use over broad TMA/CTA/FIR.
+    const priority: Record<Airspace['type'], number> = {
+      CTR: 0,
+      PROHIBITED: 1,
+      RESTRICTED: 2,
+      DANGER: 3,
+      TMA: 4,
+      CTA: 5,
+      FIR: 6,
+    };
     const primary = [...matches].sort((a, b) => priority[a.type] - priority[b.type])[0];
 
     return ok(c, {
@@ -95,6 +118,9 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
       tma: grouped.tma.map(summarize),
       cta: grouped.cta.map(summarize),
       ctr: grouped.ctr.map(summarize),
+      restricted: grouped.restricted.map(summarize),
+      danger: grouped.danger.map(summarize),
+      prohibited: grouped.prohibited.map(summarize),
       class: primary?.icaoClass ?? null,
       frequency: primary?.frequency ?? null,
       name: primary?.name ?? null,

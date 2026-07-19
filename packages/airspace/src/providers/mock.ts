@@ -31,6 +31,8 @@ function box(
     upperFt,
     frequency,
     source: 'mock',
+    provider: 'mock',
+    sourceId: id,
     polygon: {
       type: 'Polygon',
       coordinates: [

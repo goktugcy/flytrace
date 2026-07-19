@@ -52,6 +52,7 @@ export class DigestService {
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
+      idempotencyKey: digestIdempotencyKey(userId, model),
     });
     this.deps.logger?.info?.('digest: sent', {
       userId,
@@ -61,4 +62,22 @@ export class DigestService {
     });
     return 'sent';
   }
+}
+
+function digestIdempotencyKey(userId: string, model: DigestModel): string {
+  const raw = JSON.stringify({
+    userId,
+    periodLabel: model.periodLabel,
+    items: model.items.map((item) => ({
+      title: item.title,
+      detail: item.detail,
+      url: item.url,
+    })),
+  });
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `digest:${userId}:${(hash >>> 0).toString(36)}`;
 }

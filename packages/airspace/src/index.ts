@@ -9,4 +9,6 @@ export * from './point-in-polygon.ts';
 export * from './spatial-index.ts';
 export * from './cache.ts';
 export * from './airspace-service.ts';
+export * from './importer.ts';
+export * from './events.ts';
 export * from './providers/index.ts';

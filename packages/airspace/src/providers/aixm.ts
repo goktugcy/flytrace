@@ -26,11 +26,17 @@ function first(xml: string, re: RegExp): string | null {
 
 function normalizeType(typeStr: string | null, name: string): AirspaceType {
   const s = (typeStr ?? '').toUpperCase();
+  if (s.includes('PROHIBITED')) return 'PROHIBITED';
+  if (s.includes('DANGER')) return 'DANGER';
+  if (s.includes('RESTRICTED')) return 'RESTRICTED';
   if (s.includes('CTR')) return 'CTR';
   if (s.includes('TMA')) return 'TMA';
   if (s.includes('FIR')) return 'FIR';
   if (s.includes('CTA')) return 'CTA';
   const n = name.toUpperCase();
+  if (n.includes('PROHIBITED')) return 'PROHIBITED';
+  if (n.includes('DANGER')) return 'DANGER';
+  if (n.includes('RESTRICTED')) return 'RESTRICTED';
   if (n.includes('CTR')) return 'CTR';
   if (n.includes('FIR')) return 'FIR';
   if (n.includes('CTA')) return 'CTA';
@@ -105,6 +111,8 @@ export function normalizeAixmBlock(block: string, seq: number): Airspace | null 
     upperFt: aixmLimitToFt(upper?.[2] ?? null, upper?.[1] ?? null),
     frequency: first(block, FREQ_RE),
     source: 'aixm',
+    provider: 'aixm',
+    sourceId: first(block, ID_RE) ?? `aixm:${seq}`,
     polygon: { type: 'Polygon', coordinates: [ring] },
   };
 }

@@ -60,6 +60,7 @@ const workerSchema = z.object({
 const workerConfigSchema = configSchemas.base
   .merge(configSchemas.database)
   .merge(configSchemas.redis)
+  .merge(configSchemas.infra)
   .merge(workerSchema);
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;

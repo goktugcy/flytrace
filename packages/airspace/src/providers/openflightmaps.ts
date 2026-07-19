@@ -60,11 +60,17 @@ export function parseOfmAltitude(raw: string | number | null | undefined): numbe
 
 function normalizeType(typeStr: string | null | undefined, name: string): AirspaceType {
   const s = (typeStr ?? '').toUpperCase();
+  if (s.includes('PROHIBITED')) return 'PROHIBITED';
+  if (s.includes('DANGER')) return 'DANGER';
+  if (s.includes('RESTRICTED')) return 'RESTRICTED';
   if (s.includes('CTR')) return 'CTR';
   if (s.includes('TMA')) return 'TMA';
   if (s.includes('FIR')) return 'FIR';
   if (s.includes('CTA')) return 'CTA';
   const n = name.toUpperCase();
+  if (n.includes('PROHIBITED')) return 'PROHIBITED';
+  if (n.includes('DANGER')) return 'DANGER';
+  if (n.includes('RESTRICTED')) return 'RESTRICTED';
   if (n.includes('CTR')) return 'CTR';
   if (n.includes('FIR')) return 'FIR';
   if (n.includes('CTA')) return 'CTA';
@@ -93,6 +99,8 @@ export function normalizeOfmFeature(raw: unknown): Airspace | null {
     upperFt: parseOfmAltitude(p.upper),
     frequency: freq === null || freq === undefined ? null : String(freq),
     source: 'openflightmaps',
+    provider: 'openflightmaps',
+    sourceId: f.id != null ? String(f.id) : `ofm:${name}`,
     polygon: f.geometry as AirspaceGeometry,
   };
 }

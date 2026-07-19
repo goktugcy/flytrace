@@ -28,6 +28,12 @@ export class RedisFanout {
     if (this.sub) return;
     this.sub = this.redis.duplicate();
     const channel = `${this.prefix}${busChannels.events}`;
+    this.sub.on('error', (err) => {
+      this.logger.error('ws fanout redis error', { err: String(err) });
+    });
+    this.sub.on('reconnecting', () => {
+      this.logger.warn('ws fanout redis reconnecting');
+    });
     await this.sub.subscribe(channel);
     this.sub.on('message', (_channel, message) => {
       const parsed = busMessageSchema.safeParse(safeJson(message));

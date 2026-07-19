@@ -12,6 +12,9 @@ type Fetcher = typeof fetch;
 
 export interface TurnstileVerifyResult {
   success: boolean;
+  hostname?: string | undefined;
+  action?: string | undefined;
+  errorCodes?: string[] | undefined;
 }
 
 /** Port every verifier implements. */
@@ -25,7 +28,12 @@ export interface TurnstileVerifier {
  */
 export class MockTurnstile implements TurnstileVerifier {
   async verify(token: string): Promise<TurnstileVerifyResult> {
-    return { success: token !== 'fail' };
+    return {
+      success: token !== 'fail',
+      hostname: 'localhost',
+      action: 'turnstile-spin-v1',
+      ...(token === 'fail' ? { errorCodes: ['mock_failure'] } : {}),
+    };
   }
 }
 
@@ -68,17 +76,31 @@ export class CloudflareTurnstile implements TurnstileVerifier {
         body,
         signal: AbortSignal.timeout(5000),
       });
-      if (!res.ok) return { success: false };
-      const json = (await res.json()) as { success?: boolean };
-      return { success: json.success === true };
+      if (!res.ok) return { success: false, errorCodes: ['provider_http_error'] };
+      const json = (await res.json()) as {
+        success?: boolean;
+        hostname?: string;
+        action?: string;
+        'error-codes'?: string[];
+      };
+      return {
+        success: json.success === true,
+        hostname: json.hostname,
+        action: json.action,
+        errorCodes: json['error-codes'],
+      };
     } catch {
-      return { success: false };
+      return { success: false, errorCodes: ['provider_error'] };
     }
   }
 }
 
 export interface TurnstileConfig {
+  TURNSTILE_ENABLED?: boolean | undefined;
   TURNSTILE_SECRET?: string | undefined;
+  TURNSTILE_FAIL_OPEN?: boolean | undefined;
+  TURNSTILE_EXPECTED_ACTION?: string | undefined;
+  TURNSTILE_EXPECTED_HOSTNAME?: string | undefined;
 }
 
 export interface TurnstileFactoryDeps {
@@ -118,6 +140,10 @@ export function createTurnstileVerifier(
 }
 
 export interface TurnstileMiddlewareOptions {
+  enabled?: boolean | undefined;
+  failOpen?: boolean | undefined;
+  expectedAction?: string | undefined;
+  expectedHostname?: string | undefined;
   /** Request header carrying the token (default `cf-turnstile-response`). */
   header?: string | undefined;
   /** Optional form field to read the token from when the header is absent. */
@@ -138,7 +164,13 @@ export function turnstileMiddleware(
   const header = opts.header ?? 'cf-turnstile-response';
   const ipHeader = opts.ipHeader ?? 'cf-connecting-ip';
   const field = opts.field;
+  const enabled = opts.enabled ?? true;
+  const failOpen = opts.failOpen ?? false;
   return async (c, next) => {
+    if (!enabled) {
+      await next();
+      return;
+    }
     let token = c.req.header(header);
     if (!token && field) {
       const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
@@ -148,7 +180,21 @@ export function turnstileMiddleware(
     if (!token) throw new AppError('FORBIDDEN', 'turnstile token required');
     const ip = c.req.header(ipHeader) ?? c.req.header('x-forwarded-for');
     const result = await verifier.verify(token, ip);
+    if (
+      !result.success &&
+      failOpen &&
+      result.errorCodes?.some((code) => code === 'provider_error' || code === 'provider_timeout')
+    ) {
+      await next();
+      return;
+    }
     if (!result.success) throw new AppError('FORBIDDEN', 'turnstile verification failed');
+    if (opts.expectedAction && result.action !== opts.expectedAction) {
+      throw new AppError('FORBIDDEN', 'turnstile action mismatch');
+    }
+    if (opts.expectedHostname && result.hostname !== opts.expectedHostname) {
+      throw new AppError('FORBIDDEN', 'turnstile hostname mismatch');
+    }
     await next();
   };
 }

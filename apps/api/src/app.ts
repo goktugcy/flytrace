@@ -1,4 +1,13 @@
-import { type AuthUser, createAuthRepo, sql } from '@flytrace/db';
+import {
+  type AuthUser,
+  createAesGcmMfaSecretCodec,
+  createAuthRepo,
+  createSecurityAuditRepo,
+  createSecurityDeviceRepo,
+  createSecurityMfaRepo,
+  createSecurityRefreshTokenRepo,
+  sql,
+} from '@flytrace/db';
 import { AppError, correlationId, createTracer, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -15,11 +24,23 @@ import { tracingMiddleware } from './monitoring/request-tracing.ts';
 import { createMonitoringRoutes } from './monitoring/routes.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { createTelegramRoutes } from './notify/telegram.ts';
+import { DbAuditLog, InMemoryAuditLog } from './security/edge/audit-log.ts';
+import { buildCsp } from './security/edge/headers.ts';
 import { InMemoryRateLimiter, rateLimitMiddleware } from './security/edge/index.ts';
+import { CloudflareTurnstile, MockTurnstile } from './security/edge/turnstile.ts';
+import { MfaService } from './security/mfa/mfa-service.ts';
+import { createSecurityRoutes } from './security/routes.ts';
+import { DeviceService } from './security/session/devices.ts';
+import {
+  RefreshTokenService,
+  randomToken as randomRefreshToken,
+  sha256TokenHasher,
+} from './security/session/refresh-tokens.ts';
 import { createUserRoutes } from './user/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
 
 export interface AppEnv {
   Variables: {
@@ -30,15 +51,74 @@ export interface AppEnv {
   };
 }
 
+type AppConfig = AppContext['config'];
+
+function configuredCspHeaderName(mode: string | undefined): string | null {
+  if (mode === 'report-only') return 'Content-Security-Policy-Report-Only';
+  if (mode === 'enforce') return 'Content-Security-Policy';
+  return null;
+}
+
+function buildApiCsp(config: AppConfig): string {
+  const turnstileSources = config.TURNSTILE_ENABLED ? [TURNSTILE_ORIGIN] : [];
+  return buildCsp({
+    connectSrc: [
+      ...(config.CORS_ORIGINS ?? []),
+      ...(config.CSP_CONNECT_SRC ?? []),
+      ...turnstileSources,
+    ],
+    imgSrc: config.CSP_IMG_SRC ?? [],
+    scriptSrc: [...(config.CSP_SCRIPT_SRC ?? []), ...turnstileSources],
+    styleSrc: config.CSP_STYLE_SRC ?? [],
+    fontSrc: config.CSP_FONT_SRC ?? [],
+    frameSrc: [...(config.CSP_FRAME_SRC ?? []), ...turnstileSources],
+    reportUri: config.CSP_REPORT_URI,
+  });
+}
+
 export function createApp(ctx: AppContext) {
   const app = new Hono<AppEnv>();
 
+  const authRepo = createAuthRepo(ctx.db);
   const authService = new AuthService({
-    repo: createAuthRepo(ctx.db),
+    repo: authRepo,
     clock: ctx.clock,
     hasher: bunHasher,
     sessionTtlMs: SESSION_TTL_MS,
   });
+  const mfaSecretCodec = createAesGcmMfaSecretCodec(
+    ctx.config.MFA_SECRET_ENCRYPTION_KEY || ctx.config.AUTH_SECRET,
+  );
+  const mfaService = new MfaService({
+    repo: createSecurityMfaRepo(ctx.db, mfaSecretCodec),
+    clock: ctx.clock,
+    issuer: ctx.config.MFA_ISSUER,
+  });
+  const deviceService = new DeviceService({
+    repo: createSecurityDeviceRepo(ctx.db),
+    clock: ctx.clock,
+  });
+  const refreshTokenService = new RefreshTokenService({
+    repo: createSecurityRefreshTokenRepo(ctx.db),
+    clock: ctx.clock,
+    random: randomRefreshToken,
+    hasher: sha256TokenHasher,
+    ttlMs: ctx.config.SESSION_REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000,
+  });
+  const auditLog =
+    ctx.config.AUDIT_BACKEND === 'db'
+      ? new DbAuditLog(createSecurityAuditRepo(ctx.db), ctx.clock)
+      : new InMemoryAuditLog(ctx.clock);
+  if (
+    ctx.config.TURNSTILE_ENABLED &&
+    !ctx.config.TURNSTILE_SECRET &&
+    ctx.config.APP_ENV !== 'local'
+  ) {
+    throw new Error('TURNSTILE_SECRET is required when TURNSTILE_ENABLED=true outside local');
+  }
+  const turnstileVerifier = ctx.config.TURNSTILE_SECRET
+    ? new CloudflareTurnstile({ secret: ctx.config.TURNSTILE_SECRET })
+    : new MockTurnstile();
   const cookieSecure = ctx.config.APP_ENV !== 'local';
   const metrics = ctx.metrics ?? createApiMetrics();
   const tracer = createTracer(ctx.config, { logger: ctx.logger });
@@ -80,6 +160,14 @@ export function createApp(ctx: AppContext) {
   );
 
   app.use('*', secureHeaders());
+  const cspHeaderName = configuredCspHeaderName(ctx.config.CSP_MODE);
+  const csp = cspHeaderName ? buildApiCsp(ctx.config) : null;
+  if (cspHeaderName && csp) {
+    app.use('*', async (c, next) => {
+      await next();
+      c.header(cspHeaderName, csp);
+    });
+  }
   // In local dev, also reflect private-LAN origins so a phone on the same
   // network (e.g. http://192.168.x.x:3000) can reach the API. Configured
   // CORS_ORIGINS are always allowed; everything else is rejected.
@@ -107,7 +195,17 @@ export function createApp(ctx: AppContext) {
   // ── Auth (credentials + server sessions; docs/15 §15.1) ──
   app.route(
     '/api/auth',
-    createAuthRoutes(authService, { allowedOrigins: ctx.config.CORS_ORIGINS, cookieSecure }),
+    createAuthRoutes(authService, {
+      allowedOrigins: ctx.config.CORS_ORIGINS,
+      cookieSecure,
+      turnstile: {
+        verifier: turnstileVerifier,
+        enabled: ctx.config.TURNSTILE_ENABLED,
+        failOpen: ctx.config.TURNSTILE_FAIL_OPEN,
+        expectedAction: ctx.config.TURNSTILE_EXPECTED_ACTION,
+        expectedHostname: ctx.config.TURNSTILE_EXPECTED_HOSTNAME,
+      },
+    }),
   );
 
   // ── System routes ──
@@ -193,6 +291,31 @@ export function createApp(ctx: AppContext) {
 
   // ── Airspace lookup (Phase 3 §1: EnteredAirspace) ──
   app.route('/api/v1', createAirspaceRoutes(ctx));
+
+  // ── Security: MFA, devices, refresh/session revoke ──
+  app.route(
+    '/api/v1',
+    createSecurityRoutes(
+      {
+        mfa: mfaService,
+        devices: deviceService,
+        refreshTokens: refreshTokenService,
+        audit: auditLog,
+        verifyPassword: async (user, password) => {
+          const found = await authRepo.findUserByEmail(user.email);
+          if (!found?.passwordHash || !(await bunHasher.verify(password, found.passwordHash))) {
+            throw new AppError('UNAUTHENTICATED', 'reauthentication failed');
+          }
+        },
+        revokeSession: (sessionToken) => authService.signOut(sessionToken),
+      },
+      {
+        allowedOrigins: ctx.config.CORS_ORIGINS,
+        rateLimitMax: 20,
+        rateLimitWindowMs: ctx.config.RATE_LIMIT_WINDOW_MS,
+      },
+    ),
+  );
 
   // ── Admin console (role=admin; docs/11 §11.6) ──
   app.route('/api/v1', createAdminRoutes(ctx));

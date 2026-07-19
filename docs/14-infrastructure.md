@@ -113,6 +113,8 @@ Branch protection: all gates green + review required to merge to `main`.
   observation accept/reject counts, stale/signal-lost/recovered/ended flight counters,
   event latency histograms, provider health, cache hit-rate) → Grafana dashboards (per subsystem:
   API, tracker, queues, providers, WS, notifications).
+- **Current tracker metrics limitation:** tracker metrics are registered process-locally; a
+  dedicated tracker `/metrics` scrape endpoint is still production wiring.
 - **Tracing:** OpenTelemetry across the causal chain (OpenSky poll → event → WS/notification).
 - **Alerts:** Alertmanager rules — DLQ depth, ingestion lag, provider circuit open, WS fan-out
   lag, error-rate SLO burn, Postgres/Redis saturation, cert expiry. Route to Slack/Telegram.
@@ -135,7 +137,33 @@ Branch protection: all gates green + review required to merge to `main`.
 - Runtime feature flags & operational tunables in the `settings` table (admin-editable) — e.g.
   poll interval, max map markers, provider enablement, notification channel toggles.
 
-## 14.11 Cost & resource posture
+## 14.11 External Service Adapters
+
+- **Email:** `EMAIL_PROVIDER=mock|resend|brevo|smtp`. Mock is the default. Resend/Brevo use
+  injectable HTTP adapters, SMTP uses an injected transport, and digest sends include stable
+  idempotency keys so retry does not intentionally duplicate provider submissions.
+- **Secrets:** `SECRET_PROVIDER=env|infisical|vault`. Remote providers cache values and fall
+  back to env when unavailable; missing remote credentials do not break local startup.
+- **Tracing:** `OTEL_TRACES_EXPORTER=noop|console|otlp`. OTLP export is best-effort and never
+  blocks request handling.
+- **Timeseries:** `TIMESERIES_BACKEND=postgres|timescale`; Timescale is optional and only selected
+  when the deployment has the extension/hypertables.
+- **Backups:** `BACKUP_PROVIDER=mock|pgdump`; pg_dump requires `DATABASE_URL` and `BACKUP_DIR`.
+  WAL archive and retention are configured outside the app through `WAL_ARCHIVE_DIR`/backup
+  storage policy.
+
+## 14.12 Airspace Dataset Import
+
+- Real OpenAIP, open-flightmaps, or AIXM datasets are opt-in; vendor dataset files are not
+  committed. Configure `AIRSPACE_PROVIDER`, `*_DATASET_PATH`, and `AIRSPACE_DATASET_VERSION`.
+- Import command: `bun run --cwd packages/db airspace:import`. It loads the provider dataset,
+  validates geometry through PostGIS, reports invalid polygons, and upserts by
+  `(provider,dataset_version,source_id)`.
+- Version rollover policy: set `AIRSPACE_RETIRE_PREVIOUS_VERSIONS=true` to close older versions by
+  writing `effective_to`. `AIRSPACE_RETIRE_MISSING=true` also closes records absent from the same
+  version, useful for corrected reimports.
+
+## 14.13 Cost & resource posture
 
 - Bun's small footprint + a modular monolith keeps the baseline to ~2 small nodes (app + data).
 - Tunables to control cost/load: OpenSky poll cadence, position sampling under backpressure,

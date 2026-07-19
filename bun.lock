@@ -116,6 +116,7 @@
       "name": "@flytrace/db",
       "version": "0.0.0",
       "dependencies": {
+        "@flytrace/airspace": "workspace:*",
         "@flytrace/shared": "workspace:*",
         "drizzle-orm": "^0.38.3",
         "postgres": "^3.4.5",

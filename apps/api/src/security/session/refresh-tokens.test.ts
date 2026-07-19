@@ -73,6 +73,18 @@ describe('RefreshTokenService.rotate — reuse detection', () => {
     expect(cRec?.revokedAt).not.toBeNull();
   });
 
+  it('burns the family when a stale concurrent rotate tries to replace again', async () => {
+    const { repo, svc } = makeService();
+    const a = await svc.issue('user-1', 'dev-1');
+    const first = await svc.rotate(a.token);
+    const old = await repo.findByHash(fakeHasher.hash(a.token));
+    expect(old?.revokedAt).not.toBeNull();
+
+    await expect(repo.markReplaced(old!.id, 'late-successor', new Date())).resolves.toBe(false);
+    await expect(svc.rotate(a.token)).rejects.toBeInstanceOf(AppError);
+    expect((await repo.findByHash(fakeHasher.hash(first.token)))?.revokedAt).not.toBeNull();
+  });
+
   it('rejects unknown and expired tokens', async () => {
     const { svc, clock } = makeService(1_000);
     await expect(svc.rotate('nope')).rejects.toBeInstanceOf(AppError);
@@ -100,5 +112,14 @@ describe('RefreshTokenService revoke helpers', () => {
     expect((await repo.findByHash(fakeHasher.hash(u1a.token)))?.revokedAt).not.toBeNull();
     expect((await repo.findByHash(fakeHasher.hash(u1b.token)))?.revokedAt).not.toBeNull();
     expect((await repo.findByHash(fakeHasher.hash(u2.token)))?.revokedAt).toBeNull();
+  });
+
+  it('revokeAllForDevice revokes only that device', async () => {
+    const { repo, svc } = makeService();
+    const a = await svc.issue('user-1', 'dev-1');
+    const b = await svc.issue('user-1', 'dev-2');
+    await svc.revokeAllForDevice('dev-1');
+    expect((await repo.findByHash(fakeHasher.hash(a.token)))?.revokedAt).not.toBeNull();
+    expect((await repo.findByHash(fakeHasher.hash(b.token)))?.revokedAt).toBeNull();
   });
 });

@@ -151,6 +151,21 @@ export const flightEndedPayloadSchema = z.object({
 });
 export type FlightEndedPayload = z.infer<typeof flightEndedPayloadSchema>;
 
+export const enteredAirspacePayloadSchema = z.object({
+  flightId: z.string().uuid(),
+  geofenceId: z.string(),
+  airspaceName: z.string().optional(),
+  airspaceType: z.string().optional(),
+  at: z.string().datetime(),
+  position: z.object({
+    lat: z.number(),
+    lon: z.number(),
+    altFt: z.number().nullable(),
+    source: z.string().optional(),
+  }),
+});
+export type EnteredAirspacePayload = z.infer<typeof enteredAirspacePayloadSchema>;
+
 export const FLIGHT_STATUS_VALUES = [
   'scheduled',
   'active',

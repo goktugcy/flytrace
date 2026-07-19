@@ -50,6 +50,16 @@ export function loadRootEnv(): void {
 }
 
 const boolish = z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1');
+const csvList = (defaultValue = '') =>
+  z
+    .string()
+    .default(defaultValue)
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
 
 const baseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -134,10 +144,20 @@ const infraSchema = z.object({
   OPENAIP_DATASET_PATH: z.string().optional(),
   OPENFLIGHTMAPS_DATASET_PATH: z.string().optional(),
   AIXM_DATASET_PATH: z.string().optional(),
+  AIRSPACE_DATASET_VERSION: z.string().default('local-fixture'),
+  AIRSPACE_IMPORT_BATCH_SIZE: z.coerce.number().int().positive().default(500),
+  AIRSPACE_RETIRE_PREVIOUS_VERSIONS: boolish.default('true'),
+  AIRSPACE_RETIRE_MISSING: boolish.default('false'),
   // Connection pooling (Phase 3 §5): PgBouncer-ready.
+  DB_POOL_MODE: z.enum(['session', 'transaction']).optional(),
+  DB_POOL_MAX: z.coerce.number().int().positive().default(10),
+  DB_POOL_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  DB_POOL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  DB_POOL_MAX_LIFETIME_MS: z.coerce.number().int().positive().default(1_800_000),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   PG_POOL_MODE: z.enum(['session', 'transaction']).default('session'),
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
-  PG_PREPARE: z.coerce.boolean().default(true),
+  PG_PREPARE: boolish.default('true'),
   // Backup / DR (Phase 3 §9).
   BACKUP_PROVIDER: z.enum(['mock', 'pgdump']).default('mock'),
   BACKUP_DIR: z.string().optional(),
@@ -151,8 +171,10 @@ const infraSchema = z.object({
 
 // WebSocket horizontal scaling (Phase 3 §3).
 const wsSchema = z.object({
-  WS_PUBSUB_BACKEND: z.string().default('memory'),
-  WS_PRESENCE_BACKEND: z.string().default('memory'),
+  WS_PUBSUB_BACKEND: z.enum(['memory', 'redis']).default('memory'),
+  WS_PRESENCE_BACKEND: z.enum(['memory', 'redis']).default('memory'),
+  WS_RATELIMIT_BACKEND: z.enum(['memory']).default('memory'),
+  REDIS_PUBSUB_MODE: z.enum(['standard', 'sharded']).default('standard'),
   WS_SHARD_COUNT: z.coerce.number().int().positive().default(64),
   WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   WS_MAX_CONNS_PER_IP: z.coerce.number().int().positive().default(10),
@@ -161,7 +183,25 @@ const wsSchema = z.object({
 
 // Security hardening (Phase 3 §7): edge + session.
 const securitySchema = z.object({
+  TURNSTILE_ENABLED: boolish.default('false'),
   TURNSTILE_SECRET: z.string().optional(),
+  TURNSTILE_FAIL_OPEN: boolish.default('false'),
+  TURNSTILE_EXPECTED_ACTION: z.string().default('turnstile-spin-v1'),
+  TURNSTILE_EXPECTED_HOSTNAME: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  CSP_MODE: z.enum(['off', 'report-only', 'enforce']).default('off'),
+  CSP_REPORT_URI: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  CSP_CONNECT_SRC: csvList(),
+  CSP_IMG_SRC: csvList(),
+  CSP_SCRIPT_SRC: csvList(),
+  CSP_STYLE_SRC: csvList(),
+  CSP_FONT_SRC: csvList(),
+  CSP_FRAME_SRC: csvList(),
   RATE_LIMIT_BACKEND: z.enum(['memory', 'redis']).default('memory'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
@@ -169,6 +209,10 @@ const securitySchema = z.object({
   SESSION_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   IMPOSSIBLE_TRAVEL_MAX_KMH: z.coerce.number().positive().default(900),
   MFA_ISSUER: z.string().default('FlyTrace'),
+  MFA_SECRET_ENCRYPTION_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(16).optional(),
+  ),
 });
 
 /** Compose the schemas an app needs; each app validates only its slice. */

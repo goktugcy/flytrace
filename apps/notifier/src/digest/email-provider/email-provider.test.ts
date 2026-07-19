@@ -12,12 +12,19 @@ const msg = {
 };
 
 /** Minimal fetch stub returning a JSON body with a chosen status. */
-function fakeFetch(status: number, body: unknown): typeof fetch {
-  return (async () => ({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => body,
-  })) as unknown as typeof fetch;
+function fakeFetch(
+  status: number,
+  body: unknown,
+  onRequest?: (url: string | URL | Request, init?: RequestInit) => void,
+): typeof fetch {
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    onRequest?.(url, init);
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    };
+  }) as unknown as typeof fetch;
 }
 
 describe('MockEmailProvider', () => {
@@ -58,23 +65,31 @@ describe('createEmailProvider', () => {
   });
 
   test('selects resend when API key present', async () => {
+    let headers: Headers;
     const p = await createEmailProvider({
       provider: 'resend',
       apiKey: 'k',
-      fetchImpl: fakeFetch(200, { id: 'r-1' }),
+      fetchImpl: fakeFetch(200, { id: 'r-1' }, (_url, init) => {
+        headers = new Headers(init?.headers);
+      }),
     });
     expect(p.name).toBe('resend');
-    expect(await p.send(msg)).toEqual({ id: 'r-1' });
+    expect(await p.send({ ...msg, idempotencyKey: 'digest:u1:abc' })).toEqual({ id: 'r-1' });
+    expect(headers!.get('Idempotency-Key')).toBe('digest:u1:abc');
   });
 
   test('selects brevo, falling back to EMAIL_API_KEY, and maps messageId', async () => {
+    let headers: Headers;
     const p = await createEmailProvider({
       provider: 'brevo',
       apiKey: 'shared-key',
-      fetchImpl: fakeFetch(201, { messageId: 'b-9' }),
+      fetchImpl: fakeFetch(201, { messageId: 'b-9' }, (_url, init) => {
+        headers = new Headers(init?.headers);
+      }),
     });
     expect(p.name).toBe('brevo');
-    expect(await p.send(msg)).toEqual({ id: 'b-9' });
+    expect(await p.send({ ...msg, idempotencyKey: 'digest:u1:abc' })).toEqual({ id: 'b-9' });
+    expect(headers!.get('Idempotency-Key')).toBe('digest:u1:abc');
   });
 
   test('selects smtp with an injected transport', async () => {
@@ -87,8 +102,11 @@ describe('createEmailProvider', () => {
     };
     const p = await createEmailProvider({ provider: 'smtp', smtpTransport: transport });
     expect(p.name).toBe('smtp');
-    expect(await p.send(msg)).toEqual({ id: 's-1' });
+    expect(await p.send({ ...msg, idempotencyKey: 'digest:u1:abc' })).toEqual({ id: 's-1' });
     expect(sent).toHaveLength(1);
+    expect((sent[0] as { headers?: Record<string, string> }).headers).toEqual({
+      'X-FlyTrace-Idempotency-Key': 'digest:u1:abc',
+    });
   });
 
   test('resend throws on non-2xx so retry/queue can react', async () => {

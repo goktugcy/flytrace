@@ -56,8 +56,12 @@ function createFakeRepo(): MfaRepo & {
     async markBackupCodeUsed(id, usedAt) {
       for (const list of codes.values()) {
         const found = list.find((c) => c.id === id);
-        if (found) found.usedAt = usedAt;
+        if (found && found.usedAt === null) {
+          found.usedAt = usedAt;
+          return true;
+        }
       }
+      return false;
     },
   };
 }
@@ -140,6 +144,19 @@ describe('MfaService enrol → confirm → verify → disable', () => {
     await expect(service.verify(USER, code)).rejects.toThrow(/invalid MFA code/);
   });
 
+  test('verify rejects a backup code if another caller already consumed it', async () => {
+    const { service, clock } = makeService(repo);
+    const { secret } = await service.beginEnrollment(USER);
+    const { backupCodes } = await service.confirmEnrollment(
+      USER,
+      totp(secret, { t: Math.floor(clock.now() / 1000) }),
+    );
+    const firstActive = await repo.listActiveBackupCodes(USER);
+    await repo.markBackupCodeUsed(firstActive[0]!.id, new Date(clock.now()));
+
+    await expect(service.verify(USER, backupCodes[0]!)).rejects.toThrow(/invalid MFA code/);
+  });
+
   test('verify rejects a nonsense code and errors when MFA is not enabled', async () => {
     const { service, clock } = makeService(repo);
     await service.beginEnrollment(USER);
@@ -164,5 +181,19 @@ describe('MfaService enrol → confirm → verify → disable', () => {
     expect(repo._mfa.get(USER)).toBeUndefined();
     expect(repo._codes.get(USER)).toBeUndefined();
     await expect(service.verify(USER, '123456')).rejects.toThrow(/not enabled/);
+  });
+
+  test('regenerateBackupCodes replaces old active codes', async () => {
+    const { service, clock } = makeService(repo);
+    const { secret } = await service.beginEnrollment(USER);
+    const first = await service.confirmEnrollment(
+      USER,
+      totp(secret, { t: Math.floor(clock.now() / 1000) }),
+    );
+
+    const second = await service.regenerateBackupCodes(USER);
+    expect(second.backupCodes).toHaveLength(10);
+    expect(second.backupCodes).not.toEqual(first.backupCodes);
+    expect(repo._codes.get(USER)).toHaveLength(10);
   });
 });

@@ -41,8 +41,8 @@ export interface MfaRepo {
   replaceBackupCodes(userId: string, codeHashes: string[]): Promise<void>;
   /** List unused backup codes for a user. */
   listActiveBackupCodes(userId: string): Promise<BackupCodeRecord[]>;
-  /** Mark a backup code consumed (one-time use). */
-  markBackupCodeUsed(id: string, usedAt: Date): Promise<void>;
+  /** Mark a backup code consumed (one-time use). False means it was already consumed. */
+  markBackupCodeUsed(id: string, usedAt: Date): Promise<boolean>;
 }
 
 export interface MfaServiceDeps {
@@ -124,6 +124,17 @@ export class MfaService {
     return { backupCodes: codes };
   }
 
+  async regenerateBackupCodes(userId: string): Promise<EnrollmentConfirmed> {
+    const record = await this.deps.repo.getUserMfa(userId);
+    if (!record || !record.enabled) {
+      throw new AppError('BAD_REQUEST', 'MFA is not enabled for this user');
+    }
+    const codes = generateBackupCodes(this.backupCodeCount);
+    const hashes = await Promise.all(codes.map((c) => this.hasher.hash(c)));
+    await this.deps.repo.replaceBackupCodes(userId, hashes);
+    return { backupCodes: codes };
+  }
+
   /**
    * Verify a login-time challenge with either a TOTP token or a backup code.
    * Backup codes are consumed (one-time). Returns which method succeeded.
@@ -146,8 +157,11 @@ export class MfaService {
     const active = await this.deps.repo.listActiveBackupCodes(userId);
     for (const entry of active) {
       if (await verifyCode(candidate, entry.codeHash, this.hasher)) {
-        await this.deps.repo.markBackupCodeUsed(entry.id, new Date(this.deps.clock.now()));
-        return 'backup_code';
+        const consumed = await this.deps.repo.markBackupCodeUsed(
+          entry.id,
+          new Date(this.deps.clock.now()),
+        );
+        if (consumed) return 'backup_code';
       }
     }
     throw new AppError('UNAUTHENTICATED', 'invalid MFA code');

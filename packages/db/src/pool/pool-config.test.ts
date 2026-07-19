@@ -25,6 +25,10 @@ describe('resolvePoolConfig', () => {
     expect(resolvePoolConfig({})).toEqual({
       poolMode: 'session',
       max: 10,
+      idleTimeoutSec: 30,
+      connectTimeoutSec: 5,
+      maxLifetimeSec: 1800,
+      statementTimeoutMs: 30_000,
       prepare: true,
     });
   });
@@ -33,6 +37,10 @@ describe('resolvePoolConfig', () => {
     expect(resolvePoolConfig({ PG_POOL_MODE: 'transaction', PG_PREPARE: 'true' })).toEqual({
       poolMode: 'transaction',
       max: 10,
+      idleTimeoutSec: 30,
+      connectTimeoutSec: 5,
+      maxLifetimeSec: 1800,
+      statementTimeoutMs: 30_000,
       prepare: false,
     });
     // ...and when PG_PREPARE is unset.
@@ -53,5 +61,29 @@ describe('resolvePoolConfig', () => {
     expect(resolvePoolConfig({ PG_POOL_MAX: '-5' }).max).toBe(10);
     expect(resolvePoolConfig({ PG_POOL_MAX: 'abc' }).max).toBe(10);
     expect(resolvePoolConfig({ PG_POOL_MAX: '' }).max).toBe(10);
+  });
+
+  test('DB_POOL_* aliases win over legacy PG_POOL_* values', () => {
+    expect(
+      resolvePoolConfig({
+        DB_POOL_MODE: 'transaction',
+        DB_POOL_MAX: '4',
+        DB_POOL_IDLE_TIMEOUT_MS: '1250',
+        DB_POOL_CONNECTION_TIMEOUT_MS: '5001',
+        DB_POOL_MAX_LIFETIME_MS: '61000',
+        DB_STATEMENT_TIMEOUT_MS: '9000',
+        PG_POOL_MODE: 'session',
+        PG_POOL_MAX: '20',
+        PG_PREPARE: true,
+      }),
+    ).toEqual({
+      poolMode: 'transaction',
+      max: 4,
+      idleTimeoutSec: 2,
+      connectTimeoutSec: 6,
+      maxLifetimeSec: 61,
+      statementTimeoutMs: 9000,
+      prepare: false,
+    });
   });
 });

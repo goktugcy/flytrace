@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { domainToDbEventType, fixedClock, makeEnvelope } from '@flytrace/shared';
 import { AirspaceService, groupByType, withinBand } from './airspace-service.ts';
+import { enteredAirspaceEventInputs } from './events.ts';
 import { MOCK_AIRSPACES, MockAirspaceProvider } from './providers/mock.ts';
 
 /** A point inside Istanbul TMA + CTR + FIR (new airport LTFM ≈ 41.26N, 28.75E). */
@@ -130,5 +132,44 @@ describe('groupByType', () => {
     expect(new Set(g.tma.map((a) => a.id))).toEqual(new Set(['mock-ist-tma', 'mock-esb-tma']));
     expect(new Set(g.ctr.map((a) => a.id))).toEqual(new Set(['mock-ist-ctr', 'mock-esb-ctr']));
     expect(g.cta).toEqual([]);
+    expect(g.restricted).toEqual([]);
+    expect(g.danger).toEqual([]);
+    expect(g.prohibited).toEqual([]);
+  });
+});
+
+describe('EnteredAirspace event fixture', () => {
+  test('turns an entry delta into tracker domain events', async () => {
+    const svc = await loadedService();
+    const at = '2026-07-19T10:00:00.000Z';
+    const flightId = '00000000-0000-7000-8000-000000000123';
+    const delta = svc.detectEntry(new Set(), IST.lat, IST.lon, 4000);
+    const inputs = enteredAirspaceEventInputs(delta, {
+      flightId,
+      at,
+      lat: IST.lat,
+      lon: IST.lon,
+      altFt: 4000,
+      source: 'fixture',
+    });
+    expect(inputs.map((e) => e.type)).toEqual([
+      'EnteredAirspace',
+      'EnteredAirspace',
+      'EnteredAirspace',
+    ]);
+
+    const env = makeEnvelope(inputs[0]!, {
+      producer: 'tracker',
+      clock: fixedClock(Date.parse(at)),
+    });
+    expect(domainToDbEventType(env)).toBe('entered_airspace');
+    expect(env.dedupeKey).toBe(`${flightId}:airspace:mock-ist-tma`);
+    expect(env.payload.geofenceId).toBe('mock-ist-tma');
+    expect(env.payload.position).toEqual({
+      lat: IST.lat,
+      lon: IST.lon,
+      altFt: 4000,
+      source: 'fixture',
+    });
   });
 });
