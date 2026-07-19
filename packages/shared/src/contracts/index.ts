@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { flightQualityStateSchema } from '../events/index.ts';
 
 /**
  * Public API response contracts (docs/11 §11.1 — contracts as SSOT). The API
@@ -17,6 +18,8 @@ export const liveFlightSchema = z.object({
   headingDeg: z.number().nullable(),
   groundSpeedKt: z.number().nullable(),
   onGround: z.boolean(),
+  qualityState: flightQualityStateSchema.optional(),
+  receivedAt: z.string().optional(),
   ts: z.string(),
 });
 export type LiveFlight = z.infer<typeof liveFlightSchema>;

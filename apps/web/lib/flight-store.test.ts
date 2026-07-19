@@ -26,6 +26,7 @@ describe('FlightStore', () => {
     const s = new FlightStore();
     s.applyPosition(pos('F1', 41, '2023-11-14T22:13:20.000Z'));
     expect(s.applyPosition(pos('F1', 99, '2023-11-14T22:13:10.000Z'))).toBe(false); // older
+    expect(s.applyPosition(pos('F1', 99, '2023-11-14T22:13:20.000Z'))).toBe(false); // duplicate
     expect(s.get('F1')?.lat).toBe(41); // unchanged
     expect(s.applyPosition(pos('F1', 42, '2023-11-14T22:13:30.000Z'))).toBe(true); // newer
     expect(s.get('F1')?.lat).toBe(42);
@@ -78,6 +79,59 @@ describe('applyServerMessage', () => {
     expect(s.get('F1')?.callsign).toBe('THY1');
   });
 
+  test('reconciles authoritative viewport snapshots', () => {
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const s = new FlightStore({ now: () => now });
+    s.applyPosition(pos('F1', 41, new Date(now).toISOString()));
+    s.applyPosition(pos('F2', 40.5, new Date(now).toISOString()));
+    s.applyPosition(pos('F3', 10, new Date(now).toISOString(), { lon: 10 }));
+
+    now += 1000;
+    applyServerMessage(s, {
+      t: 'snapshot',
+      channel: 'viewport',
+      snapshotId: 'snap-1',
+      sequence: 1,
+      generatedAt: new Date(now).toISOString(),
+      scope: { kind: 'viewport', bbox: [28, 40, 33, 42] },
+      data: [
+        {
+          flightId: 'F1',
+          icao24: 'a',
+          callsign: 'THY1',
+          lat: 41,
+          lon: 29,
+          altFt: 1000,
+          gsKt: 100,
+          headingDeg: 90,
+          lastTs: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(s.get('F1')).toBeDefined();
+    expect(s.get('F2')).toBeUndefined();
+    expect(s.get('F3')).toBeDefined(); // outside snapshot bbox
+  });
+
+  test('does not let an older snapshot remove a newer event', () => {
+    const now = Date.parse('2026-01-01T00:00:05.000Z');
+    const s = new FlightStore({ now: () => now });
+    s.applyPosition(pos('F1', 41, new Date(now).toISOString()));
+
+    applyServerMessage(s, {
+      t: 'snapshot',
+      channel: 'viewport',
+      snapshotId: 'old-snap',
+      sequence: 1,
+      generatedAt: '2026-01-01T00:00:01.000Z',
+      scope: { kind: 'viewport', bbox: [28, 40, 33, 42] },
+      data: [],
+    });
+
+    expect(s.get('F1')).toBeDefined();
+  });
+
   test('applies a PositionUpdated event and removes on FlightEnded', () => {
     const s = new FlightStore();
     applyServerMessage(s, {
@@ -93,6 +147,41 @@ describe('applyServerMessage', () => {
       id: '2-0',
       event: { type: 'FlightEnded', payload: { flightId: 'F1' } },
     });
+    expect(s.size).toBe(0);
+  });
+
+  test('ignores duplicate event ids', () => {
+    const s = new FlightStore();
+    const msg = {
+      t: 'event',
+      channel: 'viewport',
+      id: '1-0',
+      event: { type: 'PositionUpdated', payload: pos('F1', 41, '2023-11-14T22:13:20.000Z') },
+    };
+    applyServerMessage(s, msg);
+    applyServerMessage(s, {
+      ...msg,
+      event: { type: 'PositionUpdated', payload: pos('F1', 99, '2023-11-14T22:13:30.000Z') },
+    });
+    expect(s.get('F1')?.lat).toBe(41);
+  });
+
+  test('updates quality from lifecycle events and prunes stale samples', () => {
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    let now = base;
+    const s = new FlightStore({ now: () => now });
+    s.applyPosition(pos('F1', 41, new Date(base).toISOString()));
+
+    applyServerMessage(s, {
+      t: 'event',
+      channel: 'viewport',
+      id: '2-0',
+      event: { type: 'FlightStale', payload: { flightId: 'F1', state: 'stale' } },
+    });
+    expect(s.get('F1')?.qualityState).toBe('stale');
+
+    now = base + 91_000;
+    expect(s.pruneStale(now)).toBe(1);
     expect(s.size).toBe(0);
   });
 

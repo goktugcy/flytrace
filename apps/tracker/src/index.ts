@@ -5,7 +5,12 @@ const config = loadTrackerConfig();
 const ctx = await createContext(config);
 
 ctx.logger.info('tracker booting', {
-  poll_ms: config.OPENSKY_POLL_INTERVAL_MS,
+  source: config.TRACKER_SOURCE,
+  poll_ms:
+    config.TRACKER_SOURCE === 'adsb'
+      ? config.ADSB_POLL_INTERVAL_MS
+      : config.OPENSKY_POLL_INTERVAL_MS,
+  remove_after_ms: config.TRACKER_REMOVE_AFTER_MS,
   fixture: config.TRACKER_USE_FIXTURE,
 });
 

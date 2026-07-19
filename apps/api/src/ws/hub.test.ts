@@ -104,6 +104,20 @@ function positionEnvelope(
   );
 }
 
+function endedEnvelope(flightId: string): EventEnvelope<{ flightId: string; icao24: string }> {
+  const ts = '2023-11-14T22:15:00.000Z';
+  return makeEnvelope(
+    {
+      type: 'FlightEnded',
+      occurredAt: ts,
+      dedupeKey: `${flightId}:ended`,
+      partitionKey: flightId,
+      payload: { flightId, icao24: 'abc123', endedAt: ts, reason: 'timeout' },
+    },
+    { producer: 'tracker', clock: fixedClock(1_700_000_000_000), correlationId: flightId },
+  );
+}
+
 function makeHub(redis: FakeRedis) {
   return new WsHub({
     redis: redis as unknown as Redis,
@@ -154,6 +168,9 @@ describe('WsHub', () => {
     const snap = s.ofType('snapshot');
     expect(snap).toHaveLength(1);
     expect((snap[0]?.data as { flightId: string }).flightId).toBe('F1');
+    expect(snap[0]?.snapshotId).toBe('c1:1');
+    expect(snap[0]?.generatedAt).toBe('2023-11-14T22:13:20.000Z');
+    expect(snap[0]?.scope).toEqual({ kind: 'flight', flightId: 'F1' });
     const ack = s.ofType('ack');
     expect(ack[0]?.cursor).toBe('5-0');
   });
@@ -214,12 +231,26 @@ describe('WsHub', () => {
     const snap = s.ofType('snapshot');
     expect(snap).toHaveLength(1);
     expect((snap[0]?.data as unknown[]).length).toBe(1); // only F1 in view
+    expect(snap[0]?.scope).toEqual({ kind: 'viewport', bbox: [28, 40, 33, 42] });
 
     hub.route('9-0', positionEnvelope('F1', 41, 29)); // in view
     hub.route('9-1', positionEnvelope('F2', 10, 10)); // out of view
     const evs = s.ofType('event');
     expect(evs).toHaveLength(1);
     expect(evs[0]?.channel).toBe('viewport');
+  });
+
+  test('routes lifecycle removals to viewport clients for local cleanup', async () => {
+    const s = new FakeSocket('c1');
+    hub.add(s, guest);
+    await hub.handleMessage('c1', { t: 'viewport', bbox: [28, 40, 33, 42] });
+
+    hub.route('10-0', endedEnvelope('F1'));
+
+    const evs = s.ofType('event');
+    expect(evs).toHaveLength(1);
+    expect(evs[0]?.channel).toBe('viewport');
+    expect(evs[0]?.event.type).toBe('FlightEnded');
   });
 
   test('reconnect replays missed deltas exclusive of the cursor', async () => {

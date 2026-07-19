@@ -3,6 +3,7 @@ import {
   type EventEnvelope,
   type Logger,
   baseEnvelopeSchema,
+  flightQualityStateSchema,
   streamKeys,
 } from '@flytrace/shared';
 import type { Redis } from 'ioredis';
@@ -55,6 +56,9 @@ const hotStateSchema = z
     vrateFpm: z.number().nullable(),
     category: z.string().nullish(),
     lastTs: z.string(),
+    qualityState: flightQualityStateSchema.optional(),
+    lastAcceptedAt: z.string().optional(),
+    lastQualityTransitionAt: z.string().optional(),
   })
   .passthrough();
 type HotState = z.infer<typeof hotStateSchema>;
@@ -68,6 +72,7 @@ type HotState = z.infer<typeof hotStateSchema>;
 export class WsHub {
   private readonly conns = new Map<string, ConnState>();
   private readonly options: HubOptions;
+  private snapshotSeq = 0;
 
   constructor(
     private readonly deps: { redis: Redis; prefix: string; clock: Clock; logger: Logger },
@@ -154,6 +159,7 @@ export class WsHub {
   route(sid: string, event: EventEnvelope): void {
     const flightChannel = `flight:${event.partitionKey}`;
     const isPosition = event.type === 'PositionUpdated';
+    const isViewportLifecycle = VIEWPORT_LIFECYCLE_EVENTS.has(event.type);
     const pos = isPosition ? positionOf(event) : null;
 
     for (const conn of this.conns.values()) {
@@ -161,6 +167,8 @@ export class WsHub {
         conn.socket.send({ t: 'event', channel: flightChannel, id: sid, event });
       }
       if (conn.viewport && pos && inBbox(pos.lat, pos.lon, conn.viewport)) {
+        conn.socket.send({ t: 'event', channel: 'viewport', id: sid, event });
+      } else if (conn.viewport && isViewportLifecycle) {
         conn.socket.send({ t: 'event', channel: 'viewport', id: sid, event });
       }
     }
@@ -174,14 +182,24 @@ export class WsHub {
     channel: string,
   ): Promise<void> {
     const state = await this.readHotState(flightId);
-    conn.socket.send({ t: 'snapshot', channel, data: state });
+    conn.socket.send(this.snapshotMessage(conn, channel, { kind: 'flight', flightId }, state));
   }
 
   private async sendViewportSnapshot(conn: ConnState): Promise<void> {
     if (!conn.viewport) return;
     const ids = await this.deps.redis.smembers(`${this.deps.prefix}flights:active`);
     if (ids.length === 0) {
-      conn.socket.send({ t: 'snapshot', channel: 'viewport', data: [] });
+      conn.socket.send(
+        this.snapshotMessage(
+          conn,
+          'viewport',
+          {
+            kind: 'viewport',
+            bbox: [...conn.viewport] as [number, number, number, number],
+          },
+          [],
+        ),
+      );
       return;
     }
     const raws = await this.deps.redis.mget(ids.map((id) => this.stateKey(id)));
@@ -193,7 +211,17 @@ export class WsHub {
         inView.push(parsed.data);
       }
     }
-    conn.socket.send({ t: 'snapshot', channel: 'viewport', data: inView });
+    conn.socket.send(
+      this.snapshotMessage(
+        conn,
+        'viewport',
+        {
+          kind: 'viewport',
+          bbox: [...conn.viewport] as [number, number, number, number],
+        },
+        inView,
+      ),
+    );
   }
 
   private async replayFlight(
@@ -248,7 +276,33 @@ export class WsHub {
     for (const c of conn.channels) if (c.startsWith('flight:')) n += 1;
     return n;
   }
+
+  private snapshotMessage(
+    conn: ConnState,
+    channel: string,
+    scope: Extract<ServerMessage, { t: 'snapshot' }>['scope'],
+    data: unknown,
+  ): Extract<ServerMessage, { t: 'snapshot' }> {
+    const sequence = ++this.snapshotSeq;
+    return {
+      t: 'snapshot',
+      channel,
+      snapshotId: `${conn.socket.id}:${sequence}`,
+      sequence,
+      generatedAt: this.deps.clock.nowIso(),
+      scope,
+      data,
+    };
+  }
 }
+
+const VIEWPORT_LIFECYCLE_EVENTS = new Set([
+  'FlightDelayed',
+  'FlightStale',
+  'FlightSignalLost',
+  'FlightRecovered',
+  'FlightEnded',
+]);
 
 function positionOf(event: EventEnvelope): { lat: number; lon: number } | null {
   const p = event.payload as { lat?: unknown; lon?: unknown };

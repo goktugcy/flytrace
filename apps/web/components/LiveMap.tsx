@@ -12,8 +12,8 @@ import { cn } from '@/lib/utils';
 import { LocateFixed, Plane, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import type { FlightSample } from '../lib/flight-store';
-import { RealtimeClient } from '../lib/realtime-client';
+import { type FlightSample, classifyFlightSample } from '../lib/flight-store';
+import { RealtimeClient, type RealtimeStatus } from '../lib/realtime-client';
 
 /** The live map needs a WebGL context (maplibre); some browsers/GPUs disable it. */
 function webglAvailable(): boolean {
@@ -226,15 +226,19 @@ function angleDelta(a: number, b: number): number {
 
 const KT_TO_MS = 0.514_444; // knots → metres/second
 const M_PER_DEG_LAT = 111_320;
+const DEAD_RECKON_LIVE_MS = 15_000;
+const DEAD_RECKON_DELAYED_MS = 30_000;
 /**
  * Dead-reckon a sample forward along its track so the marker tracks the
- * aircraft's real-time position between (infrequent) feed updates — this is why
- * Flightradar's dots sit ahead of a naive "last reported point" render. Capped
- * at 90 s so a stale/lost target doesn't drift off indefinitely.
+ * aircraft's real-time position between feed updates. Once a target is stale or
+ * signal-lost we freeze it at the last authoritative point until it is removed.
  */
 function project(f: FlightSample, nowMs: number): [number, number] {
   if (f.onGround || !f.gsKt || f.heading == null) return [f.lat, f.lon];
-  const dt = Math.min(Math.max((nowMs - f.tsMs) / 1000, 0), 90);
+  const quality = classifyFlightSample(f, nowMs);
+  if (quality === 'stale' || quality === 'signal_lost') return [f.lat, f.lon];
+  const capMs = quality === 'delayed' ? DEAD_RECKON_DELAYED_MS : DEAD_RECKON_LIVE_MS;
+  const dt = Math.min(Math.max(nowMs - f.tsMs, 0), capMs) / 1000;
   if (dt === 0) return [f.lat, f.lon];
   const dist = f.gsKt * KT_TO_MS * dt; // metres travelled since the sample
   const brng = (f.heading * Math.PI) / 180;
@@ -307,6 +311,7 @@ export function LiveMap() {
   const locateRef = useRef<() => void>(() => {});
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<RealtimeStatus>('disconnected');
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [route, setRoute] = useState<RouteInfo | null>(null);
@@ -362,6 +367,7 @@ export function LiveMap() {
     ro.observe(containerRef.current);
 
     const client = new RealtimeClient({ apiBase: API_BASE, wsBase: WS_BASE });
+    const offStatus = client.onStatus(setConnectionStatus);
     const rendered = new Map<string, Rendered>();
     let raf = 0;
     let started = false;
@@ -375,6 +381,7 @@ export function LiveMap() {
       features: client.store.list().map((f) => {
         const r = rendered.get(f.flightId) ?? { lat: f.lat, lon: f.lon, hdg: f.heading ?? 0 };
         const cat = flightCategory(f);
+        const quality = classifyFlightSample(f, Date.now());
         return {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
@@ -387,6 +394,7 @@ export function LiveMap() {
             cat,
             sizeMul: CAT_SIZE[cat] ?? 1,
             onGround: f.onGround ? 1 : 0,
+            quality,
           },
         };
       }),
@@ -410,6 +418,7 @@ export function LiveMap() {
 
     const tick = () => {
       const nowMs = Date.now();
+      client.store.pruneStale(nowMs);
       for (const f of client.store.list()) {
         // Ease toward the *dead-reckoned* position (projected forward from the
         // last sample), not the raw last point — otherwise the marker lags the
@@ -730,7 +739,24 @@ export function LiveMap() {
             'icon-color': ALT_COLOR,
             'icon-halo-color': '#050912',
             'icon-halo-width': 1.1,
-            'icon-opacity': ['case', ['==', ['get', 'onGround'], 1], 0.65, 1],
+            'icon-opacity': [
+              'case',
+              ['==', ['get', 'onGround'], 1],
+              0.65,
+              [
+                'match',
+                ['get', 'quality'],
+                'live',
+                1,
+                'delayed',
+                0.78,
+                'stale',
+                0.48,
+                'signal_lost',
+                0.22,
+                1,
+              ],
+            ],
           },
         });
       }
@@ -805,6 +831,7 @@ export function LiveMap() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       unsub();
+      offStatus();
       unregisterFocus();
       meMarker?.remove();
       client.close();
@@ -845,6 +872,13 @@ export function LiveMap() {
     );
   }
 
+  const statusDot =
+    connectionStatus === 'connected'
+      ? 'bg-success'
+      : connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
+        ? 'bg-warning'
+        : 'bg-muted-foreground';
+
   return (
     <div className="fixed inset-x-0 bottom-0 top-14">
       {/* Explicit size-full — maplibre forces `position: relative` on its
@@ -855,8 +889,10 @@ export function LiveMap() {
         <div className="flex items-start gap-2">
           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-card/85 px-3 text-sm font-medium shadow-soft-md backdrop-blur-md">
             <span className="relative flex size-2">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-75" />
-              <span className="relative inline-flex size-2 rounded-full bg-success" />
+              {connectionStatus === 'connected' && (
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-75" />
+              )}
+              <span className={cn('relative inline-flex size-2 rounded-full', statusDot)} />
             </span>
             <span className="tabular-nums">{count.toLocaleString()}</span>
             <span className="text-muted-foreground">{t('common.live')}</span>

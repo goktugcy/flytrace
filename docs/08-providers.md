@@ -21,22 +21,24 @@ enrich.
 
 | Concern | Source | Module |
 |---------|--------|--------|
-| Position (lat/lon/alt/heading/speed/vrate/on-ground) | **OpenSky Network** | `apps/tracker` |
+| Position (lat/lon/alt/heading/speed/vrate/on-ground) | **ADS-B feed** (default) or **OpenSky Network** | `apps/tracker` |
 | Status (gate, terminal, sched/est/act, cancelled, baggage) | **Providers** (per airline) | `apps/worker` + `packages/providers` |
 
-## 8.3 OpenSky ingestion (position source)
+## 8.3 Position ingestion (ADS-B / OpenSky)
 
-- **Endpoints:** `/states/all` (bounded by bbox for viewport & sharding), `/states/own` /
-  `/tracks` where applicable. Consumed by `apps/tracker`.
-- **Rate limits:** anonymous vs authenticated (OAuth2 client-credentials) differ; **poll cadence
-  is config-driven** (`settings.opensky.poll_interval_ms`) and adapts to the account tier and
-  remaining quota. Authenticated tier used in production for higher limits.
+- **Endpoints:** ADS-B point/radius JSON (`ADSB_API_URL`, default `adsb.lol`) or OpenSky
+  `/states/all` bounded by bbox. Consumed by `apps/tracker`.
+- **Rate limits:** poll cadence is config-driven (`ADSB_POLL_INTERVAL_MS` or
+  `OPENSKY_POLL_INTERVAL_MS`) and adapts to the selected source and account tier.
 - **Politeness:** ETag/`If-Modified-Since` where supported; bbox scoping to avoid full-world
   polls; exponential backoff on 429/5xx; jitter; a single **leader** polls per shard
   (Redis lock) to avoid duplicate quota burn across replicas.
-- **Attribution:** OpenSky credited in UI footer and docs, per their terms.
-- **Normalization:** OpenSky state vector → `PositionSample` (units converted to ft/kt/fpm,
-  timestamps to UTC ISO). Unknown/null fields preserved as `null`, never fabricated.
+- **Attribution:** selected source credited in UI/footer/docs according to its terms.
+- **Normalization:** source record → `PositionSample` (ft/kt/fpm, UTC ISO). Unknown/null fields
+  are preserved as `null`, never fabricated.
+- **Freshness lifecycle:** live sources are aged against tracker wall time. Observations older
+  than `TRACKER_MAX_POSITION_AGE_MS` are rejected; active hot states move through
+  live/delayed/stale/signal_lost and are removed after `TRACKER_REMOVE_AFTER_MS`.
 
 ## 8.4 The `FlightProvider` interface (contract)
 

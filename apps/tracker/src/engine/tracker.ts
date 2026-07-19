@@ -5,17 +5,26 @@ import {
   type Logger,
   makeEnvelope,
 } from '@flytrace/shared';
-import { detectStep, endFlightEvent } from '../domain/detectors.ts';
-import type { DetectorConfig } from '../domain/flight-state.ts';
-import type { PositionSource } from '../source/port.ts';
+import { detectStep, endFlightEvent, flightLifecycleEvent } from '../domain/detectors.ts';
+import {
+  type DetectorConfig,
+  type FlightLifecycleConfig,
+  type FlightQualityState,
+  type FlightState,
+  classifyFlightQuality,
+  currentFlightQuality,
+} from '../domain/flight-state.ts';
+import type { PositionSource, SourceTimeMode } from '../source/port.ts';
 import type { FlightRegistry, FlightStateStore, Lock } from '../state/port.ts';
 
 export interface TrackerOptions {
   detector: DetectorConfig;
   /** Label recorded as the event `source` (e.g. "opensky" | "fixture"). */
   sourceLabel: string;
-  /** Idle time (ms) after the last sample before a flight is force-ended. */
-  flightTimeoutMs: number;
+  /** Whether freshness uses processing time (live) or event time (fixtures). */
+  sourceTimeMode: SourceTimeMode;
+  /** Realtime freshness lifecycle thresholds. */
+  lifecycle: FlightLifecycleConfig;
   /** Poll cadence (ms) for the production loop. */
   pollIntervalMs: number;
   /** Leader/shard lock name + TTL (production loop only). */
@@ -47,10 +56,9 @@ export class Tracker {
   private running = false;
   private lockToken: string | null = null;
   /**
-   * The tracker's logical "now" for staleness = the latest sample timestamp it
-   * has observed (event time), NOT wall-clock. This keeps the idle sweep
-   * correct under replay (a 2023 fixture must not be judged stale against a 2026
-   * wall-clock) and live alike, where observed time tracks real time anyway.
+   * The tracker's logical event-time "now" for replay sources. Live sources use
+   * wall time for freshness; fixtures use this so a 2023 recording is not aged
+   * against a 2026 wall clock.
    */
   private observedMs = 0;
 
@@ -64,37 +72,82 @@ export class Tracker {
   }
 
   private async process(positions: Awaited<ReturnType<PositionSource['poll']>>): Promise<void> {
-    const { store, registry, options } = this.deps;
+    const { store, registry, options, clock, logger } = this.deps;
+    const receivedAtMs = clock.now();
     for (const obs of positions) {
+      const obsMs = Date.parse(obs.ts);
+      if (!Number.isFinite(obsMs)) continue;
+      const ageMs = Math.max(0, receivedAtMs - obsMs);
+      if (options.sourceTimeMode === 'wall' && ageMs > options.lifecycle.maxPositionAgeMs) {
+        logger.debug('dropping stale provider observation', {
+          icao24: obs.icao24,
+          ts: obs.ts,
+          age_ms: ageMs,
+        });
+        continue;
+      }
+
       const { flightId } = await registry.resolve(obs.icao24);
       const prev = await store.get(flightId);
+      const acceptedAtMs = options.sourceTimeMode === 'wall' ? receivedAtMs : obsMs;
       const { events, next, accepted } = detectStep(prev, obs, flightId, {
         config: options.detector,
         source: options.sourceLabel,
+        acceptedAt: new Date(acceptedAtMs).toISOString(),
+        ageMs: options.sourceTimeMode === 'wall' ? ageMs : 0,
       });
       if (!accepted) continue;
-      this.observedMs = Math.max(this.observedMs, Date.parse(obs.ts));
+      this.observedMs = Math.max(this.observedMs, obsMs);
       await store.set(next);
       await this.emitAll(events, flightId);
     }
   }
 
   /**
-   * Force-end flights whose last sample is older than the idle timeout, measured
-   * against event time ({@link observedMs}), not wall-clock. The FlightEnded
-   * timestamp uses that same logical clock so the event ordering stays coherent.
+   * Advance the freshness lifecycle for idle flights and force-end them after
+   * removeAfterMs. Live sources use wall-clock so a missing aircraft disappears
+   * even if no newer event arrives; fixture sources keep event-time semantics.
    */
   private async sweep(): Promise<void> {
     const { store, registry, clock, options } = this.deps;
-    const reference = this.observedMs || clock.now();
+    const reference =
+      options.sourceTimeMode === 'wall' ? clock.now() : this.observedMs || clock.now();
     for (const state of await store.all()) {
-      if (reference - Date.parse(state.lastTs) <= options.flightTimeoutMs) continue;
+      const lastTsMs = Date.parse(state.lastTs);
+      if (!Number.isFinite(lastTsMs)) continue;
+      const ageMs = Math.max(0, reference - lastTsMs);
+      if (ageMs <= options.lifecycle.removeAfterMs) {
+        await this.transitionQualityIfNeeded(state, ageMs, reference);
+        continue;
+      }
       const reason = state.landingEmitted ? 'landed' : 'timeout';
       const endedAt = new Date(reference).toISOString();
       await this.emitAll([endFlightEvent(state, reason, endedAt)], state.flightId);
       await store.delete(state.flightId);
       await registry.release(state.icao24);
     }
+  }
+
+  private async transitionQualityIfNeeded(
+    state: FlightState,
+    ageMs: number,
+    referenceMs: number,
+  ): Promise<void> {
+    const nextQuality = classifyFlightQuality(ageMs, this.deps.options.lifecycle);
+    if (nextQuality === currentFlightQuality(state)) return;
+
+    const at = new Date(referenceMs).toISOString();
+    const next: FlightState & { qualityState: FlightQualityState } = {
+      ...state,
+      qualityState: nextQuality,
+      lastQualityTransitionAt: at,
+      lifecycleSeq: (state.lifecycleSeq ?? 0) + 1,
+    };
+    await this.deps.store.set(next);
+    await this.emitAll(
+      [flightLifecycleEvent(lifecycleEventType(nextQuality), next, at, ageMs)],
+      state.flightId,
+    );
   }
 
   private async emitAll(events: DomainEventInput[], correlationId: string): Promise<void> {
@@ -164,4 +217,23 @@ export class Tracker {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function lifecycleEventType(
+  quality: Exclude<FlightQualityState, 'live'>,
+): 'FlightDelayed' | 'FlightStale' | 'FlightSignalLost';
+function lifecycleEventType(
+  quality: FlightQualityState,
+): 'FlightDelayed' | 'FlightStale' | 'FlightSignalLost' | 'FlightRecovered';
+function lifecycleEventType(quality: FlightQualityState) {
+  switch (quality) {
+    case 'delayed':
+      return 'FlightDelayed';
+    case 'stale':
+      return 'FlightStale';
+    case 'signal_lost':
+      return 'FlightSignalLost';
+    case 'live':
+      return 'FlightRecovered';
+  }
 }

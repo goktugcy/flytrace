@@ -11,6 +11,10 @@ export const EVENT_TYPES = [
   'FlightDetected',
   'FlightUpdated',
   'PositionUpdated',
+  'FlightDelayed',
+  'FlightStale',
+  'FlightSignalLost',
+  'FlightRecovered',
   'TakeoffDetected',
   'LandingDetected',
   'ClimbDetected',
@@ -70,8 +74,28 @@ export const positionPayloadSchema = z.object({
   vrateFpm: z.number().nullable(),
   onGround: z.boolean(),
   ts: z.string().datetime(),
+  callsign: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  source: z.string().optional(),
+  receivedAt: z.string().datetime().optional(),
+  ageMs: z.number().int().nonnegative().optional(),
+  qualityState: z.enum(['live', 'delayed', 'stale', 'signal_lost']).optional(),
 });
 export type PositionPayload = z.infer<typeof positionPayloadSchema>;
+
+export const FLIGHT_QUALITY_STATES = ['live', 'delayed', 'stale', 'signal_lost'] as const;
+export const flightQualityStateSchema = z.enum(FLIGHT_QUALITY_STATES);
+export type FlightQualityState = z.infer<typeof flightQualityStateSchema>;
+
+export const flightLifecyclePayloadSchema = z.object({
+  flightId: z.string().uuid(),
+  icao24: z.string(),
+  state: flightQualityStateSchema,
+  at: z.string().datetime(),
+  lastPositionAt: z.string().datetime(),
+  ageMs: z.number().int().nonnegative(),
+});
+export type FlightLifecyclePayload = z.infer<typeof flightLifecyclePayloadSchema>;
 
 /** Vertical flight phases carried by Climb/Descent events (incl. TOC/TOD). */
 export const VERTICAL_PHASES = ['climb', 'descent', 'top_of_climb', 'top_of_descent'] as const;

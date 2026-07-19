@@ -10,6 +10,7 @@ import type { PositionSource } from './port.ts';
  */
 export class FixturePositionSource implements PositionSource {
   readonly name = 'fixture';
+  readonly timeMode = 'event';
   private index = 0;
 
   constructor(private readonly frames: unknown[]) {}

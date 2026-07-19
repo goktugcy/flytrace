@@ -39,8 +39,8 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
   });
   redis.on('error', (err) => logger.error('redis error', { err: String(err) }));
 
-  const store = new RedisFlightStateStore(redis, prefix, config.TRACKER_FLIGHT_TIMEOUT_MS * 2);
-  const registry = new RedisFlightRegistry(redis, prefix, config.TRACKER_FLIGHT_TIMEOUT_MS, clock);
+  const store = new RedisFlightStateStore(redis, prefix, config.TRACKER_REMOVE_AFTER_MS * 2);
+  const registry = new RedisFlightRegistry(redis, prefix, config.TRACKER_REMOVE_AFTER_MS, clock);
   const lock = new RedisLock(redis, prefix, clock);
   const bus = new RedisEventBus(redis, prefix);
 
@@ -49,7 +49,14 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
   const options: TrackerOptions = {
     detector: DEFAULT_DETECTOR_CONFIG,
     sourceLabel: source.name,
-    flightTimeoutMs: config.TRACKER_FLIGHT_TIMEOUT_MS,
+    sourceTimeMode: source.timeMode ?? 'wall',
+    lifecycle: {
+      liveAfterMs: config.TRACKER_LIVE_AFTER_MS,
+      delayedAfterMs: config.TRACKER_DELAYED_AFTER_MS,
+      staleAfterMs: config.TRACKER_STALE_AFTER_MS,
+      removeAfterMs: config.TRACKER_REMOVE_AFTER_MS,
+      maxPositionAgeMs: config.TRACKER_MAX_POSITION_AGE_MS,
+    },
     pollIntervalMs:
       config.TRACKER_SOURCE === 'adsb'
         ? config.ADSB_POLL_INTERVAL_MS

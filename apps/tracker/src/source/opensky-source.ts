@@ -25,6 +25,7 @@ export interface OpenSkySourceOptions {
  */
 export class OpenSkyPositionSource implements PositionSource {
   readonly name = 'opensky';
+  readonly timeMode = 'wall';
   private token: { value: string; expiresAt: number } | null = null;
 
   constructor(private readonly opts: OpenSkySourceOptions) {}

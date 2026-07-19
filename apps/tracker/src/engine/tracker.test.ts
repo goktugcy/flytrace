@@ -8,8 +8,13 @@ import {
   fixedClock,
 } from '@flytrace/shared';
 import frames from '../../fixtures/ist-departure.json' with { type: 'json' };
-import { DEFAULT_DETECTOR_CONFIG } from '../domain/flight-state.ts';
+import {
+  DEFAULT_DETECTOR_CONFIG,
+  DEFAULT_FLIGHT_LIFECYCLE_CONFIG,
+} from '../domain/flight-state.ts';
+import type { Position } from '../domain/position.ts';
 import { FixturePositionSource } from '../source/fixture-source.ts';
+import type { PositionSource } from '../source/port.ts';
 import { InMemoryFlightRegistry, InMemoryFlightStateStore, InMemoryLock } from '../state/memory.ts';
 import { Tracker, type TrackerOptions } from './tracker.ts';
 
@@ -24,7 +29,11 @@ function harness(sourceFrames: unknown[] = frames as unknown[]) {
   const options: TrackerOptions = {
     detector: DEFAULT_DETECTOR_CONFIG,
     sourceLabel: 'fixture',
-    flightTimeoutMs: TIMEOUT_MS,
+    sourceTimeMode: 'event',
+    lifecycle: {
+      ...DEFAULT_FLIGHT_LIFECYCLE_CONFIG,
+      removeAfterMs: TIMEOUT_MS,
+    },
     pollIntervalMs: 0,
     lockName: 'tracker:leader',
     lockTtlMs: 15_000,
@@ -56,6 +65,61 @@ function counts(bus: InMemoryEventBus): Record<string, number> {
   const out: Record<string, number> = {};
   for (const e of bus.published) out[e.type] = (out[e.type] ?? 0) + 1;
   return out;
+}
+
+class QueueSource implements PositionSource {
+  readonly name = 'test-live';
+  readonly timeMode = 'wall';
+
+  constructor(private readonly frames: Position[][]) {}
+
+  async poll(): Promise<Position[]> {
+    return this.frames.shift() ?? [];
+  }
+}
+
+function livePos(tsMs: number, over: Partial<Position> = {}): Position {
+  return {
+    icao24: '4bb1a2',
+    callsign: 'THY1TG',
+    lat: 41,
+    lon: 29,
+    altFt: 30000,
+    headingDeg: 90,
+    gsKt: 420,
+    vrateFpm: 0,
+    onGround: false,
+    category: 'jet',
+    ts: new Date(tsMs).toISOString(),
+    ...over,
+  };
+}
+
+function liveHarness(source: PositionSource, startMs = Date.parse('2026-01-01T00:00:00.000Z')) {
+  const clock = fixedClock(startMs);
+  const bus = new InMemoryEventBus();
+  const store = new InMemoryFlightStateStore();
+  const registry = new InMemoryFlightRegistry(clock);
+  const options: TrackerOptions = {
+    detector: DEFAULT_DETECTOR_CONFIG,
+    sourceLabel: source.name,
+    sourceTimeMode: source.timeMode ?? 'wall',
+    lifecycle: DEFAULT_FLIGHT_LIFECYCLE_CONFIG,
+    pollIntervalMs: 0,
+    lockName: 'tracker:leader',
+    lockTtlMs: 15_000,
+  };
+  const tracker = new Tracker({
+    source,
+    store,
+    registry,
+    lock: new InMemoryLock(clock),
+    bus,
+    clock,
+    logger: createLogger({ level: 'error', base: {} }),
+    options,
+  });
+  return { clock, bus, store, registry, tracker };
 }
 
 describe('Tracker — end-to-end over the fixture feed', () => {
@@ -111,5 +175,53 @@ describe('Tracker — end-to-end over the fixture feed', () => {
     const remaining = await store.all();
     expect(remaining).toHaveLength(1); // only the other aircraft remains
     expect(remaining[0]?.icao24).toBe('ffffff');
+  });
+});
+
+describe('Tracker — live-source freshness lifecycle', () => {
+  test('moves an idle live target through delayed, stale, signal_lost, then ended', async () => {
+    const startMs = Date.parse('2026-01-01T00:00:00.000Z');
+    const { tracker, bus, store, clock } = liveHarness(
+      new QueueSource([[livePos(startMs)], [], [], [], []]),
+      startMs,
+    );
+
+    await tracker.tick();
+    expect((await store.all())[0]?.qualityState).toBe('live');
+
+    clock.advance(16_000);
+    await tracker.tick();
+    expect((await store.all())[0]?.qualityState).toBe('delayed');
+
+    clock.advance(15_000);
+    await tracker.tick();
+    expect((await store.all())[0]?.qualityState).toBe('stale');
+
+    clock.advance(30_000);
+    await tracker.tick();
+    expect((await store.all())[0]?.qualityState).toBe('signal_lost');
+
+    clock.advance(30_000);
+    await tracker.tick();
+    expect(await store.all()).toHaveLength(0);
+
+    const c = counts(bus);
+    expect(c.FlightDelayed).toBe(1);
+    expect(c.FlightStale).toBe(1);
+    expect(c.FlightSignalLost).toBe(1);
+    expect(c.FlightEnded).toBe(1);
+  });
+
+  test('rejects live provider observations older than maxPositionAgeMs', async () => {
+    const startMs = Date.parse('2026-01-01T00:00:00.000Z');
+    const { tracker, bus, store } = liveHarness(
+      new QueueSource([[livePos(startMs - DEFAULT_FLIGHT_LIFECYCLE_CONFIG.maxPositionAgeMs - 1)]]),
+      startMs,
+    );
+
+    await tracker.tick();
+
+    expect(await store.all()).toHaveLength(0);
+    expect(bus.published).toHaveLength(0);
   });
 });

@@ -86,6 +86,32 @@ describe('detectStep — invariants', () => {
     expect(stale.next).toBe(first.next);
   });
 
+  test('drops duplicate-timestamp samples', () => {
+    const first = detectStep(null, pos({ ts: '2023-11-14T22:13:20.000Z' }), FLIGHT_ID);
+    const duplicate = detectStep(first.next, pos({ lat: 99, ts: first.next.lastTs }), FLIGHT_ID);
+    expect(duplicate.accepted).toBe(false);
+    expect(duplicate.events).toHaveLength(0);
+    expect(duplicate.next).toBe(first.next);
+  });
+
+  test('emits FlightRecovered when a stale flight accepts a newer sample', () => {
+    const first = detectStep(null, pos({ ts: '2023-11-14T22:13:20.000Z' }), FLIGHT_ID);
+    const staleState: FlightState = {
+      ...first.next,
+      qualityState: 'stale',
+      lifecycleSeq: 2,
+      lastQualityTransitionAt: '2023-11-14T22:14:20.000Z',
+    };
+    const recovered = detectStep(staleState, pos({ ts: '2023-11-14T22:14:30.000Z' }), FLIGHT_ID, {
+      acceptedAt: '2023-11-14T22:14:30.000Z',
+    });
+
+    expect(recovered.accepted).toBe(true);
+    expect(recovered.next.qualityState).toBe('live');
+    expect(recovered.next.lifecycleSeq).toBe(3);
+    expect(recovered.events.map((e) => e.type)).toContain('FlightRecovered');
+  });
+
   test('dedupe keys are stable and unique per derived fact', () => {
     let state: FlightState | null = null;
     const keys: string[] = [];

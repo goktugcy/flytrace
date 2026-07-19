@@ -25,8 +25,13 @@ const bboxSchema = z
 const trackerSchema = z.object({
   /** How long a leader/shard lock is held before it must be renewed (ms). */
   TRACKER_LOCK_TTL_MS: z.coerce.number().int().positive().default(15_000),
-  /** Idle time after last position before a flight is force-ended (ms). */
-  TRACKER_FLIGHT_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
+  /** Deprecated: kept for old env files; use TRACKER_REMOVE_AFTER_MS instead. */
+  TRACKER_FLIGHT_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  TRACKER_LIVE_AFTER_MS: z.coerce.number().int().positive().default(15_000),
+  TRACKER_DELAYED_AFTER_MS: z.coerce.number().int().positive().default(30_000),
+  TRACKER_STALE_AFTER_MS: z.coerce.number().int().positive().default(60_000),
+  TRACKER_REMOVE_AFTER_MS: z.coerce.number().int().positive().default(90_000),
+  TRACKER_MAX_POSITION_AGE_MS: z.coerce.number().int().positive().default(30_000),
   TRACKER_BBOX: bboxSchema,
   /**
    * Position source. `adsb` (default) uses a keyless community ADS-B feed
@@ -53,7 +58,19 @@ const trackerSchema = z.object({
 const trackerConfigSchema = configSchemas.base
   .merge(configSchemas.redis)
   .merge(configSchemas.opensky)
-  .merge(trackerSchema);
+  .merge(trackerSchema)
+  .superRefine((cfg, ctx) => {
+    if (
+      cfg.TRACKER_LIVE_AFTER_MS >= cfg.TRACKER_DELAYED_AFTER_MS ||
+      cfg.TRACKER_DELAYED_AFTER_MS >= cfg.TRACKER_STALE_AFTER_MS ||
+      cfg.TRACKER_STALE_AFTER_MS >= cfg.TRACKER_REMOVE_AFTER_MS
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'tracker lifecycle thresholds must increase: LIVE < DELAYED < STALE < REMOVE',
+      });
+    }
+  });
 
 export type TrackerConfig = z.infer<typeof trackerConfigSchema>;
 export type Bbox = TrackerConfig['TRACKER_BBOX'];

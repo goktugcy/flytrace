@@ -26,6 +26,7 @@ export interface AdsbSourceOptions {
  */
 export class AdsbPositionSource implements PositionSource {
   readonly name = 'adsb';
+  readonly timeMode = 'wall';
 
   constructor(private readonly opts: AdsbSourceOptions) {}
 

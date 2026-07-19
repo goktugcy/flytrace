@@ -3,6 +3,7 @@ import type {
   FlightDetectedPayload,
   FlightEndReason,
   FlightEndedPayload,
+  FlightLifecyclePayload,
   PhaseEventPayload,
   PositionPayload,
   TransitionPayload,
@@ -11,8 +12,10 @@ import type {
 import {
   DEFAULT_DETECTOR_CONFIG,
   type DetectorConfig,
+  type FlightQualityState,
   type FlightState,
   type VerticalMachineState,
+  currentFlightQuality,
 } from './flight-state.ts';
 import type { Position } from './position.ts';
 
@@ -49,7 +52,11 @@ function classifyVertical(
   return 'level';
 }
 
-function positionEvent(flightId: string, obs: Position): DomainEventInput<PositionPayload> {
+function positionEvent(
+  flightId: string,
+  obs: Position,
+  meta: { source: string; receivedAt?: string; ageMs?: number },
+): DomainEventInput<PositionPayload> {
   return {
     type: 'PositionUpdated',
     occurredAt: obs.ts,
@@ -66,11 +73,22 @@ function positionEvent(flightId: string, obs: Position): DomainEventInput<Positi
       vrateFpm: obs.vrateFpm,
       onGround: obs.onGround,
       ts: obs.ts,
+      callsign: obs.callsign,
+      category: obs.category,
+      source: meta.source,
+      qualityState: 'live',
+      ...(meta.receivedAt !== undefined ? { receivedAt: meta.receivedAt } : {}),
+      ...(meta.ageMs !== undefined ? { ageMs: meta.ageMs } : {}),
     },
   };
 }
 
-function initialState(flightId: string, obs: Position, cfg: DetectorConfig): FlightState {
+function initialState(
+  flightId: string,
+  obs: Position,
+  cfg: DetectorConfig,
+  acceptedAt: string,
+): FlightState {
   const airborne = !obs.onGround;
   const vertical = classifyVertical(obs.vrateFpm, cfg) ?? 'level';
   return {
@@ -85,6 +103,10 @@ function initialState(flightId: string, obs: Position, cfg: DetectorConfig): Fli
     headingDeg: obs.headingDeg,
     category: obs.category,
     lastTs: obs.ts,
+    qualityState: 'live',
+    lastAcceptedAt: acceptedAt,
+    lastQualityTransitionAt: acceptedAt,
+    lifecycleSeq: 0,
     airborne,
     groundStreak: obs.onGround ? cfg.transitionConfirmSamples : 0,
     airborneStreak: obs.onGround ? 0 : cfg.transitionConfirmSamples,
@@ -104,14 +126,20 @@ export function detectStep(
   prev: FlightState | null,
   obs: Position,
   flightId: string,
-  opts: { config?: DetectorConfig; source?: string } = {},
+  opts: { config?: DetectorConfig; source?: string; acceptedAt?: string; ageMs?: number } = {},
 ): DetectResult {
   const cfg = opts.config ?? DEFAULT_DETECTOR_CONFIG;
   const source = opts.source ?? 'opensky';
+  const acceptedAt = opts.acceptedAt ?? obs.ts;
+  const positionMeta = {
+    source,
+    receivedAt: acceptedAt,
+    ...(opts.ageMs !== undefined ? { ageMs: opts.ageMs } : {}),
+  };
 
   // First sighting of this flight leg.
   if (prev === null) {
-    const next = initialState(flightId, obs, cfg);
+    const next = initialState(flightId, obs, cfg, acceptedAt);
     const detected: DomainEventInput<FlightDetectedPayload> = {
       type: 'FlightDetected',
       occurredAt: obs.ts,
@@ -125,7 +153,11 @@ export function detectStep(
         source,
       },
     };
-    return { events: [detected, positionEvent(flightId, obs)], next, accepted: true };
+    return {
+      events: [detected, positionEvent(flightId, obs, positionMeta)],
+      next,
+      accepted: true,
+    };
   }
 
   // Drop stale / out-of-order samples (docs §7.6).
@@ -133,8 +165,11 @@ export function detectStep(
     return { events: [], next: prev, accepted: false };
   }
 
-  const events: DomainEventInput[] = [positionEvent(flightId, obs)];
-  const next: FlightState = {
+  const prevQuality = currentFlightQuality(prev);
+  const lifecycleSeq =
+    prevQuality === 'live' ? (prev.lifecycleSeq ?? 0) : (prev.lifecycleSeq ?? 0) + 1;
+  const events: DomainEventInput[] = [positionEvent(flightId, obs, positionMeta)];
+  const next: FlightState & { qualityState: FlightQualityState } = {
     ...prev,
     callsign: obs.callsign ?? prev.callsign,
     lat: obs.lat,
@@ -145,7 +180,15 @@ export function detectStep(
     headingDeg: obs.headingDeg,
     category: obs.category ?? prev.category,
     lastTs: obs.ts,
+    qualityState: 'live',
+    lastAcceptedAt: acceptedAt,
+    lastQualityTransitionAt:
+      prevQuality === 'live' ? (prev.lastQualityTransitionAt ?? acceptedAt) : acceptedAt,
+    lifecycleSeq,
   };
+  if (prevQuality !== 'live') {
+    events.push(flightLifecycleEvent('FlightRecovered', next, acceptedAt, 0));
+  }
 
   // ── Ground ↔ air transitions (takeoff / landing) ──
   if (obs.onGround) {
@@ -297,6 +340,28 @@ export function endFlightEvent(
       icao24: state.icao24,
       endedAt,
       reason,
+    },
+  };
+}
+
+export function flightLifecycleEvent(
+  type: 'FlightDelayed' | 'FlightStale' | 'FlightSignalLost' | 'FlightRecovered',
+  state: FlightState & { qualityState: FlightQualityState },
+  at: string,
+  ageMs: number,
+): DomainEventInput<FlightLifecyclePayload> {
+  return {
+    type,
+    occurredAt: at,
+    dedupeKey: `${state.flightId}:quality:${state.qualityState}:${state.lifecycleSeq ?? 0}`,
+    partitionKey: state.flightId,
+    payload: {
+      flightId: state.flightId,
+      icao24: state.icao24,
+      state: state.qualityState,
+      at,
+      lastPositionAt: state.lastTs,
+      ageMs: Math.max(0, Math.round(ageMs)),
     },
   };
 }

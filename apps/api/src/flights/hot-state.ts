@@ -1,4 +1,4 @@
-import type { LiveFlight } from '@flytrace/shared';
+import { type LiveFlight, flightQualityStateSchema } from '@flytrace/shared';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 import { type Bbox, inBbox } from '../ws/channels.ts';
@@ -21,6 +21,8 @@ const hotStateSchema = z
     gsKt: z.number().nullable(),
     airborne: z.boolean(),
     lastTs: z.string(),
+    qualityState: flightQualityStateSchema.optional(),
+    lastAcceptedAt: z.string().optional(),
   })
   .passthrough();
 
@@ -38,6 +40,8 @@ export function createHotState(redis: Redis, prefix: string) {
     headingDeg: s.headingDeg,
     groundSpeedKt: s.gsKt,
     onGround: !s.airborne,
+    ...(s.qualityState !== undefined ? { qualityState: s.qualityState } : {}),
+    ...(s.lastAcceptedAt !== undefined ? { receivedAt: s.lastAcceptedAt } : {}),
     ts: s.lastTs,
   });
 

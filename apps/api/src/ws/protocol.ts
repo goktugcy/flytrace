@@ -38,9 +38,18 @@ export const eventMessageSchema = z.object({
   id: z.string(),
   event: baseEnvelopeSchema,
 });
+export const bboxSchema = z.tuple([z.number(), z.number(), z.number(), z.number()]);
+export const snapshotScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('viewport'), bbox: bboxSchema }),
+  z.object({ kind: z.literal('flight'), flightId: z.string() }),
+]);
 export const snapshotMessageSchema = z.object({
   t: z.literal('snapshot'),
   channel: z.string(),
+  snapshotId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  generatedAt: z.string().datetime(),
+  scope: snapshotScopeSchema,
   data: z.unknown(),
 });
 export const pongMessageSchema = z.object({ t: z.literal('pong') });

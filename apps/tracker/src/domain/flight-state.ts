@@ -5,6 +5,7 @@
  */
 
 export type VerticalMachineState = 'climb' | 'level' | 'descent';
+export type FlightQualityState = 'live' | 'delayed' | 'stale' | 'signal_lost';
 
 export interface FlightState {
   flightId: string;
@@ -21,6 +22,18 @@ export interface FlightState {
   /** Coarse aircraft class (light | jet | heavy | helo) for map iconography. */
   category: string | null;
   lastTs: string; // ISO of the last accepted sample
+  /**
+   * Realtime freshness state derived from the age of the last accepted sample.
+   * Optional for backward compatibility with Redis hot states written before
+   * this field existed; newly written states always include it.
+   */
+  qualityState?: FlightQualityState;
+  /** Wall/event clock ISO when the tracker accepted the latest sample. */
+  lastAcceptedAt?: string;
+  /** Clock ISO when qualityState last changed. */
+  lastQualityTransitionAt?: string;
+  /** Monotonic index of quality transitions (idempotency keys). */
+  lifecycleSeq?: number;
 
   // ground/air phase (hysteresis-confirmed)
   airborne: boolean;
@@ -61,3 +74,38 @@ export const DEFAULT_DETECTOR_CONFIG: DetectorConfig = {
   climbThresholdFpm: 500,
   descentThresholdFpm: -500,
 };
+
+export interface FlightLifecycleConfig {
+  /** Sample age at or below this threshold is considered live. */
+  liveAfterMs: number;
+  /** Sample age above liveAfterMs and at or below this threshold is delayed. */
+  delayedAfterMs: number;
+  /** Sample age above delayedAfterMs and at or below this threshold is stale. */
+  staleAfterMs: number;
+  /** Sample age above staleAfterMs and at or below this threshold is signal_lost. */
+  removeAfterMs: number;
+  /** Live-source observations older than this are rejected before state diffing. */
+  maxPositionAgeMs: number;
+}
+
+export const DEFAULT_FLIGHT_LIFECYCLE_CONFIG: FlightLifecycleConfig = {
+  liveAfterMs: 15_000,
+  delayedAfterMs: 30_000,
+  staleAfterMs: 60_000,
+  removeAfterMs: 90_000,
+  maxPositionAgeMs: 30_000,
+};
+
+export function classifyFlightQuality(
+  ageMs: number,
+  cfg: FlightLifecycleConfig,
+): FlightQualityState {
+  if (ageMs <= cfg.liveAfterMs) return 'live';
+  if (ageMs <= cfg.delayedAfterMs) return 'delayed';
+  if (ageMs <= cfg.staleAfterMs) return 'stale';
+  return 'signal_lost';
+}
+
+export function currentFlightQuality(state: Pick<FlightState, 'qualityState'>): FlightQualityState {
+  return state.qualityState ?? 'live';
+}

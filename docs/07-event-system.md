@@ -69,12 +69,22 @@ Each event: **payload · producer · consumers · transport · retry strategy ·
 
 ### `PositionUpdated`
 - **Meaning:** a new position sample for a flight.
-- **Payload:** `{ flightId, icao24, lat, lon, altFt, headingDeg, gsKt, vrateFpm, onGround, ts }`
+- **Payload:** `{ flightId, icao24, lat, lon, altFt, headingDeg, gsKt, vrateFpm, onGround, ts, qualityState?, receivedAt?, source? }`
 - **Producer:** `tracker`.
 - **Consumers:** `api` (WS viewport + flight channels), `worker` (batched persistence).
 - **Transport:** **pub/sub** (realtime) + enqueue `persistPosition` (durable). High volume →
   never blocks on DB. **Retry:** persistence job 3×; pub/sub not retried (next sample supersedes).
 - **Idempotency:** `(flightId, ts)` unique on persistence.
+
+### `FlightDelayed` / `FlightStale` / `FlightSignalLost` / `FlightRecovered`
+- **Meaning:** realtime freshness lifecycle for a tracked aircraft, derived from the age of the
+  last accepted position. Default thresholds: live ≤15s, delayed ≤30s, stale ≤60s,
+  signal_lost ≤90s, then `FlightEnded`.
+- **Payload:** `{ flightId, icao24, state, at, lastPositionAt, ageMs }`
+- **Producer:** `tracker`.
+- **Consumers:** `api` (WS viewport + flight channels), web map (opacity/freeze/prune).
+- **Transport:** pub/sub + stream. **Retry:** n/a for UI; the next snapshot or position repairs
+  state. **Idempotency:** `flightId:quality:<state>:<seq>`.
 
 ### `TakeoffDetected`
 - **Meaning:** transition on-ground → airborne (sustained), confirmed over N samples.

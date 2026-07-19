@@ -57,7 +57,8 @@ A binary/compressed encoding (MessagePack + per-message-deflate) is an optimizat
 { "t":"hello", "connectionId":"...", "serverTime":"...", "heartbeatMs":15000, "resumeWindowMs":120000 }
 { "t":"ack", "channel":"flight:...", "cursor":"<latestEventId>" }
 { "t":"event", "channel":"flight:...", "id":"<streamId>", "event": <EventEnvelope> }
-{ "t":"snapshot", "channel":"flight:...", "data": <currentState> }   // sent on subscribe
+{ "t":"snapshot", "channel":"flight:...", "snapshotId":"...", "sequence":1, "generatedAt":"...", "scope":{"kind":"flight","flightId":"..."}, "data": <currentState> }
+{ "t":"snapshot", "channel":"viewport", "snapshotId":"...", "sequence":2, "generatedAt":"...", "scope":{"kind":"viewport","bbox":[w,s,e,n]}, "data": [<currentState>] }
 { "t":"pong" }
 { "t":"error", "code":"...", "message":"..." }
 { "t":"reconnect", "reason":"server_draining" }        // ask client to reconnect (deploys)
@@ -66,6 +67,8 @@ A binary/compressed encoding (MessagePack + per-message-deflate) is an optimizat
 - **`snapshot` first, then deltas:** on subscribe, server sends current state (from Redis hot
   state / cache) so the UI paints immediately, then streams incremental `event`s. This avoids a
   blank first frame and defines the baseline for reconciliation.
+- **Viewport snapshots are authoritative for their `scope.bbox`:** the client removes local
+  aircraft missing from that snapshot unless it has already received a newer event for them.
 - **Event bodies reuse the domain `EventEnvelope`** ([07](./07-event-system.md) §7.2) — one schema across
   bus, WS, and clients.
 
@@ -80,6 +83,10 @@ A binary/compressed encoding (MessagePack + per-message-deflate) is an optimizat
 - **Interpolation:** positions arrive every 1–5s; the client **lerps** lat/lon and heading
   between samples on an animation frame so aircraft glide smoothly (see [04](./04-design-system.md) §4.8).
 - **Out-of-order guard:** drop any delta with `ts` older than the last applied `ts` per flight.
+- **Freshness lifecycle:** live targets can be projected briefly; stale/signal-lost targets are
+  frozen at the last authoritative point and pruned after `removeAfterMs` if no recovery arrives.
+- **Snapshot reconcile:** reconnect/viewport snapshots carry `snapshotId`, `generatedAt`, and
+  `scope`, allowing idempotent application and safe removal of missing in-scope targets.
 - **Backpressure (client):** coalesce rapid deltas to at most one apply per animation frame.
 - **Live regions:** telemetry numbers update via ARIA-polite regions ([03](./03-ux.md) §3.7).
 
