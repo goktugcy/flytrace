@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { aixmLimitToFt, normalizeAixmBlock, parseAixmDataset, parsePosList } from './aixm.ts';
-import { OpenAipAirspaceProvider, normalizeOpenAipRecord, parseOpenAipDataset } from './openaip.ts';
+import {
+  OpenAipAirspaceProvider,
+  fetchOpenAipAirspacePages,
+  normalizeOpenAipRecord,
+  parseOpenAipDataset,
+} from './openaip.ts';
 import { normalizeOfmFeature, parseOfmAltitude, parseOfmDataset } from './openflightmaps.ts';
 
 const polygon = {
@@ -156,6 +161,43 @@ describe('openAIP parser', () => {
       const url = new URL(requestedUrl);
       expect(url.searchParams.has('country')).toBe(false);
       expect(url.searchParams.has('bbox')).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('retries OpenAIP API pages after a 429 Retry-After response', async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } });
+      }
+      return new Response(
+        JSON.stringify({
+          page: 1,
+          limit: 1,
+          totalCount: 1,
+          totalPages: 1,
+          items: [{ _id: 'retry-1', name: 'RETRY FIR', type: 10, geometry: polygon }],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const pages = [];
+      for await (const page of fetchOpenAipAirspacePages({
+        apiKey: 'open-aip-secret',
+        globalImport: true,
+        maxRetries: 1,
+        throwOnError: true,
+      })) {
+        pages.push(page);
+      }
+      expect(calls).toBe(2);
+      expect(pages[0]?.airspaces).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

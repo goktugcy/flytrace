@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import {
   Activity,
+  Globe2,
   ListChecks,
   Plane,
   Radio,
@@ -42,6 +43,7 @@ interface AdminData {
   dlq: DlqJob[];
   logs: ProviderLog[];
   audit: AuditEntry[];
+  airspaceImports: AirspaceImports;
 }
 
 interface DlqJob {
@@ -72,30 +74,72 @@ interface AuditEntry {
   createdAt: string;
 }
 
+interface AirspaceImports {
+  configured: boolean;
+  counts: {
+    waiting?: number;
+    active?: number;
+    completed?: number;
+    failed?: number;
+    delayed?: number;
+  };
+  jobs: AirspaceImportJob[];
+}
+
+interface AirspaceImportJob {
+  id: string;
+  name: string;
+  state: string;
+  data: { datasetVersion: string; provider: string; scope: string };
+  progress: unknown;
+  failedReason: string | null;
+  timestamp: number;
+  processedOn: number | null;
+  finishedOn: number | null;
+  returnvalue: unknown;
+}
+
+interface AirspaceImportProgress {
+  status?: string;
+  datasetVersion?: string;
+  page?: number;
+  totalPages?: number | null;
+  totalCount?: number | null;
+  pagesImported?: number;
+  upserted?: number;
+  invalid?: number;
+  retired?: number;
+  message?: string;
+  updatedAt?: string;
+}
+
 type State = 'loading' | 'unauth' | 'forbidden' | 'ready' | 'error';
 
 export function AdminConsole() {
   const [data, setData] = useState<AdminData | null>(null);
   const [state, setState] = useState<State>('loading');
+  const [actionBusy, setActionBusy] = useState(false);
 
   const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
 
-  async function load() {
-    setState('loading');
+  async function load(opts: { silent?: boolean } = {}) {
+    if (!opts.silent) setState('loading');
     try {
       const first = await get('stats');
       if (first.status === 401) return setState('unauth');
       if (first.status === 403) return setState('forbidden');
       if (!first.ok) return setState('error');
-      const [stats, queues, providers, flights, dlq, logs, auditRes] = await Promise.all([
-        first.json(),
-        get('queues').then((r) => r.json()),
-        get('providers').then((r) => r.json()),
-        get('flights').then((r) => r.json()),
-        get('dlq').then((r) => r.json()),
-        get('logs').then((r) => r.json()),
-        get('audit').then((r) => r.json()),
-      ]);
+      const [stats, queues, providers, flights, dlq, logs, auditRes, airspaceImports] =
+        await Promise.all([
+          first.json(),
+          get('queues').then((r) => r.json()),
+          get('providers').then((r) => r.json()),
+          get('flights').then((r) => r.json()),
+          get('dlq').then((r) => r.json()),
+          get('logs').then((r) => r.json()),
+          get('audit').then((r) => r.json()),
+          get('airspace/imports').then((r) => r.json()),
+        ]);
       setData({
         stats: stats.data.stats,
         queues: queues.data.queues,
@@ -104,6 +148,7 @@ export function AdminConsole() {
         dlq: dlq.data.jobs,
         logs: logs.data.logs,
         audit: auditRes.data.audit,
+        airspaceImports: airspaceImports.data,
       });
       setState('ready');
     } catch {
@@ -116,9 +161,34 @@ export function AdminConsole() {
     void load();
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: poll while the admin-triggered job is active
+  useEffect(() => {
+    const active = data?.airspaceImports.jobs.some((j) =>
+      ['active', 'waiting', 'delayed'].includes(j.state),
+    );
+    if (state !== 'ready' || !active) return;
+    const id = window.setInterval(() => void load({ silent: true }), 5000);
+    return () => window.clearInterval(id);
+  }, [state, data?.airspaceImports.jobs]);
+
   async function retry(path: string) {
     await fetch(`${API_BASE}/api/v1/admin/${path}`, { method: 'POST', credentials: 'include' });
     await load();
+  }
+
+  async function startAirspaceImport() {
+    setActionBusy(true);
+    try {
+      await fetch(`${API_BASE}/api/v1/admin/airspace/imports/openaip-global`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      await load();
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   return (
@@ -131,7 +201,7 @@ export function AdminConsole() {
           </p>
         </div>
         {state === 'ready' && (
-          <Button variant="outline" size="sm" onClick={load}>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
             <RefreshCw />
             Refresh
           </Button>
@@ -160,7 +230,14 @@ export function AdminConsole() {
           />
         )}
         {state === 'error' && <ErrorState onRetry={load} />}
-        {state === 'ready' && data && <AdminBody data={data} retry={retry} />}
+        {state === 'ready' && data && (
+          <AdminBody
+            data={data}
+            retry={retry}
+            startAirspaceImport={startAirspaceImport}
+            actionBusy={actionBusy}
+          />
+        )}
       </div>
     </main>
   );
@@ -169,9 +246,13 @@ export function AdminConsole() {
 function AdminBody({
   data,
   retry,
+  startAirspaceImport,
+  actionBusy,
 }: {
   data: AdminData;
   retry: (path: string) => Promise<void>;
+  startAirspaceImport: () => Promise<void>;
+  actionBusy: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -190,6 +271,12 @@ function AdminBody({
           </Card>
         ))}
       </div>
+
+      <AirspaceImportPanel
+        imports={data.airspaceImports}
+        onStart={startAirspaceImport}
+        busy={actionBusy}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Queues */}
@@ -362,6 +449,93 @@ function AdminBody({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function airspaceProgress(job: AirspaceImportJob | undefined): AirspaceImportProgress | null {
+  const raw = job?.returnvalue && job.state === 'completed' ? job.returnvalue : job?.progress;
+  return raw && typeof raw === 'object' ? (raw as AirspaceImportProgress) : null;
+}
+
+function AirspaceImportPanel({
+  imports,
+  onStart,
+  busy,
+}: {
+  imports: AirspaceImports;
+  onStart: () => Promise<void>;
+  busy: boolean;
+}) {
+  const latest = imports.jobs[0];
+  const progress = airspaceProgress(latest);
+  const running = imports.jobs.some((j) => ['active', 'waiting', 'delayed'].includes(j.state));
+  const totalPages = progress?.totalPages ?? null;
+  const pagesImported = progress?.pagesImported ?? 0;
+  const percent = totalPages ? Math.min(100, Math.round((pagesImported / totalPages) * 100)) : 0;
+
+  return (
+    <Card>
+      <SectionTitle
+        icon={Globe2}
+        action={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!imports.configured || running || busy}
+            onClick={onStart}
+          >
+            <RefreshCw />
+            {running ? 'Import running' : 'Start global import'}
+          </Button>
+        }
+      >
+        OpenAIP airspace import
+        <Badge
+          variant={running ? 'warning' : latest?.state === 'failed' ? 'destructive' : 'outline'}
+        >
+          {running ? 'running' : (latest?.state ?? 'idle')}
+        </Badge>
+      </SectionTitle>
+      <CardContent>
+        {!imports.configured ? (
+          <InlineEmpty>
+            OPENAIP_API_KEY is not configured on the API/worker environment.
+          </InlineEmpty>
+        ) : !latest ? (
+          <InlineEmpty>No airspace import has run yet.</InlineEmpty>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-medium">{latest.data.datasetVersion}</span>
+              <span className="text-muted-foreground">
+                {progress?.message ?? latest.failedReason ?? latest.state}
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-muted">
+              <div className="h-full bg-accent-bright" style={{ width: `${percent}%` }} />
+            </div>
+            <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-5">
+              <span className="tabular-nums">
+                pages {pagesImported}
+                {totalPages ? `/${totalPages}` : ''}
+              </span>
+              <span className="tabular-nums">
+                {(progress?.totalCount ?? 0).toLocaleString()} total
+              </span>
+              <span className="tabular-nums">
+                {(progress?.upserted ?? 0).toLocaleString()} upserted
+              </span>
+              <span className="tabular-nums">
+                {(progress?.invalid ?? 0).toLocaleString()} invalid
+              </span>
+              <span className="tabular-nums">
+                {(progress?.retired ?? 0).toLocaleString()} retired
+              </span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

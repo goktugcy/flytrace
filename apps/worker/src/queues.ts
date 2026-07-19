@@ -1,7 +1,8 @@
-import { QUEUES, providerFetchJobSchema } from '@flytrace/shared';
+import { QUEUES, airspaceImportJobSchema, providerFetchJobSchema } from '@flytrace/shared';
 import type { Logger } from '@flytrace/shared';
 import { Queue, Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
+import type { AirspaceImportService } from './airspace-import.ts';
 import type { ProviderFetchService } from './provider-fetch.ts';
 
 /**
@@ -33,6 +34,17 @@ export function createProviderFetchQueue(connection: Redis): Queue {
   });
 }
 
+export function createAirspaceImportQueue(connection: Redis): Queue {
+  return new Queue(QUEUES.airspaceImport, {
+    connection,
+    defaultJobOptions: {
+      attempts: 1,
+      removeOnComplete: 20,
+      removeOnFail: 100,
+    },
+  });
+}
+
 export function startProviderFetchWorker(
   connection: Redis,
   service: ProviderFetchService,
@@ -57,6 +69,33 @@ export function startProviderFetchWorker(
   );
   worker.on('failed', (job, err) =>
     logger.error('provider.fetch failed', { id: job?.id, err: String(err) }),
+  );
+  return worker;
+}
+
+export function startAirspaceImportWorker(
+  connection: Redis,
+  service: AirspaceImportService,
+  logger: Logger,
+): Worker {
+  const worker = new Worker(
+    QUEUES.airspaceImport,
+    async (job) => {
+      const parsed = airspaceImportJobSchema.safeParse(job.data);
+      if (!parsed.success) {
+        logger.error('airspace.import malformed job', { id: job.id });
+        return;
+      }
+      return await service.process(job);
+    },
+    {
+      connection,
+      concurrency: 1,
+      limiter: { max: 1, duration: 1000 },
+    },
+  );
+  worker.on('failed', (job, err) =>
+    logger.error('airspace.import failed', { id: job?.id, err: String(err) }),
   );
   return worker;
 }

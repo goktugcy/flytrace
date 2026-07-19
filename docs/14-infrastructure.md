@@ -163,6 +163,13 @@ Branch protection: all gates green + review required to merge to `main`.
 - For a global OpenAIP import, set `OPENAIP_GLOBAL_IMPORT=true` and leave `OPENAIP_COUNTRY` /
   `OPENAIP_BBOX` empty. This paginates the full `/airspaces` list, so run it as a scheduled import
   job and avoid app-start imports.
+- Admin-triggered global import uses BullMQ queue `airspace.import`: `POST
+  /api/v1/admin/airspace/imports/openaip-global` enqueues one worker job, and `GET
+  /api/v1/admin/airspace/imports` reports progress. The worker imports page-by-page with
+  `OPENAIP_IMPORT_PAGE_DELAY_MS` and retries/backoff on OpenAIP `429 Retry-After`.
+- After a successful import, set API/tracker-facing airspace lookup to imported data with
+  `AIRSPACE_PROVIDER=db` and `AIRSPACE_DB_SOURCE_PROVIDER=openaip`. Local development can keep
+  `AIRSPACE_PROVIDER=mock`.
 - Import command: `bun run --cwd packages/db airspace:import`. It loads the provider dataset,
   validates geometry through PostGIS, reports invalid polygons, and upserts by
   `(provider,dataset_version,source_id)`.

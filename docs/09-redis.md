@@ -74,6 +74,7 @@ Backed by Redis; each queue is a Redis keyspace. Queues + purpose + concurrency 
 | `persist.positions` | tracker | worker | high (batched) | 3× exp | `persist.dlq` |
 | `enrich.flight` | tracker/worker | worker | medium | 5× exp | `enrich.dlq` |
 | `provider.fetch` | worker (repeatable) | worker | limited by rate budget | 5× exp+jitter | `provider.dlq` |
+| `airspace.import` | admin API | worker | 1 | manual retry | `airspace.import` failed jobs |
 | `notify.send` | notifier | notifier | per-channel | 5× exp+jitter | `notify.dlq` |
 | `rollup.track` | scheduler | worker | low | 3× | — |
 | `maintenance` (retention, sweeps) | scheduler | worker | 1 | 2× | — |
@@ -81,6 +82,7 @@ Backed by Redis; each queue is a Redis keyspace. Queues + purpose + concurrency 
 - **Repeatable jobs** drive provider polling cadence and maintenance.
 - **Flows (parent/child)** for multi-step pipelines (enrich → then schedule provider fetch).
 - **Rate-limited queues** (`provider.fetch`) use BullMQ's limiter + a shared Redis token bucket.
+  `airspace.import` additionally backs off on OpenAIP `429 Retry-After` and delays between pages.
 - **DLQ browser** in admin (inspect/retry/discard). Alerts on DLQ depth.
 
 ## 9.8 Usage 6 — Flight State (hot store)

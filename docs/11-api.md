@@ -106,6 +106,8 @@ email verification, password reset. (Shapes owned by Better Auth; see [15](./15-
 | GET | `/api/v1/admin/providers` | provider health board |
 | POST | `/api/v1/admin/providers/:key/recheck` \| `/toggle` | ops actions |
 | GET | `/api/v1/admin/queues` | queue depths/throughput/failed |
+| GET | `/api/v1/admin/airspace/imports` | latest airspace import jobs/progress |
+| POST | `/api/v1/admin/airspace/imports/openaip-global` | enqueue global OpenAIP airspace import |
 | POST | `/api/v1/admin/queues/:name/dlq/retry` | replay DLQ items |
 | GET | `/api/v1/admin/cache` | cache stats |
 | GET | `/api/v1/admin/flights` | live flight monitoring |

@@ -10,6 +10,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@flytrace/airspace": "workspace:*",
     "@flytrace/db": "workspace:*",
     "@flytrace/providers": "workspace:*",
     "@flytrace/shared": "workspace:*",

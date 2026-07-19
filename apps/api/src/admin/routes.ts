@@ -1,10 +1,41 @@
 import { createSystemRepo, sql } from '@flytrace/db';
-import { AppError } from '@flytrace/shared';
+import { type AirspaceImportJob, AppError, QUEUES } from '@flytrace/shared';
+import type { Job, Queue } from 'bullmq';
 import { type Context, Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
 import { requireRole } from '../auth/routes.ts';
 import type { AppContext } from '../context.ts';
 import { readFlightDebug } from './flight-debug.ts';
+
+async function queueCounts(queue: Queue | undefined, name: string) {
+  if (!queue) return { name, waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
+  const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
+  return {
+    name,
+    waiting: counts.waiting ?? 0,
+    active: counts.active ?? 0,
+    completed: counts.completed ?? 0,
+    failed: counts.failed ?? 0,
+    delayed: counts.delayed ?? 0,
+  };
+}
+
+async function serializeAirspaceImportJob(job: Job) {
+  return {
+    id: job.id,
+    name: job.name,
+    state: await job.getState(),
+    data: job.data as AirspaceImportJob,
+    progress: job.progress,
+    failedReason: job.failedReason ?? null,
+    attemptsMade: job.attemptsMade,
+    timestamp: job.timestamp,
+    processedOn: job.processedOn ?? null,
+    finishedOn: job.finishedOn ?? null,
+    returnvalue: job.returnvalue ?? null,
+  };
+}
 
 /**
  * Admin console API (docs/11 §11.6, docs/03 §3.4.7). Role-gated. Reads the
@@ -18,6 +49,15 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
     c.json({ data, meta: { requestId: c.get('requestId') } });
 
   app.use('/admin/*', requireRole('admin'));
+
+  const defaultOpenAipDatasetVersion = () =>
+    `openaip-global-${new Date().toISOString().slice(0, 10)}`;
+
+  const airspaceImportStartSchema = z
+    .object({
+      datasetVersion: z.string().min(1).max(120).optional(),
+    })
+    .optional();
 
   app.get('/admin/stats', async (c) => {
     const rows = (await ctx.db.execute(sql`
@@ -33,16 +73,12 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   app.get('/admin/queues', async (c) => {
-    const p = 'bull:provider.fetch'; // BullMQ uses its own 'bull' prefix, not the env prefix
-    const [waiting, active, completed, failed, delayed] = await Promise.all([
-      ctx.redis.llen(`${p}:wait`),
-      ctx.redis.llen(`${p}:active`),
-      ctx.redis.zcard(`${p}:completed`),
-      ctx.redis.zcard(`${p}:failed`),
-      ctx.redis.zcard(`${p}:delayed`),
+    const [provider, airspace] = await Promise.all([
+      queueCounts(ctx.providerQueue, QUEUES.providerFetch),
+      queueCounts(ctx.airspaceImportQueue, QUEUES.airspaceImport),
     ]);
     return ok(c, {
-      queues: [{ name: 'provider.fetch', waiting, active, completed, failed, delayed }],
+      queues: [provider, airspace],
     });
   });
 
@@ -64,6 +100,67 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { flights: rows });
   });
 
+  app.get('/admin/airspace/imports', async (c) => {
+    const queue = requireAirspaceImportQueue();
+    const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
+    const jobs = await queue.getJobs(['active', 'waiting', 'delayed', 'completed', 'failed'], 0, 9);
+    return ok(c, {
+      configured: Boolean(ctx.config.OPENAIP_API_KEY),
+      counts,
+      jobs: await Promise.all(jobs.map(serializeAirspaceImportJob)),
+    });
+  });
+
+  app.post('/admin/airspace/imports/openaip-global', async (c) => {
+    const queue = requireAirspaceImportQueue();
+    if (!ctx.config.OPENAIP_API_KEY) {
+      throw new AppError('BAD_REQUEST', 'OPENAIP_API_KEY is required before starting import');
+    }
+
+    const active = await queue.getJobs(['active', 'waiting', 'delayed'], 0, 0);
+    if (active[0]) {
+      return c.json(
+        {
+          data: { job: await serializeAirspaceImportJob(active[0]), existing: true },
+          meta: { requestId: c.get('requestId') },
+        },
+        202,
+      );
+    }
+
+    const parsed = airspaceImportStartSchema.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      throw new AppError('VALIDATION_ERROR', 'invalid airspace import request', {
+        details: parsed.error.issues,
+      });
+    }
+    const datasetVersion = parsed.data?.datasetVersion ?? defaultOpenAipDatasetVersion();
+    const jobData: AirspaceImportJob = {
+      provider: 'openaip',
+      scope: 'global',
+      datasetVersion,
+      triggeredByUserId: c.get('user')?.id ?? null,
+      requestedAt: new Date().toISOString(),
+    };
+    const job = await queue.add('openaip.global', jobData, {
+      attempts: 1,
+      removeOnComplete: 20,
+      removeOnFail: 100,
+    });
+    await audit(c, 'airspace.import.start', job.id ?? null, {
+      provider: 'openaip',
+      scope: 'global',
+      datasetVersion,
+    });
+    return c.json(
+      {
+        data: { job: await serializeAirspaceImportJob(job), existing: false },
+        meta: { requestId: c.get('requestId') },
+      },
+      202,
+    );
+  });
+
   app.get('/admin/debug/flights/:icao24', async (c) => {
     return ok(c, { flight: await readFlightDebug(ctx, c.req.param('icao24')) });
   });
@@ -71,6 +168,12 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
   const requireQueue = () => {
     if (!ctx.providerQueue) throw new AppError('INTERNAL', 'queue not available');
     return ctx.providerQueue;
+  };
+
+  const requireAirspaceImportQueue = () => {
+    if (!ctx.airspaceImportQueue)
+      throw new AppError('INTERNAL', 'airspace import queue not available');
+    return ctx.airspaceImportQueue;
   };
 
   // Dead-letter browser: failed provider.fetch jobs (docs/03 §3.4.7, docs/17 §17.4).
@@ -134,7 +237,7 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
         actorUserId: c.get('user')?.id ?? null,
         actorType: 'admin',
         action,
-        entity: 'provider.fetch',
+        entity: action.startsWith('airspace.') ? 'airspace.import' : 'provider.fetch',
         entityId,
         after: after ?? null,
         correlationId: c.get('requestId'),

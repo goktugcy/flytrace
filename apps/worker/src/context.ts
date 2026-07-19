@@ -23,12 +23,18 @@ import {
 } from '@flytrace/shared';
 import type { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
+import { AirspaceImportService } from './airspace-import.ts';
 import type { WorkerConfig } from './config.ts';
 import { StreamConsumer } from './consumer.ts';
 import { Persister } from './persist.ts';
 import { FetchHttpClient, RedisProviderCache, RedisRateLimiter } from './provider-adapters.ts';
 import { ProviderFetchService } from './provider-fetch.ts';
-import { createProviderFetchQueue, startProviderFetchWorker } from './queues.ts';
+import {
+  createAirspaceImportQueue,
+  createProviderFetchQueue,
+  startAirspaceImportWorker,
+  startProviderFetchWorker,
+} from './queues.ts';
 import { ProviderScheduler } from './scheduler.ts';
 
 export interface WorkerContext {
@@ -38,6 +44,7 @@ export interface WorkerContext {
   redis: Redis;
   consumer: StreamConsumer;
   providerQueue: Queue;
+  airspaceImportQueue: Queue;
   registry: ProviderRegistry;
   close: () => Promise<void>;
 }
@@ -84,6 +91,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   // ── BullMQ provider-fetch queue (dedicated connection) ──
   const bullConnection = redis.duplicate();
   const providerQueue = createProviderFetchQueue(bullConnection);
+  const airspaceImportQueue = createAirspaceImportQueue(bullConnection);
 
   // Schedule a provider fetch when a flight of a known airline is detected.
   const scheduler = new ProviderScheduler({
@@ -182,6 +190,11 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
 
   // ── BullMQ provider-fetch worker (queue built above; dedicated connection) ──
   const providerWorker = startProviderFetchWorker(bullConnection, providerFetch, logger);
+  const airspaceImportWorker = startAirspaceImportWorker(
+    bullConnection,
+    new AirspaceImportService({ db, config, logger }),
+    logger,
+  );
 
   return {
     config,
@@ -190,10 +203,13 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     redis,
     consumer,
     providerQueue,
+    airspaceImportQueue,
     registry,
     close: async () => {
       consumer.stop();
+      await airspaceImportWorker.close();
       await providerWorker.close();
+      await airspaceImportQueue.close();
       await providerQueue.close();
       bullConnection.disconnect();
       cmdRedis.disconnect();

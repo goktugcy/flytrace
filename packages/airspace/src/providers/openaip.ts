@@ -178,6 +178,17 @@ export interface OpenAipApiOptions {
   bbox?: string | undefined;
   baseUrl?: string | undefined;
   pageLimit?: number | undefined;
+  pageDelayMs?: number | undefined;
+  maxRetries?: number | undefined;
+  throwOnError?: boolean | undefined;
+}
+
+export interface OpenAipAirspacePage {
+  page: number;
+  nextPage: number | null;
+  totalPages: number | null;
+  totalCount: number | null;
+  airspaces: Airspace[];
 }
 
 function apiKeyHeaders(apiKey: string | undefined): Record<string, string> | undefined {
@@ -206,6 +217,110 @@ function buildAirspacesApiUrl(opts: OpenAipApiOptions, page: number): string {
 
 function hasApiImportScope(opts: OpenAipApiOptions): boolean {
   return Boolean(opts.globalImport || opts.country?.trim() || opts.bbox?.trim());
+}
+
+function retryAfterMs(raw: string | null): number | null {
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return null;
+}
+
+async function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function* fetchOpenAipAirspacePages(
+  opts: OpenAipApiOptions & { logger?: Logger | undefined },
+): AsyncGenerator<OpenAipAirspacePage> {
+  if (!opts.apiKey?.trim()) {
+    const msg = 'airspace(openaip): OPENAIP_API_KEY is required for API import';
+    if (opts.throwOnError) throw new Error(msg);
+    opts.logger?.warn(msg);
+    return;
+  }
+  if (!hasApiImportScope(opts)) {
+    const msg =
+      'airspace(openaip): no OPENAIP_COUNTRY/BBOX or OPENAIP_GLOBAL_IMPORT=true scope configured';
+    if (opts.throwOnError) throw new Error(msg);
+    opts.logger?.warn(msg);
+    return;
+  }
+
+  const headers = apiKeyHeaders(opts.apiKey);
+  let page = 1;
+  const maxRetries = opts.maxRetries ?? 5;
+
+  for (let guard = 0; guard < 500; guard += 1) {
+    const url = buildAirspacesApiUrl(opts, page);
+    let res: Response | null = null;
+    let lastErr: unknown = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        res = await fetch(url, {
+          ...(headers ? { headers } : {}),
+          signal: AbortSignal.timeout(15_000),
+        });
+        lastErr = null;
+      } catch (err) {
+        lastErr = err;
+        const waitMs = Math.min(60_000, 2000 * 2 ** attempt);
+        opts.logger?.warn('airspace(openaip): API fetch errored, backing off', {
+          page,
+          attempt,
+          waitMs,
+          err: String(err),
+        });
+        await sleep(waitMs);
+        continue;
+      }
+      if (res.status !== 429) break;
+
+      const waitMs =
+        retryAfterMs(res.headers.get('retry-after')) ?? Math.min(60_000, 2000 * 2 ** attempt);
+      opts.logger?.warn('airspace(openaip): rate limited, backing off', {
+        page,
+        attempt,
+        waitMs,
+      });
+      await sleep(waitMs);
+    }
+
+    if (lastErr) {
+      const msg = `airspace(openaip): API fetch failed page=${page} err=${String(lastErr)}`;
+      if (opts.throwOnError) throw new Error(msg);
+      opts.logger?.warn(msg);
+      return;
+    }
+
+    if (!res?.ok) {
+      const msg = `airspace(openaip): API fetch failed status=${res?.status ?? 'unknown'} page=${page}`;
+      if (opts.throwOnError) throw new Error(msg);
+      opts.logger?.warn('airspace(openaip): API fetch failed', { status: res?.status, page });
+      return;
+    }
+
+    const root = await res.json();
+    const airspaces: Airspace[] = [];
+    for (const rec of extractRecords(root)) {
+      const a = normalizeOpenAipRecord(rec);
+      if (a) airspaces.push(a);
+    }
+
+    const meta = root && typeof root === 'object' ? (root as Record<string, unknown>) : {};
+    const nextPage = typeof meta.nextPage === 'number' ? meta.nextPage : null;
+    const totalPages = typeof meta.totalPages === 'number' ? meta.totalPages : null;
+    const totalCount = typeof meta.totalCount === 'number' ? meta.totalCount : null;
+    yield { page, nextPage, totalPages, totalCount, airspaces };
+
+    if (!nextPage || nextPage <= page || (totalPages && page >= totalPages)) break;
+    page = nextPage;
+    await sleep(opts.pageDelayMs ?? 0);
+  }
 }
 
 export class OpenAipAirspaceProvider extends BaseAirspaceProvider {
@@ -240,33 +355,10 @@ export class OpenAipAirspaceProvider extends BaseAirspaceProvider {
   }
 
   private async fetchApiPages(): Promise<Airspace[]> {
-    const headers = apiKeyHeaders(this.api.apiKey);
     const out: Airspace[] = [];
-    let page = 1;
-
-    for (let guard = 0; guard < 500; guard += 1) {
-      const url = buildAirspacesApiUrl(this.api, page);
-      const res = await fetch(url, {
-        headers,
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!res.ok) {
-        this.logger?.warn('airspace(openaip): API fetch failed', { status: res.status, page });
-        return out;
-      }
-      const root = await res.json();
-      for (const rec of extractRecords(root)) {
-        const a = normalizeOpenAipRecord(rec);
-        if (a) out.push(a);
-      }
-
-      const meta = root && typeof root === 'object' ? (root as Record<string, unknown>) : {};
-      const nextPage = typeof meta.nextPage === 'number' ? meta.nextPage : null;
-      const totalPages = typeof meta.totalPages === 'number' ? meta.totalPages : null;
-      if (!nextPage || nextPage <= page || (totalPages && page >= totalPages)) break;
-      page = nextPage;
+    for await (const page of fetchOpenAipAirspacePages({ ...this.api, logger: this.logger })) {
+      out.push(...page.airspaces);
     }
-
     return out;
   }
 }

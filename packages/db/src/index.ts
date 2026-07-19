@@ -15,6 +15,7 @@ export * from './repos/system.ts';
 export * from './repos/user.ts';
 export * from './repos/security.ts';
 export * from './repos/airspace-import.ts';
+export * from './repos/airspace-read.ts';
 export * from './timeseries/positions-repo.ts';
 export * from './timeseries/retention.ts';
 export * from './timeseries/aggregation.ts';

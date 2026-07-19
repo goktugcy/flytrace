@@ -33,6 +33,8 @@ export interface AppContext {
   redisPrefix: string;
   /** BullMQ handle to the provider-fetch queue for admin DLQ browse/retry. */
   providerQueue?: Queue;
+  /** BullMQ handle to the airspace import queue for admin-triggered dataset refresh. */
+  airspaceImportQueue?: Queue;
   metrics: ApiMetrics;
   wsPresence?: PresenceRegistry;
   wsRateLimiter?: ConnectionRateLimiter;
@@ -71,6 +73,7 @@ export function createContext(config: ApiConfig): AppContext {
   const queueConn = redis.duplicate({ maxRetriesPerRequest: null });
   queueConn.on('error', (err) => logger.error('redis(queue) error', { err: String(err) }));
   const providerQueue = new Queue(QUEUES.providerFetch, { connection: queueConn });
+  const airspaceImportQueue = new Queue(QUEUES.airspaceImport, { connection: queueConn });
   const wsPresence =
     config.WS_PRESENCE_BACKEND === 'redis'
       ? new RedisPresence(redis, prefix, {
@@ -95,11 +98,13 @@ export function createContext(config: ApiConfig): AppContext {
     redis,
     redisPrefix: prefix,
     providerQueue,
+    airspaceImportQueue,
     metrics: createApiMetrics(),
     wsPresence,
     wsRateLimiter,
     close: async () => {
       await providerQueue.close();
+      await airspaceImportQueue.close();
       queueConn.disconnect();
       redis.disconnect();
       await closeDb();

@@ -12,3 +12,4 @@ export * from './airspace-service.ts';
 export * from './importer.ts';
 export * from './events.ts';
 export * from './providers/index.ts';
+export * from './providers/openaip.ts';
