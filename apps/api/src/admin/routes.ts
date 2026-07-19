@@ -8,17 +8,30 @@ import { requireRole } from '../auth/routes.ts';
 import type { AppContext } from '../context.ts';
 import { readFlightDebug } from './flight-debug.ts';
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function emptyQueueCounts() {
+  return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
+}
+
 async function queueCounts(queue: Queue | undefined, name: string) {
-  if (!queue) return { name, waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
-  const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
-  return {
-    name,
-    waiting: counts.waiting ?? 0,
-    active: counts.active ?? 0,
-    completed: counts.completed ?? 0,
-    failed: counts.failed ?? 0,
-    delayed: counts.delayed ?? 0,
-  };
+  const empty = { name, ...emptyQueueCounts() };
+  if (!queue) return { ...empty, error: 'queue not available' };
+  try {
+    const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
+    return {
+      name,
+      waiting: counts.waiting ?? 0,
+      active: counts.active ?? 0,
+      completed: counts.completed ?? 0,
+      failed: counts.failed ?? 0,
+      delayed: counts.delayed ?? 0,
+    };
+  } catch (err) {
+    return { ...empty, error: errorMessage(err) };
+  }
 }
 
 async function serializeAirspaceImportJob(job: Job) {
@@ -35,6 +48,27 @@ async function serializeAirspaceImportJob(job: Job) {
     finishedOn: job.finishedOn ?? null,
     returnvalue: job.returnvalue ?? null,
   };
+}
+
+async function serializeAirspaceImportJobs(jobs: Job[]) {
+  const results = await Promise.allSettled(jobs.map(serializeAirspaceImportJob));
+  return results.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    const job = jobs[index];
+    return {
+      id: job?.id ?? `unreadable-${index}`,
+      name: job?.name ?? 'unknown',
+      state: 'unknown',
+      data: job?.data as AirspaceImportJob | undefined,
+      progress: {},
+      failedReason: errorMessage(result.reason),
+      attemptsMade: job?.attemptsMade ?? 0,
+      timestamp: job?.timestamp ?? Date.now(),
+      processedOn: job?.processedOn ?? null,
+      finishedOn: job?.finishedOn ?? null,
+      returnvalue: null,
+    };
+  });
 }
 
 /**
@@ -101,14 +135,47 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   app.get('/admin/airspace/imports', async (c) => {
-    const queue = requireAirspaceImportQueue();
-    const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
-    const jobs = await queue.getJobs(['active', 'waiting', 'delayed', 'completed', 'failed'], 0, 9);
-    return ok(c, {
+    const queue = ctx.airspaceImportQueue;
+    const data: {
+      configured: boolean;
+      counts: ReturnType<typeof emptyQueueCounts>;
+      jobs: Awaited<ReturnType<typeof serializeAirspaceImportJobs>>;
+      error?: string;
+    } = {
       configured: Boolean(ctx.config.OPENAIP_API_KEY),
-      counts,
-      jobs: await Promise.all(jobs.map(serializeAirspaceImportJob)),
-    });
+      counts: emptyQueueCounts(),
+      jobs: [],
+    };
+    if (!queue) {
+      data.error = 'airspace import queue not available';
+      return ok(c, data);
+    }
+    try {
+      const counts = await queue.getJobCounts(
+        'waiting',
+        'active',
+        'completed',
+        'failed',
+        'delayed',
+      );
+      data.counts = {
+        waiting: counts.waiting ?? 0,
+        active: counts.active ?? 0,
+        completed: counts.completed ?? 0,
+        failed: counts.failed ?? 0,
+        delayed: counts.delayed ?? 0,
+      };
+      const jobs = await queue.getJobs(
+        ['active', 'waiting', 'delayed', 'completed', 'failed'],
+        0,
+        9,
+      );
+      data.jobs = await serializeAirspaceImportJobs(jobs);
+    } catch (err) {
+      data.error = errorMessage(err);
+      ctx.logger.warn('airspace import queue read failed', { err: data.error });
+    }
+    return ok(c, data);
   });
 
   app.post('/admin/airspace/imports/openaip-global', async (c) => {

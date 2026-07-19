@@ -18,6 +18,22 @@ function fakeCtx(): AppContext {
   } as unknown as AppContext;
 }
 
+function adminApp(ctx: AppContext) {
+  const app = new Hono<AppEnv>();
+  app.use('*', async (c, next) => {
+    c.set('requestId', 'test-request');
+    c.set('user', {
+      id: '00000000-0000-4000-8000-000000000001',
+      email: 'admin@example.com',
+      name: null,
+      role: 'admin',
+    });
+    await next();
+  });
+  app.route('/api/v1', createAdminRoutes(ctx));
+  return app;
+}
+
 describe('admin routes', () => {
   for (const p of [
     'stats',
@@ -75,18 +91,7 @@ describe('admin routes', () => {
         },
       },
     } as unknown as AppContext;
-    const app = new Hono<AppEnv>();
-    app.use('*', async (c, next) => {
-      c.set('requestId', 'test-request');
-      c.set('user', {
-        id: '00000000-0000-4000-8000-000000000001',
-        email: 'admin@example.com',
-        name: null,
-        role: 'admin',
-      });
-      await next();
-    });
-    app.route('/api/v1', createAdminRoutes(ctx));
+    const app = adminApp(ctx);
 
     const res = await app.request('/api/v1/admin/airspace/imports/openaip-global', {
       method: 'POST',
@@ -97,5 +102,44 @@ describe('admin routes', () => {
     expect((added[0] as { data: { datasetVersion: string } }).data.datasetVersion).toBe(
       'openaip-global-test',
     );
+  });
+
+  test('GET /admin/airspace/imports degrades instead of failing when queue reads fail', async () => {
+    const ctx = {
+      ...fakeCtx(),
+      config: {
+        ...fakeCtx().config,
+        OPENAIP_API_KEY: 'test-key',
+      },
+      airspaceImportQueue: {
+        getJobCounts: async () => {
+          throw new Error('redis unavailable');
+        },
+        getJobs: async () => [],
+      },
+    } as unknown as AppContext;
+    const app = adminApp(ctx);
+
+    const res = await app.request('/api/v1/admin/airspace/imports');
+    const body = (await res.json()) as {
+      data: {
+        configured: boolean;
+        counts: Record<'waiting' | 'active' | 'completed' | 'failed' | 'delayed', number>;
+        jobs: unknown[];
+        error?: string;
+      };
+    };
+
+    expect(res.status).toBe(200);
+    expect(body.data.configured).toBe(true);
+    expect(body.data.counts).toEqual({
+      waiting: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+      delayed: 0,
+    });
+    expect(body.data.jobs).toEqual([]);
+    expect(body.data.error).toContain('redis unavailable');
   });
 });

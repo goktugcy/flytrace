@@ -31,6 +31,7 @@ interface AdminData {
     completed: number;
     failed: number;
     delayed: number;
+    error?: string;
   }[];
   providers: {
     key: string;
@@ -84,13 +85,14 @@ interface AirspaceImports {
     delayed?: number;
   };
   jobs: AirspaceImportJob[];
+  error?: string;
 }
 
 interface AirspaceImportJob {
   id: string;
   name: string;
   state: string;
-  data: { datasetVersion: string; provider: string; scope: string };
+  data?: { datasetVersion?: string; provider?: string; scope?: string };
   progress: unknown;
   failedReason: string | null;
   timestamp: number;
@@ -115,10 +117,53 @@ interface AirspaceImportProgress {
 
 type State = 'loading' | 'unauth' | 'forbidden' | 'ready' | 'error';
 
+const EMPTY_AIRSPACE_IMPORTS: AirspaceImports = {
+  configured: false,
+  counts: {},
+  jobs: [],
+  error: 'Airspace import status is unavailable.',
+};
+
+function fallbackData(): Omit<AdminData, 'stats'> {
+  return {
+    queues: [],
+    providers: [],
+    flights: [],
+    dlq: [],
+    logs: [],
+    audit: [],
+    airspaceImports: EMPTY_AIRSPACE_IMPORTS,
+  };
+}
+
+async function readAdminData<T>(response: Promise<Response>, fallback: T): Promise<T> {
+  try {
+    const res = await response;
+    if (!res.ok) return fallback;
+    const body = (await res.json().catch(() => null)) as { data?: T } | null;
+    return body?.data ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function responseErrorMessage(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as {
+    error?: { message?: string };
+    message?: string;
+  } | null;
+  return body?.error?.message ?? body?.message ?? `Request failed (${res.status})`;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function AdminConsole() {
   const [data, setData] = useState<AdminData | null>(null);
   const [state, setState] = useState<State>('loading');
   const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
 
@@ -129,26 +174,35 @@ export function AdminConsole() {
       if (first.status === 401) return setState('unauth');
       if (first.status === 403) return setState('forbidden');
       if (!first.ok) return setState('error');
-      const [stats, queues, providers, flights, dlq, logs, auditRes, airspaceImports] =
-        await Promise.all([
-          first.json(),
-          get('queues').then((r) => r.json()),
-          get('providers').then((r) => r.json()),
-          get('flights').then((r) => r.json()),
-          get('dlq').then((r) => r.json()),
-          get('logs').then((r) => r.json()),
-          get('audit').then((r) => r.json()),
-          get('airspace/imports').then((r) => r.json()),
-        ]);
+      const stats = (await first.json().catch(() => null)) as {
+        data?: { stats?: Record<string, number> };
+      } | null;
+      if (!stats?.data?.stats) return setState('error');
+      const fallback = fallbackData();
+      const [queues, providers, flights, dlq, logs, auditRes, airspaceImports] = await Promise.all([
+        readAdminData<{ queues: AdminData['queues'] }>(get('queues'), {
+          queues: fallback.queues,
+        }),
+        readAdminData<{ providers: AdminData['providers'] }>(get('providers'), {
+          providers: fallback.providers,
+        }),
+        readAdminData<{ flights: AdminData['flights'] }>(get('flights'), {
+          flights: fallback.flights,
+        }),
+        readAdminData<{ jobs: AdminData['dlq'] }>(get('dlq'), { jobs: fallback.dlq }),
+        readAdminData<{ logs: AdminData['logs'] }>(get('logs'), { logs: fallback.logs }),
+        readAdminData<{ audit: AdminData['audit'] }>(get('audit'), { audit: fallback.audit }),
+        readAdminData<AirspaceImports>(get('airspace/imports'), fallback.airspaceImports),
+      ]);
       setData({
         stats: stats.data.stats,
-        queues: queues.data.queues,
-        providers: providers.data.providers,
-        flights: flights.data.flights,
-        dlq: dlq.data.jobs,
-        logs: logs.data.logs,
-        audit: auditRes.data.audit,
-        airspaceImports: airspaceImports.data,
+        queues: queues.queues,
+        providers: providers.providers,
+        flights: flights.flights,
+        dlq: dlq.jobs,
+        logs: logs.logs,
+        audit: auditRes.audit,
+        airspaceImports,
       });
       setState('ready');
     } catch {
@@ -178,14 +232,21 @@ export function AdminConsole() {
 
   async function startAirspaceImport() {
     setActionBusy(true);
+    setActionError(null);
     try {
-      await fetch(`${API_BASE}/api/v1/admin/airspace/imports/openaip-global`, {
+      const res = await fetch(`${API_BASE}/api/v1/admin/airspace/imports/openaip-global`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
       });
+      if (!res.ok) {
+        setActionError(await responseErrorMessage(res));
+        return;
+      }
       await load();
+    } catch (err) {
+      setActionError(errorMessage(err));
     } finally {
       setActionBusy(false);
     }
@@ -236,6 +297,7 @@ export function AdminConsole() {
             retry={retry}
             startAirspaceImport={startAirspaceImport}
             actionBusy={actionBusy}
+            actionError={actionError}
           />
         )}
       </div>
@@ -248,11 +310,13 @@ function AdminBody({
   retry,
   startAirspaceImport,
   actionBusy,
+  actionError,
 }: {
   data: AdminData;
   retry: (path: string) => Promise<void>;
   startAirspaceImport: () => Promise<void>;
   actionBusy: boolean;
+  actionError: string | null;
 }) {
   return (
     <div className="space-y-6">
@@ -276,6 +340,7 @@ function AdminBody({
         imports={data.airspaceImports}
         onStart={startAirspaceImport}
         busy={actionBusy}
+        actionError={actionError}
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -285,9 +350,11 @@ function AdminBody({
           <CardContent>
             {data.queues.map((q) => (
               <div key={q.name} className="flex items-center justify-between gap-3 py-1">
-                <span className="font-medium">{q.name}</span>
-                <span className="text-sm tabular-nums text-muted-foreground">
-                  {q.waiting} waiting · {q.active} active · {q.completed} done · {q.failed} failed
+                <span className="shrink-0 font-medium">{q.name}</span>
+                <span className="min-w-0 text-right text-sm tabular-nums text-muted-foreground">
+                  {q.error
+                    ? q.error
+                    : `${q.waiting} waiting · ${q.active} active · ${q.completed} done · ${q.failed} failed`}
                 </span>
               </div>
             ))}
@@ -461,10 +528,12 @@ function AirspaceImportPanel({
   imports,
   onStart,
   busy,
+  actionError,
 }: {
   imports: AirspaceImports;
   onStart: () => Promise<void>;
   busy: boolean;
+  actionError: string | null;
 }) {
   const latest = imports.jobs[0];
   const progress = airspaceProgress(latest);
@@ -472,6 +541,8 @@ function AirspaceImportPanel({
   const totalPages = progress?.totalPages ?? null;
   const pagesImported = progress?.pagesImported ?? 0;
   const percent = totalPages ? Math.min(100, Math.round((pagesImported / totalPages) * 100)) : 0;
+  const datasetVersion =
+    latest?.data?.datasetVersion ?? progress?.datasetVersion ?? 'unknown dataset';
 
   return (
     <Card>
@@ -481,7 +552,7 @@ function AirspaceImportPanel({
           <Button
             variant="outline"
             size="sm"
-            disabled={!imports.configured || running || busy}
+            disabled={!imports.configured || running || busy || Boolean(imports.error)}
             onClick={onStart}
           >
             <RefreshCw />
@@ -497,7 +568,11 @@ function AirspaceImportPanel({
         </Badge>
       </SectionTitle>
       <CardContent>
-        {!imports.configured ? (
+        {imports.error ? (
+          <InlineEmpty>{imports.error}</InlineEmpty>
+        ) : actionError ? (
+          <InlineEmpty>{actionError}</InlineEmpty>
+        ) : !imports.configured ? (
           <InlineEmpty>
             OPENAIP_API_KEY is not configured on the API/worker environment.
           </InlineEmpty>
@@ -506,7 +581,7 @@ function AirspaceImportPanel({
         ) : (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium">{latest.data.datasetVersion}</span>
+              <span className="font-medium">{datasetVersion}</span>
               <span className="text-muted-foreground">
                 {progress?.message ?? latest.failedReason ?? latest.state}
               </span>
