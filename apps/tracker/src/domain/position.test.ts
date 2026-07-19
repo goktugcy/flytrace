@@ -33,6 +33,15 @@ describe('normalizeStateVector', () => {
     expect(p?.vrateFpm).toBe(1969); // 10 m/s → fpm
     expect(p?.onGround).toBe(false);
     expect(p?.ts).toBe('2023-11-14T22:13:20.000Z');
+    expect(p?.sourceTimestamp).toBe('2023-11-14T22:13:20.000Z');
+  });
+
+  test('maps OpenSky position_source metadata', () => {
+    const mlat = [...base];
+    mlat[16] = 2;
+    const p = normalizeStateVector(mlat);
+    expect(p?.positionSource).toBe('mlat');
+    expect(p?.isMlat).toBe(true);
   });
 
   test('returns null when position is missing', () => {
@@ -98,6 +107,7 @@ describe('normalizeAdsbResponse', () => {
             track: 145.13,
             baro_rate: -64,
             seen_pos: 2,
+            mlat: ['lat', 'lon'],
           },
         ],
       },
@@ -113,6 +123,8 @@ describe('normalizeAdsbResponse', () => {
     expect(p?.vrateFpm).toBe(-64);
     expect(p?.onGround).toBe(false);
     expect(p?.ts).toBe(new Date(now - 2000).toISOString()); // seen_pos age applied
+    expect(p?.positionSource).toBe('mlat');
+    expect(p?.isMlat).toBe(true);
   });
 
   test('treats alt_baro "ground" as on-ground at 0 ft', () => {

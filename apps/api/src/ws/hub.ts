@@ -57,6 +57,13 @@ const hotStateSchema = z
     category: z.string().nullish(),
     lastTs: z.string(),
     qualityState: flightQualityStateSchema.optional(),
+    selectedProvider: z.string().optional(),
+    sourceTimestamp: z.string().optional(),
+    receivedAt: z.string().optional(),
+    ageMs: z.number().optional(),
+    qualityScore: z.number().optional(),
+    positionSource: z.string().optional(),
+    isMlat: z.boolean().optional(),
     lastAcceptedAt: z.string().optional(),
     lastQualityTransitionAt: z.string().optional(),
   })

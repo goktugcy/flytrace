@@ -36,6 +36,15 @@ enrich.
 - **Attribution:** selected source credited in UI/footer/docs according to its terms.
 - **Normalization:** source record → `PositionSample` (ft/kt/fpm, UTC ISO). Unknown/null fields
   are preserved as `null`, never fabricated.
+- **Composite mode:** `TRACKER_SOURCE=composite` polls `TRACKER_PROVIDERS` (for example
+  `opensky,adsb`) in parallel. Failures are isolated per provider; one timeout/rate-limit does
+  not fail the whole tracker tick. Observations are deduped by ICAO24, scored by freshness,
+  completeness, plausibility, provider priority, and source type, then a hysteresis margin keeps
+  small score differences from flipping the selected provider every poll.
+- **Jump guard:** when switching providers, the selected position must remain physically
+  plausible versus the previously accepted provider position. The default
+  `TRACKER_PROVIDER_MAX_JUMP_SPEED_KT=1200` is intentionally high enough for aircraft but still
+  rejects obvious cross-region teleports.
 - **Freshness lifecycle:** live sources are aged against tracker wall time. Observations older
   than `TRACKER_MAX_POSITION_AGE_MS` are rejected; active hot states move through
   live/delayed/stale/signal_lost and are removed after `TRACKER_REMOVE_AFTER_MS`.

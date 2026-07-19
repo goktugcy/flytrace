@@ -34,6 +34,14 @@ export interface FlightState {
   lastQualityTransitionAt?: string;
   /** Monotonic index of quality transitions (idempotency keys). */
   lifecycleSeq?: number;
+  /** Position provider selected for the latest accepted sample. */
+  selectedProvider?: string;
+  sourceTimestamp?: string;
+  receivedAt?: string;
+  ageMs?: number;
+  qualityScore?: number;
+  positionSource?: string;
+  isMlat?: boolean;
 
   // ground/air phase (hysteresis-confirmed)
   airborne: boolean;

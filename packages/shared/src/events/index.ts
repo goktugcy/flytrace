@@ -77,8 +77,12 @@ export const positionPayloadSchema = z.object({
   callsign: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   source: z.string().optional(),
+  sourceTimestamp: z.string().datetime().optional(),
   receivedAt: z.string().datetime().optional(),
   ageMs: z.number().int().nonnegative().optional(),
+  quality: z.number().min(0).max(1).optional(),
+  positionSource: z.string().optional(),
+  isMlat: z.boolean().optional(),
   qualityState: z.enum(['live', 'delayed', 'stale', 'signal_lost']).optional(),
 });
 export type PositionPayload = z.infer<typeof positionPayloadSchema>;

@@ -22,6 +22,67 @@ const bboxSchema = z
     return { lamin, lomin, lamax, lomax };
   });
 
+const trackerProviderSchema = z.enum(['opensky', 'adsb']);
+export type TrackerProviderName = z.infer<typeof trackerProviderSchema>;
+
+const providerListSchema = z
+  .string()
+  .default('opensky,adsb')
+  .transform((v, ctx): TrackerProviderName[] => {
+    const out: TrackerProviderName[] = [];
+    for (const raw of v.split(',')) {
+      const item = raw.trim().toLowerCase();
+      if (!item) continue;
+      const parsed = trackerProviderSchema.safeParse(item);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `unknown tracker provider "${item}"`,
+        });
+        return z.NEVER;
+      }
+      if (!out.includes(parsed.data)) out.push(parsed.data);
+    }
+    if (out.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'TRACKER_PROVIDERS must include at least one provider',
+      });
+      return z.NEVER;
+    }
+    return out;
+  });
+
+const providerPrioritySchema = z
+  .string()
+  .default('adsb:20,opensky:10')
+  .transform((v, ctx): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const raw of v.split(',')) {
+      const item = raw.trim();
+      if (!item) continue;
+      const [provider, value, extra] = item.split(':');
+      const key = provider?.trim().toLowerCase();
+      const priority = Number(value?.trim());
+      if (extra !== undefined || !key || !trackerProviderSchema.safeParse(key).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `invalid provider priority entry "${item}"`,
+        });
+        return z.NEVER;
+      }
+      if (!Number.isFinite(priority)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `invalid provider priority value "${item}"`,
+        });
+        return z.NEVER;
+      }
+      out[key] = priority;
+    }
+    return out;
+  });
+
 const trackerSchema = z.object({
   /** How long a leader/shard lock is held before it must be renewed (ms). */
   TRACKER_LOCK_TTL_MS: z.coerce.number().int().positive().default(15_000),
@@ -38,7 +99,11 @@ const trackerSchema = z.object({
    * (adsb.lol) with generous limits; `opensky` uses OpenSky (credit-limited);
    * `fixture` replays a recording offline.
    */
-  TRACKER_SOURCE: z.enum(['adsb', 'opensky', 'fixture']).default('adsb'),
+  TRACKER_SOURCE: z.enum(['adsb', 'opensky', 'composite', 'fixture']).default('adsb'),
+  TRACKER_PROVIDERS: providerListSchema,
+  TRACKER_PROVIDER_SWITCH_MARGIN: z.coerce.number().min(0).default(0.15),
+  TRACKER_PROVIDER_MAX_JUMP_SPEED_KT: z.coerce.number().positive().default(1200),
+  TRACKER_PROVIDER_PRIORITY: providerPrioritySchema,
   /** Use the recorded fixture feed (offline dev). Overrides TRACKER_SOURCE when set. */
   TRACKER_USE_FIXTURE: configSchemas.boolish.default('false'),
   /** Community ADS-B feed (readsb/tar1090 JSON). */

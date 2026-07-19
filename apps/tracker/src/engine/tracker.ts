@@ -77,7 +77,12 @@ export class Tracker {
     for (const obs of positions) {
       const obsMs = Date.parse(obs.ts);
       if (!Number.isFinite(obsMs)) continue;
-      const ageMs = Math.max(0, receivedAtMs - obsMs);
+      const sourceMs = Date.parse(obs.sourceTimestamp ?? obs.ts);
+      const ageMs =
+        obs.ageMs ??
+        (Number.isFinite(sourceMs)
+          ? Math.max(0, receivedAtMs - sourceMs)
+          : Math.max(0, receivedAtMs - obsMs));
       if (options.sourceTimeMode === 'wall' && ageMs > options.lifecycle.maxPositionAgeMs) {
         logger.debug('dropping stale provider observation', {
           icao24: obs.icao24,
@@ -89,10 +94,16 @@ export class Tracker {
 
       const { flightId } = await registry.resolve(obs.icao24);
       const prev = await store.get(flightId);
-      const acceptedAtMs = options.sourceTimeMode === 'wall' ? receivedAtMs : obsMs;
+      const receivedAtFromObs = obs.receivedAt ? Date.parse(obs.receivedAt) : Number.NaN;
+      const acceptedAtMs =
+        options.sourceTimeMode === 'wall' && Number.isFinite(receivedAtFromObs)
+          ? receivedAtFromObs
+          : options.sourceTimeMode === 'wall'
+            ? receivedAtMs
+            : obsMs;
       const { events, next, accepted } = detectStep(prev, obs, flightId, {
         config: options.detector,
-        source: options.sourceLabel,
+        source: obs.source ?? options.sourceLabel,
         acceptedAt: new Date(acceptedAtMs).toISOString(),
         ageMs: options.sourceTimeMode === 'wall' ? ageMs : 0,
       });

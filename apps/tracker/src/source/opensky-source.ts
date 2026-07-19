@@ -1,7 +1,8 @@
-import type { Logger } from '@flytrace/shared';
+import { type Clock, type Logger, systemClock } from '@flytrace/shared';
 import type { Bbox } from '../config.ts';
 import { normalizeStatesResponse } from '../domain/position.ts';
 import type { Position } from '../domain/position.ts';
+import { withSourceMetadata } from './metadata.ts';
 import type { PositionSource } from './port.ts';
 
 const STATES_URL = 'https://opensky-network.org/api/states/all';
@@ -13,6 +14,7 @@ export interface OpenSkySourceOptions {
   logger: Logger;
   clientId?: string | undefined;
   clientSecret?: string | undefined;
+  clock?: Clock | undefined;
   /** Injectable fetch for testing; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -73,6 +75,7 @@ export class OpenSkyPositionSource implements PositionSource {
 
     const res = await this.fetch(url, { headers });
     if (!res.ok) throw new Error(`opensky states failed: ${res.status}`);
-    return normalizeStatesResponse(await res.json());
+    const receivedAtMs = (this.opts.clock ?? systemClock).now();
+    return withSourceMetadata(normalizeStatesResponse(await res.json()), this.name, receivedAtMs);
   }
 }

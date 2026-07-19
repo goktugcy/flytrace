@@ -4,8 +4,8 @@ export type SourceTimeMode = 'wall' | 'event';
 
 /**
  * A source of live position samples. The engine is source-agnostic: it polls,
- * normalizes-in (already normalized by the source), and diffs. Adapters:
- * {@link FixturePositionSource} (offline/tests) and the live OpenSky client.
+ * normalizes-in (already normalized by the source), and diffs. Adapters include
+ * fixture replay, single live providers, and composite live provider merge.
  */
 export interface PositionSource {
   readonly name: string;

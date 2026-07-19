@@ -23,6 +23,9 @@ const hotStateSchema = z
     lastTs: z.string(),
     qualityState: flightQualityStateSchema.optional(),
     lastAcceptedAt: z.string().optional(),
+    selectedProvider: z.string().optional(),
+    sourceTimestamp: z.string().optional(),
+    qualityScore: z.number().optional(),
   })
   .passthrough();
 

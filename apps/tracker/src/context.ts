@@ -7,10 +7,11 @@ import {
 } from '@flytrace/shared';
 import { Redis } from 'ioredis';
 import { RedisEventBus } from './bus/redis-bus.ts';
-import type { TrackerConfig } from './config.ts';
+import type { TrackerConfig, TrackerProviderName } from './config.ts';
 import { DEFAULT_DETECTOR_CONFIG } from './domain/flight-state.ts';
 import { Tracker, type TrackerOptions } from './engine/tracker.ts';
 import { AdsbPositionSource } from './source/adsb-source.ts';
+import { CompositePositionSource } from './source/composite-source.ts';
 import { FixturePositionSource } from './source/fixture-source.ts';
 import { OpenSkyPositionSource } from './source/opensky-source.ts';
 import type { PositionSource } from './source/port.ts';
@@ -57,10 +58,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
       removeAfterMs: config.TRACKER_REMOVE_AFTER_MS,
       maxPositionAgeMs: config.TRACKER_MAX_POSITION_AGE_MS,
     },
-    pollIntervalMs:
-      config.TRACKER_SOURCE === 'adsb'
-        ? config.ADSB_POLL_INTERVAL_MS
-        : config.OPENSKY_POLL_INTERVAL_MS,
+    pollIntervalMs: pollIntervalMs(config),
     lockName: 'tracker:leader',
     lockTtlMs: config.TRACKER_LOCK_TTL_MS,
   };
@@ -93,13 +91,38 @@ async function buildSource(
     logger.info('using fixture position source', { frames: frames.length });
     return new FixturePositionSource(frames);
   }
-  if (config.TRACKER_SOURCE === 'opensky') {
+  if (config.TRACKER_SOURCE === 'composite') {
+    const sources = config.TRACKER_PROVIDERS.map((provider) =>
+      buildLiveSource(provider, config, logger, clock),
+    );
+    logger.info('using composite position source', { providers: config.TRACKER_PROVIDERS });
+    return new CompositePositionSource({
+      sources,
+      logger,
+      clock,
+      maxPositionAgeMs: config.TRACKER_MAX_POSITION_AGE_MS,
+      switchMargin: config.TRACKER_PROVIDER_SWITCH_MARGIN,
+      maxJumpSpeedKt: config.TRACKER_PROVIDER_MAX_JUMP_SPEED_KT,
+      providerPriority: config.TRACKER_PROVIDER_PRIORITY,
+    });
+  }
+  return buildLiveSource(config.TRACKER_SOURCE, config, logger, clock);
+}
+
+function buildLiveSource(
+  provider: TrackerProviderName,
+  config: TrackerConfig,
+  logger: Logger,
+  clock: Clock,
+): PositionSource {
+  if (provider === 'opensky') {
     logger.info('using opensky position source', { bbox: config.TRACKER_BBOX });
     return new OpenSkyPositionSource({
       bbox: config.TRACKER_BBOX,
       logger,
       clientId: config.OPENSKY_CLIENT_ID,
       clientSecret: config.OPENSKY_CLIENT_SECRET,
+      clock,
     });
   }
   logger.info('using adsb position source', {
@@ -115,4 +138,14 @@ async function buildSource(
     logger,
     clock,
   });
+}
+
+function pollIntervalMs(config: TrackerConfig): number {
+  if (config.TRACKER_SOURCE === 'adsb') return config.ADSB_POLL_INTERVAL_MS;
+  if (config.TRACKER_SOURCE === 'opensky') return config.OPENSKY_POLL_INTERVAL_MS;
+  if (config.TRACKER_SOURCE !== 'composite') return config.OPENSKY_POLL_INTERVAL_MS;
+  const intervals = config.TRACKER_PROVIDERS.map((provider) =>
+    provider === 'adsb' ? config.ADSB_POLL_INTERVAL_MS : config.OPENSKY_POLL_INTERVAL_MS,
+  );
+  return Math.min(...intervals);
 }

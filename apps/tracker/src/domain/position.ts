@@ -20,6 +20,20 @@ export interface Position {
   category: string | null;
   /** Event time (UTC ISO) — when the source observed this sample. */
   ts: string;
+  /** Provider/source that produced this observation (e.g. adsb, opensky). */
+  source?: string;
+  /** Provider-side timestamp for the observation; defaults to ts when known. */
+  sourceTimestamp?: string;
+  /** Tracker-side receive timestamp for the observation. */
+  receivedAt?: string;
+  /** Age at receive time, in milliseconds. */
+  ageMs?: number;
+  /** Composite selection score, 0..1. */
+  quality?: number;
+  /** Lower-level position source where known (adsb, mlat, flarm, etc.). */
+  positionSource?: string;
+  /** Whether this position was derived from multilateration. */
+  isMlat?: boolean;
 }
 
 /** Map an ADS-B emitter category (A1–A7…) to a coarse icon class. */
@@ -51,6 +65,21 @@ const round = (n: number, dp = 2): number => {
   const f = 10 ** dp;
   return Math.round(n * f) / f;
 };
+
+function openSkyPositionSource(raw: unknown): { positionSource?: string; isMlat?: boolean } {
+  switch (raw) {
+    case 0:
+      return { positionSource: 'adsb', isMlat: false };
+    case 1:
+      return { positionSource: 'asterix', isMlat: false };
+    case 2:
+      return { positionSource: 'mlat', isMlat: true };
+    case 3:
+      return { positionSource: 'flarm', isMlat: false };
+    default:
+      return {};
+  }
+}
 
 /**
  * OpenSky `/states/all` state vector — a positional array (see docs/08 §8.3).
@@ -125,6 +154,7 @@ export function normalizeStateVector(raw: unknown): Position | null {
   if (lat === null || lon === null) return null;
 
   const tsSec = timePosition ?? lastContact;
+  const sourceInfo = openSkyPositionSource(parsed.data[16]);
   return {
     icao24: icao24.toLowerCase(),
     callsign: callsign ? callsign.trim() || null : null,
@@ -137,6 +167,8 @@ export function normalizeStateVector(raw: unknown): Position | null {
     onGround,
     category: null, // OpenSky state vectors carry no emitter category
     ts: new Date(tsSec * 1000).toISOString(),
+    sourceTimestamp: new Date(tsSec * 1000).toISOString(),
+    ...sourceInfo,
   };
 }
 
@@ -169,6 +201,7 @@ const adsbAircraftSchema = z
     baro_rate: z.number().nullish(),
     seen_pos: z.number().nullish(),
     category: z.string().nullish(),
+    mlat: z.array(z.string()).nullish(),
   })
   .passthrough();
 
@@ -182,6 +215,8 @@ export function normalizeAdsbAircraft(raw: unknown, nowMs: number): Position | n
   const onGround = a.alt_baro === 'ground';
   const altFt = typeof a.alt_baro === 'number' ? Math.round(a.alt_baro) : onGround ? 0 : null;
   const ageMs = Math.max(0, (a.seen_pos ?? 0) * 1000);
+  const isMlat = (a.mlat ?? []).length > 0;
+  const ts = new Date(nowMs - ageMs).toISOString();
   return {
     icao24: a.hex.toLowerCase(),
     callsign: a.flight ? a.flight.trim() || null : null,
@@ -193,7 +228,10 @@ export function normalizeAdsbAircraft(raw: unknown, nowMs: number): Position | n
     vrateFpm: a.baro_rate === null || a.baro_rate === undefined ? null : Math.round(a.baro_rate),
     onGround,
     category: adsbCategory(a.category),
-    ts: new Date(nowMs - ageMs).toISOString(),
+    ts,
+    sourceTimestamp: ts,
+    positionSource: isMlat ? 'mlat' : 'adsb',
+    isMlat,
   };
 }
 

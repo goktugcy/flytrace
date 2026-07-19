@@ -55,7 +55,15 @@ function classifyVertical(
 function positionEvent(
   flightId: string,
   obs: Position,
-  meta: { source: string; receivedAt?: string; ageMs?: number },
+  meta: {
+    source: string;
+    sourceTimestamp?: string;
+    receivedAt?: string;
+    ageMs?: number;
+    quality?: number;
+    positionSource?: string;
+    isMlat?: boolean;
+  },
 ): DomainEventInput<PositionPayload> {
   return {
     type: 'PositionUpdated',
@@ -77,8 +85,12 @@ function positionEvent(
       category: obs.category,
       source: meta.source,
       qualityState: 'live',
+      ...(meta.sourceTimestamp !== undefined ? { sourceTimestamp: meta.sourceTimestamp } : {}),
       ...(meta.receivedAt !== undefined ? { receivedAt: meta.receivedAt } : {}),
       ...(meta.ageMs !== undefined ? { ageMs: meta.ageMs } : {}),
+      ...(meta.quality !== undefined ? { quality: meta.quality } : {}),
+      ...(meta.positionSource !== undefined ? { positionSource: meta.positionSource } : {}),
+      ...(meta.isMlat !== undefined ? { isMlat: meta.isMlat } : {}),
     },
   };
 }
@@ -88,6 +100,8 @@ function initialState(
   obs: Position,
   cfg: DetectorConfig,
   acceptedAt: string,
+  source: string,
+  ageMs?: number,
 ): FlightState {
   const airborne = !obs.onGround;
   const vertical = classifyVertical(obs.vrateFpm, cfg) ?? 'level';
@@ -107,6 +121,13 @@ function initialState(
     lastAcceptedAt: acceptedAt,
     lastQualityTransitionAt: acceptedAt,
     lifecycleSeq: 0,
+    selectedProvider: source,
+    sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
+    receivedAt: obs.receivedAt ?? acceptedAt,
+    ...(ageMs !== undefined ? { ageMs } : {}),
+    ...(obs.quality !== undefined ? { qualityScore: obs.quality } : {}),
+    ...(obs.positionSource !== undefined ? { positionSource: obs.positionSource } : {}),
+    ...(obs.isMlat !== undefined ? { isMlat: obs.isMlat } : {}),
     airborne,
     groundStreak: obs.onGround ? cfg.transitionConfirmSamples : 0,
     airborneStreak: obs.onGround ? 0 : cfg.transitionConfirmSamples,
@@ -129,17 +150,22 @@ export function detectStep(
   opts: { config?: DetectorConfig; source?: string; acceptedAt?: string; ageMs?: number } = {},
 ): DetectResult {
   const cfg = opts.config ?? DEFAULT_DETECTOR_CONFIG;
-  const source = opts.source ?? 'opensky';
+  const source = obs.source ?? opts.source ?? 'opensky';
   const acceptedAt = opts.acceptedAt ?? obs.ts;
+  const ageMs = opts.ageMs ?? obs.ageMs;
   const positionMeta = {
     source,
+    sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
     receivedAt: acceptedAt,
-    ...(opts.ageMs !== undefined ? { ageMs: opts.ageMs } : {}),
+    ...(ageMs !== undefined ? { ageMs } : {}),
+    ...(obs.quality !== undefined ? { quality: obs.quality } : {}),
+    ...(obs.positionSource !== undefined ? { positionSource: obs.positionSource } : {}),
+    ...(obs.isMlat !== undefined ? { isMlat: obs.isMlat } : {}),
   };
 
   // First sighting of this flight leg.
   if (prev === null) {
-    const next = initialState(flightId, obs, cfg, acceptedAt);
+    const next = initialState(flightId, obs, cfg, acceptedAt, source, ageMs);
     const detected: DomainEventInput<FlightDetectedPayload> = {
       type: 'FlightDetected',
       occurredAt: obs.ts,
@@ -185,6 +211,13 @@ export function detectStep(
     lastQualityTransitionAt:
       prevQuality === 'live' ? (prev.lastQualityTransitionAt ?? acceptedAt) : acceptedAt,
     lifecycleSeq,
+    selectedProvider: source,
+    sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
+    receivedAt: obs.receivedAt ?? acceptedAt,
+    ...(ageMs !== undefined ? { ageMs } : {}),
+    ...(obs.quality !== undefined ? { qualityScore: obs.quality } : {}),
+    ...(obs.positionSource !== undefined ? { positionSource: obs.positionSource } : {}),
+    ...(obs.isMlat !== undefined ? { isMlat: obs.isMlat } : {}),
   };
   if (prevQuality !== 'live') {
     events.push(flightLifecycleEvent('FlightRecovered', next, acceptedAt, 0));

@@ -69,7 +69,7 @@ Each event: **payload · producer · consumers · transport · retry strategy ·
 
 ### `PositionUpdated`
 - **Meaning:** a new position sample for a flight.
-- **Payload:** `{ flightId, icao24, lat, lon, altFt, headingDeg, gsKt, vrateFpm, onGround, ts, qualityState?, receivedAt?, source? }`
+- **Payload:** `{ flightId, icao24, lat, lon, altFt, headingDeg, gsKt, vrateFpm, onGround, ts, source?, sourceTimestamp?, receivedAt?, ageMs?, quality?, positionSource?, isMlat?, qualityState? }`
 - **Producer:** `tracker`.
 - **Consumers:** `api` (WS viewport + flight channels), `worker` (batched persistence).
 - **Transport:** **pub/sub** (realtime) + enqueue `persistPosition` (durable). High volume →

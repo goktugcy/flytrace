@@ -1,5 +1,6 @@
 import type { Clock, Logger } from '@flytrace/shared';
 import { type Position, normalizeAdsbResponse } from '../domain/position.ts';
+import { withSourceMetadata } from './metadata.ts';
 import type { PositionSource } from './port.ts';
 
 /** Polite identification for the community ADS-B feed (attribution + contact). */
@@ -42,6 +43,11 @@ export class AdsbPositionSource implements PositionSource {
       headers: { accept: 'application/json', 'user-agent': USER_AGENT },
     });
     if (!res.ok) throw new Error(`adsb states failed: ${res.status}`);
-    return normalizeAdsbResponse(await res.json(), this.opts.clock.now());
+    const receivedAtMs = this.opts.clock.now();
+    return withSourceMetadata(
+      normalizeAdsbResponse(await res.json(), receivedAtMs),
+      this.name,
+      receivedAtMs,
+    );
   }
 }

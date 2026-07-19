@@ -6,6 +6,7 @@ const ctx = await createContext(config);
 
 ctx.logger.info('tracker booting', {
   source: config.TRACKER_SOURCE,
+  providers: config.TRACKER_SOURCE === 'composite' ? config.TRACKER_PROVIDERS : undefined,
   poll_ms:
     config.TRACKER_SOURCE === 'adsb'
       ? config.ADSB_POLL_INTERVAL_MS
