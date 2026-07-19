@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ProviderCandidateDebug } from './observation-debug.ts';
 
 /**
  * A normalized position sample — the tracker's canonical unit, independent of
@@ -30,6 +31,10 @@ export interface Position {
   ageMs?: number;
   /** Composite selection score, 0..1. */
   quality?: number;
+  /** Providers considered for this ICAO24 in a composite poll. */
+  candidateProviders?: string[];
+  /** Debug view of selected and rejected provider candidates. */
+  providerCandidates?: ProviderCandidateDebug[];
   /** Lower-level position source where known (adsb, mlat, flarm, etc.). */
   positionSource?: string;
   /** Whether this position was derived from multilateration. */

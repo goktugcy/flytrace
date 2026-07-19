@@ -13,6 +13,7 @@ import {
   DEFAULT_FLIGHT_LIFECYCLE_CONFIG,
 } from '../domain/flight-state.ts';
 import type { Position } from '../domain/position.ts';
+import { type TrackerMetrics, createTrackerMetrics } from '../metrics.ts';
 import { FixturePositionSource } from '../source/fixture-source.ts';
 import type { PositionSource } from '../source/port.ts';
 import { InMemoryFlightRegistry, InMemoryFlightStateStore, InMemoryLock } from '../state/memory.ts';
@@ -95,7 +96,11 @@ function livePos(tsMs: number, over: Partial<Position> = {}): Position {
   };
 }
 
-function liveHarness(source: PositionSource, startMs = Date.parse('2026-01-01T00:00:00.000Z')) {
+function liveHarness(
+  source: PositionSource,
+  startMs = Date.parse('2026-01-01T00:00:00.000Z'),
+  metrics?: TrackerMetrics,
+) {
   const clock = fixedClock(startMs);
   const bus = new InMemoryEventBus();
   const store = new InMemoryFlightStateStore();
@@ -118,6 +123,7 @@ function liveHarness(source: PositionSource, startMs = Date.parse('2026-01-01T00
     clock,
     logger: createLogger({ level: 'error', base: {} }),
     options,
+    ...(metrics ? { metrics } : {}),
   });
   return { clock, bus, store, registry, tracker };
 }
@@ -223,5 +229,27 @@ describe('Tracker — live-source freshness lifecycle', () => {
 
     expect(await store.all()).toHaveLength(0);
     expect(bus.published).toHaveLength(0);
+  });
+
+  test('records rejection debug for duplicate live observations', async () => {
+    const startMs = Date.parse('2026-01-01T00:00:00.000Z');
+    const metrics = createTrackerMetrics();
+    const { tracker, store } = liveHarness(
+      new QueueSource([[livePos(startMs)], [livePos(startMs, { lat: 42 })]]),
+      startMs,
+      metrics,
+    );
+
+    await tracker.tick();
+    await tracker.tick();
+
+    const [state] = await store.all();
+    expect(state?.lat).toBe(41);
+    expect(state?.lastRejectedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(state?.rejectionReason).toBe('duplicate_timestamp');
+    expect(state?.rejectionHistory?.[0]?.reason).toBe('duplicate_timestamp');
+    expect(metrics.registry.render()).toContain(
+      'tracker_observations_rejected_total{reason="duplicate_timestamp",source="test-live"} 1',
+    );
   });
 });

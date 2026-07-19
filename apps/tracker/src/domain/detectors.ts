@@ -17,6 +17,7 @@ import {
   type VerticalMachineState,
   currentFlightQuality,
 } from './flight-state.ts';
+import type { ObservationRejectionReason } from './observation-debug.ts';
 import type { Position } from './position.ts';
 
 /**
@@ -33,6 +34,7 @@ export interface DetectResult {
   next: FlightState;
   /** False when the sample was dropped as stale/out-of-order (state unchanged). */
   accepted: boolean;
+  rejectionReason?: ObservationRejectionReason;
 }
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
@@ -121,7 +123,10 @@ function initialState(
     lastAcceptedAt: acceptedAt,
     lastQualityTransitionAt: acceptedAt,
     lifecycleSeq: 0,
+    sequence: 1,
     selectedProvider: source,
+    ...(obs.candidateProviders !== undefined ? { candidateProviders: obs.candidateProviders } : {}),
+    ...(obs.providerCandidates !== undefined ? { providerCandidates: obs.providerCandidates } : {}),
     sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
     receivedAt: obs.receivedAt ?? acceptedAt,
     ...(ageMs !== undefined ? { ageMs } : {}),
@@ -140,6 +145,7 @@ function initialState(
     everAirborne: airborne,
     takeoffEmitted: false,
     landingEmitted: false,
+    transitionHistory: [{ at: acceptedAt, to: 'live', ageMs: ageMs ?? 0, sequence: 0 }],
   };
 }
 
@@ -187,8 +193,15 @@ export function detectStep(
   }
 
   // Drop stale / out-of-order samples (docs §7.6).
-  if (Date.parse(obs.ts) <= Date.parse(prev.lastTs)) {
-    return { events: [], next: prev, accepted: false };
+  const obsMs = Date.parse(obs.ts);
+  const prevMs = Date.parse(prev.lastTs);
+  if (obsMs <= prevMs) {
+    return {
+      events: [],
+      next: prev,
+      accepted: false,
+      rejectionReason: obsMs === prevMs ? 'duplicate_timestamp' : 'out_of_order',
+    };
   }
 
   const prevQuality = currentFlightQuality(prev);
@@ -211,7 +224,10 @@ export function detectStep(
     lastQualityTransitionAt:
       prevQuality === 'live' ? (prev.lastQualityTransitionAt ?? acceptedAt) : acceptedAt,
     lifecycleSeq,
+    sequence: (prev.sequence ?? 0) + 1,
     selectedProvider: source,
+    ...(obs.candidateProviders !== undefined ? { candidateProviders: obs.candidateProviders } : {}),
+    ...(obs.providerCandidates !== undefined ? { providerCandidates: obs.providerCandidates } : {}),
     sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
     receivedAt: obs.receivedAt ?? acceptedAt,
     ...(ageMs !== undefined ? { ageMs } : {}),
@@ -220,6 +236,13 @@ export function detectStep(
     ...(obs.isMlat !== undefined ? { isMlat: obs.isMlat } : {}),
   };
   if (prevQuality !== 'live') {
+    next.transitionHistory = appendTransitionHistory(prev, {
+      at: acceptedAt,
+      from: prevQuality,
+      to: 'live',
+      ageMs: 0,
+      sequence: lifecycleSeq,
+    });
     events.push(flightLifecycleEvent('FlightRecovered', next, acceptedAt, 0));
   }
 
@@ -355,6 +378,13 @@ function verticalEvent(
       source: 'tracker',
     },
   };
+}
+
+export function appendTransitionHistory(
+  state: Pick<FlightState, 'transitionHistory'>,
+  entry: NonNullable<FlightState['transitionHistory']>[number],
+): NonNullable<FlightState['transitionHistory']> {
+  return [...(state.transitionHistory ?? []), entry].slice(-12);
 }
 
 /** Build a {@link FlightEnded} event (emitted by the engine's timeout sweep). */

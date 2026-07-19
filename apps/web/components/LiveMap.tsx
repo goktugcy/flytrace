@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { LocateFixed, Plane, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import { type RenderedFlight, stepRenderedFlight } from '../lib/flight-motion';
 import { type FlightSample, classifyFlightSample } from '../lib/flight-store';
 import { RealtimeClient, type RealtimeStatus } from '../lib/realtime-client';
 
@@ -28,7 +29,6 @@ function webglAvailable(): boolean {
 
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
-const LERP = 0.16; // per-frame easing toward the latest sample (docs/12 §12.5)
 
 // Self-contained dark base + bundled first-party geography (public/geo/world.json)
 // so the map always renders — external tile CDNs are routinely blocked by
@@ -42,12 +42,6 @@ const DARK_STYLE: maplibregl.StyleSpecification = {
   sources: {},
   layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#080d18' } }],
 };
-
-interface Rendered {
-  lat: number;
-  lon: number;
-  hdg: number;
-}
 
 interface SelInfo {
   flightId: string;
@@ -219,34 +213,6 @@ const ICON_SIZE: maplibregl.ExpressionSpecification = [
   ['*', 0.95, ['get', 'sizeMul']],
 ];
 
-/** Shortest signed angular delta a→b in degrees. */
-function angleDelta(a: number, b: number): number {
-  return ((((b - a) % 360) + 540) % 360) - 180;
-}
-
-const KT_TO_MS = 0.514_444; // knots → metres/second
-const M_PER_DEG_LAT = 111_320;
-const DEAD_RECKON_LIVE_MS = 15_000;
-const DEAD_RECKON_DELAYED_MS = 30_000;
-/**
- * Dead-reckon a sample forward along its track so the marker tracks the
- * aircraft's real-time position between feed updates. Once a target is stale or
- * signal-lost we freeze it at the last authoritative point until it is removed.
- */
-function project(f: FlightSample, nowMs: number): [number, number] {
-  if (f.onGround || !f.gsKt || f.heading == null) return [f.lat, f.lon];
-  const quality = classifyFlightSample(f, nowMs);
-  if (quality === 'stale' || quality === 'signal_lost') return [f.lat, f.lon];
-  const capMs = quality === 'delayed' ? DEAD_RECKON_DELAYED_MS : DEAD_RECKON_LIVE_MS;
-  const dt = Math.min(Math.max(nowMs - f.tsMs, 0), capMs) / 1000;
-  if (dt === 0) return [f.lat, f.lon];
-  const dist = f.gsKt * KT_TO_MS * dt; // metres travelled since the sample
-  const brng = (f.heading * Math.PI) / 180;
-  const dLat = (dist * Math.cos(brng)) / M_PER_DEG_LAT;
-  const dLon = (dist * Math.sin(brng)) / (M_PER_DEG_LAT * Math.cos((f.lat * Math.PI) / 180));
-  return [f.lat + dLat, f.lon + dLon];
-}
-
 interface Airport {
   iata: string;
   name: string;
@@ -368,7 +334,7 @@ export function LiveMap() {
 
     const client = new RealtimeClient({ apiBase: API_BASE, wsBase: WS_BASE });
     const offStatus = client.onStatus(setConnectionStatus);
-    const rendered = new Map<string, Rendered>();
+    const rendered = new Map<string, RenderedFlight>();
     let raf = 0;
     let started = false;
     let remoteTileOk = false;
@@ -420,17 +386,8 @@ export function LiveMap() {
       const nowMs = Date.now();
       client.store.pruneStale(nowMs);
       for (const f of client.store.list()) {
-        // Ease toward the *dead-reckoned* position (projected forward from the
-        // last sample), not the raw last point — otherwise the marker lags the
-        // real aircraft by the whole feed interval.
-        const [tLat, tLon] = project(f, nowMs);
-        const r = rendered.get(f.flightId);
-        if (!r) rendered.set(f.flightId, { lat: tLat, lon: tLon, hdg: f.heading ?? 0 });
-        else {
-          r.lat += (tLat - r.lat) * LERP;
-          r.lon += (tLon - r.lon) * LERP;
-          if (f.heading != null) r.hdg += angleDelta(r.hdg, f.heading) * LERP;
-        }
+        const next = stepRenderedFlight(rendered.get(f.flightId), f, nowMs);
+        rendered.set(f.flightId, next);
       }
       for (const id of rendered.keys()) if (!client.store.get(id)) rendered.delete(id);
 

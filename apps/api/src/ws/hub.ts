@@ -8,6 +8,7 @@ import {
 } from '@flytrace/shared';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
+import type { ApiMetrics } from '../metrics.ts';
 import { type Bbox, authorizeChannel, inBbox, parseChannel } from './channels.ts';
 import type { ClientMessage, ServerMessage } from './protocol.ts';
 import type { TicketPayload } from './ticket.ts';
@@ -82,7 +83,13 @@ export class WsHub {
   private snapshotSeq = 0;
 
   constructor(
-    private readonly deps: { redis: Redis; prefix: string; clock: Clock; logger: Logger },
+    private readonly deps: {
+      redis: Redis;
+      prefix: string;
+      clock: Clock;
+      logger: Logger;
+      metrics?: Pick<ApiMetrics, 'wsMessagesSent' | 'wsReconnects' | 'wsSnapshotSize'>;
+    },
     options: Partial<HubOptions> = {},
   ) {
     this.options = { ...DEFAULT_HUB_OPTIONS, ...options };
@@ -100,7 +107,7 @@ export class WsHub {
       viewport: null,
       lastSeen: this.deps.clock.now(),
     });
-    socket.send({
+    this.sendSocket(socket, {
       t: 'hello',
       connectionId: socket.id,
       serverTime: this.deps.clock.nowIso(),
@@ -120,7 +127,7 @@ export class WsHub {
 
     switch (msg.t) {
       case 'ping':
-        conn.socket.send({ t: 'pong' });
+        this.sendSocket(conn.socket, { t: 'pong' });
         return;
       case 'subscribe':
         await this.onSubscribe(conn, msg.channel, msg.cursor);
@@ -138,27 +145,40 @@ export class WsHub {
   private async onSubscribe(conn: ConnState, raw: string, cursor?: string): Promise<void> {
     const channel = parseChannel(raw);
     if (!channel) {
-      conn.socket.send({ t: 'error', code: 'BAD_CHANNEL', message: `unknown channel: ${raw}` });
+      this.sendSocket(conn.socket, {
+        t: 'error',
+        code: 'BAD_CHANNEL',
+        message: `unknown channel: ${raw}`,
+      });
       return;
     }
     if (!authorizeChannel(channel, conn.ticket)) {
-      conn.socket.send({ t: 'error', code: 'FORBIDDEN', message: `not allowed: ${raw}` });
+      this.sendSocket(conn.socket, {
+        t: 'error',
+        code: 'FORBIDDEN',
+        message: `not allowed: ${raw}`,
+      });
       return;
     }
     if (channel.kind === 'flight' && this.countFlights(conn) >= this.options.maxFlightsPerConn) {
-      conn.socket.send({ t: 'error', code: 'LIMIT', message: 'too many flight subscriptions' });
+      this.sendSocket(conn.socket, {
+        t: 'error',
+        code: 'LIMIT',
+        message: 'too many flight subscriptions',
+      });
       return;
     }
 
     conn.channels.add(channel.raw);
+    if (cursor) this.deps.metrics?.wsReconnects.inc({ channel: channel.kind });
 
     if (channel.kind === 'flight') {
       await this.sendFlightSnapshot(conn, channel.flightId, channel.raw);
       if (cursor) await this.replayFlight(conn, channel.flightId, channel.raw, cursor);
       const latest = await this.latestStreamId(streamKeys.flight(channel.flightId));
-      conn.socket.send({ t: 'ack', channel: channel.raw, cursor: latest });
+      this.sendSocket(conn.socket, { t: 'ack', channel: channel.raw, cursor: latest }, channel.raw);
     } else {
-      conn.socket.send({ t: 'ack', channel: channel.raw, cursor: null });
+      this.sendSocket(conn.socket, { t: 'ack', channel: channel.raw, cursor: null }, channel.raw);
     }
   }
 
@@ -168,17 +188,34 @@ export class WsHub {
     const isPosition = event.type === 'PositionUpdated';
     const isViewportLifecycle = VIEWPORT_LIFECYCLE_EVENTS.has(event.type);
     const pos = isPosition ? positionOf(event) : null;
+    let delivered = false;
 
     for (const conn of this.conns.values()) {
       if (conn.channels.has(flightChannel)) {
-        conn.socket.send({ t: 'event', channel: flightChannel, id: sid, event });
+        this.sendSocket(
+          conn.socket,
+          { t: 'event', channel: flightChannel, id: sid, event },
+          flightChannel,
+        );
+        delivered = true;
       }
       if (conn.viewport && pos && inBbox(pos.lat, pos.lon, conn.viewport)) {
-        conn.socket.send({ t: 'event', channel: 'viewport', id: sid, event });
+        this.sendSocket(
+          conn.socket,
+          { t: 'event', channel: 'viewport', id: sid, event },
+          'viewport',
+        );
+        delivered = true;
       } else if (conn.viewport && isViewportLifecycle) {
-        conn.socket.send({ t: 'event', channel: 'viewport', id: sid, event });
+        this.sendSocket(
+          conn.socket,
+          { t: 'event', channel: 'viewport', id: sid, event },
+          'viewport',
+        );
+        delivered = true;
       }
     }
+    if (delivered) void this.markWebsocketPublished(event);
   }
 
   // ── snapshots & replay ──
@@ -189,14 +226,19 @@ export class WsHub {
     channel: string,
   ): Promise<void> {
     const state = await this.readHotState(flightId);
-    conn.socket.send(this.snapshotMessage(conn, channel, { kind: 'flight', flightId }, state));
+    this.sendSocket(
+      conn.socket,
+      this.snapshotMessage(conn, channel, { kind: 'flight', flightId }, state),
+      channel,
+    );
   }
 
   private async sendViewportSnapshot(conn: ConnState): Promise<void> {
     if (!conn.viewport) return;
     const ids = await this.deps.redis.smembers(`${this.deps.prefix}flights:active`);
     if (ids.length === 0) {
-      conn.socket.send(
+      this.sendSocket(
+        conn.socket,
         this.snapshotMessage(
           conn,
           'viewport',
@@ -206,6 +248,7 @@ export class WsHub {
           },
           [],
         ),
+        'viewport',
       );
       return;
     }
@@ -218,7 +261,8 @@ export class WsHub {
         inView.push(parsed.data);
       }
     }
-    conn.socket.send(
+    this.sendSocket(
+      conn.socket,
       this.snapshotMessage(
         conn,
         'viewport',
@@ -228,6 +272,7 @@ export class WsHub {
         },
         inView,
       ),
+      'viewport',
     );
   }
 
@@ -251,7 +296,11 @@ export class WsHub {
       if (!body) continue;
       const parsed = baseEnvelopeSchema.safeParse(safeJson(body));
       if (parsed.success) {
-        conn.socket.send({ t: 'event', channel, id, event: parsed.data as EventEnvelope });
+        this.sendSocket(
+          conn.socket,
+          { t: 'event', channel, id, event: parsed.data as EventEnvelope },
+          channel,
+        );
       }
     }
   }
@@ -301,7 +350,49 @@ export class WsHub {
       data,
     };
   }
+
+  private sendSocket(socket: Socket, msg: ServerMessage, channel = 'control'): void {
+    this.deps.metrics?.wsMessagesSent.inc({ type: msg.t, channel: metricChannel(channel) });
+    if (msg.t === 'snapshot') {
+      const size = Array.isArray(msg.data) ? msg.data.length : msg.data === null ? 0 : 1;
+      this.deps.metrics?.wsSnapshotSize.observe(size, {
+        channel: metricChannel(msg.channel),
+        scope: msg.scope.kind,
+      });
+    }
+    socket.send(msg);
+  }
+
+  private async markWebsocketPublished(event: EventEnvelope): Promise<void> {
+    const flightId =
+      typeof (event.payload as { flightId?: unknown }).flightId === 'string'
+        ? (event.payload as { flightId: string }).flightId
+        : event.partitionKey;
+    if (!flightId) return;
+    try {
+      await this.deps.redis.eval(
+        MARK_WS_PUBLISHED_LUA,
+        1,
+        this.stateKey(flightId),
+        this.deps.clock.nowIso(),
+      );
+    } catch (err) {
+      this.deps.logger.warn('ws debug publish marker failed', {
+        flightId,
+        err: String(err),
+      });
+    }
+  }
 }
+
+const MARK_WS_PUBLISHED_LUA = `
+local raw = redis.call('get', KEYS[1])
+if not raw then return 0 end
+local state = cjson.decode(raw)
+state['websocketPublishedAt'] = ARGV[1]
+redis.call('set', KEYS[1], cjson.encode(state), 'KEEPTTL')
+return 1
+`;
 
 const VIEWPORT_LIFECYCLE_EVENTS = new Set([
   'FlightDelayed',
@@ -330,4 +421,9 @@ function safeJson(s: string): unknown {
   } catch {
     return null;
   }
+}
+
+function metricChannel(channel: string): string {
+  const i = channel.indexOf(':');
+  return i === -1 ? channel : channel.slice(0, i);
 }

@@ -16,7 +16,16 @@ function fakeCtx(): AppContext {
 }
 
 describe('admin routes', () => {
-  for (const p of ['stats', 'queues', 'providers', 'flights', 'dlq', 'logs', 'audit']) {
+  for (const p of [
+    'stats',
+    'queues',
+    'providers',
+    'flights',
+    'debug/flights/4bb1a2',
+    'dlq',
+    'logs',
+    'audit',
+  ]) {
     test(`GET /admin/${p} → 401 without a session`, async () => {
       const res = await createApp(fakeCtx()).request(`/api/v1/admin/${p}`);
       expect(res.status).toBe(401);

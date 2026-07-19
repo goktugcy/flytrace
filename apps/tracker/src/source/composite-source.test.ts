@@ -42,6 +42,23 @@ function pos(over: Partial<Position> = {}): Position {
   };
 }
 
+function hasCandidate(
+  candidates: unknown[] | undefined,
+  provider: string,
+  selected?: boolean,
+  rejectionReason?: string,
+): boolean {
+  return (candidates ?? []).some((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const record = candidate as Record<string, unknown>;
+    return (
+      record.provider === provider &&
+      (selected === undefined || record.selected === selected) &&
+      (rejectionReason === undefined || record.rejectionReason === rejectionReason)
+    );
+  });
+}
+
 function source(
   sources: PositionSource[],
   over: Partial<ConstructorParameters<typeof CompositePositionSource>[0]> = {},
@@ -96,6 +113,10 @@ describe('CompositePositionSource', () => {
 
     expect(out).toHaveLength(1);
     expect(out[0]?.source).toBe('adsb');
+    expect(out[0]?.candidateProviders).toEqual(['adsb', 'opensky']);
+    expect(hasCandidate(out[0]?.providerCandidates, 'opensky', false, 'stale_observation')).toBe(
+      true,
+    );
   });
 
   test('isolates a failed provider poll', async () => {
@@ -162,5 +183,7 @@ describe('CompositePositionSource', () => {
 
     expect(out).toHaveLength(1);
     expect(out[0]?.icao24).toBe('4bb1a2');
+    expect(hasCandidate(out[0]?.providerCandidates, 'opensky')).toBe(true);
+    expect(hasCandidate(out[0]?.providerCandidates, 'adsb')).toBe(true);
   });
 });

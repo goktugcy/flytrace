@@ -1,5 +1,10 @@
 import type { Clock, Logger } from '@flytrace/shared';
+import type {
+  ObservationRejectionReason,
+  ProviderCandidateDebug,
+} from '../domain/observation-debug.ts';
 import type { Position } from '../domain/position.ts';
+import type { TrackerMetrics } from '../metrics.ts';
 import type { PositionSource } from './port.ts';
 
 export interface CompositePositionSourceOptions {
@@ -10,6 +15,7 @@ export interface CompositePositionSourceOptions {
   switchMargin: number;
   maxJumpSpeedKt: number;
   providerPriority: Record<string, number>;
+  metrics?: TrackerMetrics;
 }
 
 interface Candidate {
@@ -41,13 +47,32 @@ export class CompositePositionSource implements PositionSource {
   async poll(): Promise<Position[]> {
     const nowMs = this.opts.clock.now();
     const settled = await Promise.allSettled(
-      this.opts.sources.map(async (source) => ({
-        source,
-        positions: await source.poll(),
-      })),
+      this.opts.sources.map(async (source) => {
+        const startedAt = this.opts.clock.now();
+        this.opts.metrics?.providerRequests.inc({ source: source.name });
+        try {
+          return {
+            source,
+            positions: await source.poll(),
+          };
+        } catch (err) {
+          this.opts.metrics?.providerFailures.inc({ source: source.name, reason: 'poll_error' });
+          throw err;
+        } finally {
+          this.opts.metrics?.providerLatency.observe((this.opts.clock.now() - startedAt) / 1000, {
+            source: source.name,
+          });
+        }
+      }),
     );
 
     const byIcao = new Map<string, Candidate[]>();
+    const debugByIcao = new Map<string, ProviderCandidateDebug[]>();
+    const addDebug = (icao24: string, debug: ProviderCandidateDebug) => {
+      const list = debugByIcao.get(icao24) ?? [];
+      list.push(debug);
+      debugByIcao.set(icao24, list);
+    };
     for (const result of settled) {
       if (result.status === 'rejected') {
         this.opts.logger.warn('position provider poll failed', { err: String(result.reason) });
@@ -56,7 +81,7 @@ export class CompositePositionSource implements PositionSource {
 
       const { source, positions } = result.value;
       for (const raw of positions) {
-        const candidate = this.toCandidate(source.name, raw, nowMs);
+        const candidate = this.toCandidate(source.name, raw, nowMs, addDebug);
         if (!candidate) continue;
         const list = byIcao.get(candidate.position.icao24) ?? [];
         list.push(candidate);
@@ -68,26 +93,56 @@ export class CompositePositionSource implements PositionSource {
     for (const [icao24, candidates] of byIcao) {
       const chosen = this.choose(icao24, candidates);
       if (!chosen) continue;
+      const providerCandidates = [
+        ...candidates.map((candidate) =>
+          candidateDebug(candidate, candidate.source === chosen.source),
+        ),
+        ...(debugByIcao.get(icao24) ?? []),
+      ];
+      const candidateProviders = unique(providerCandidates.map((candidate) => candidate.provider));
+      const position = {
+        ...chosen.position,
+        candidateProviders,
+        providerCandidates,
+      };
       this.selected.set(icao24, {
         source: chosen.source,
-        position: chosen.position,
+        position,
         score: chosen.score,
       });
-      out.push(chosen.position);
+      out.push(position);
     }
     return out;
   }
 
-  private toCandidate(sourceName: string, raw: Position, nowMs: number): Candidate | null {
-    if (!validCoordinates(raw.lat, raw.lon)) return null;
+  private toCandidate(
+    sourceName: string,
+    raw: Position,
+    nowMs: number,
+    addDebug: (icao24: string, debug: ProviderCandidateDebug) => void,
+  ): Candidate | null {
+    if (!validCoordinates(raw.lat, raw.lon)) {
+      addDebug(raw.icao24, rejectedCandidate(sourceName, raw, 'invalid_coordinates', nowMs));
+      this.opts.metrics?.observationsRejected.inc({
+        source: raw.source ?? sourceName,
+        reason: 'invalid_coordinates',
+      });
+      return null;
+    }
 
     const source = raw.source ?? sourceName;
     const sourceTimestamp = raw.sourceTimestamp ?? raw.ts;
     const tsMs = Date.parse(sourceTimestamp);
-    if (!Number.isFinite(tsMs)) return null;
+    if (!Number.isFinite(tsMs)) {
+      addDebug(raw.icao24, rejectedCandidate(source, raw, 'missing_position', nowMs));
+      this.opts.metrics?.observationsRejected.inc({ source, reason: 'missing_position' });
+      return null;
+    }
 
     const ageMs = raw.ageMs ?? Math.max(0, nowMs - tsMs);
     if (ageMs > this.opts.maxPositionAgeMs) {
+      addDebug(raw.icao24, rejectedCandidate(source, raw, 'stale_observation', nowMs, ageMs));
+      this.opts.metrics?.observationsRejected.inc({ source, reason: 'stale_observation' });
       this.opts.logger.debug('dropping stale provider candidate', {
         icao24: raw.icao24,
         source,
@@ -98,6 +153,8 @@ export class CompositePositionSource implements PositionSource {
 
     const previous = this.selected.get(raw.icao24);
     if (previous && !this.isPlausible(previous.position, raw)) {
+      addDebug(raw.icao24, rejectedCandidate(source, raw, 'impossible_jump', nowMs, ageMs));
+      this.opts.metrics?.observationsRejected.inc({ source, reason: 'impossible_jump' });
       this.opts.logger.warn('dropping implausible provider jump', {
         icao24: raw.icao24,
         from: previous.source,
@@ -150,6 +207,44 @@ export class CompositePositionSource implements PositionSource {
   }
 }
 
+function candidateDebug(candidate: Candidate, selected: boolean): ProviderCandidateDebug {
+  return {
+    provider: candidate.source,
+    selected,
+    sourceTimestamp: candidate.position.sourceTimestamp ?? candidate.position.ts,
+    qualityScore: candidate.score,
+    ...(candidate.position.receivedAt !== undefined
+      ? { receivedAt: candidate.position.receivedAt }
+      : {}),
+    ...(candidate.position.ageMs !== undefined ? { ageMs: candidate.position.ageMs } : {}),
+    ...(candidate.position.positionSource !== undefined
+      ? { positionSource: candidate.position.positionSource }
+      : {}),
+    ...(candidate.position.isMlat !== undefined ? { isMlat: candidate.position.isMlat } : {}),
+    ...(selected ? {} : { rejectionReason: 'lower_quality_candidate' }),
+  };
+}
+
+function rejectedCandidate(
+  provider: string,
+  raw: Position,
+  reason: ObservationRejectionReason,
+  nowMs: number,
+  ageMs = raw.ageMs,
+): ProviderCandidateDebug {
+  return {
+    provider,
+    selected: false,
+    sourceTimestamp: raw.sourceTimestamp ?? raw.ts,
+    receivedAt: raw.receivedAt ?? new Date(nowMs).toISOString(),
+    ...(ageMs !== undefined ? { ageMs } : {}),
+    ...(raw.quality !== undefined ? { qualityScore: raw.quality } : {}),
+    ...(raw.positionSource !== undefined ? { positionSource: raw.positionSource } : {}),
+    ...(raw.isMlat !== undefined ? { isMlat: raw.isMlat } : {}),
+    rejectionReason: reason,
+  };
+}
+
 export function scorePosition(
   p: Position,
   opts: { maxPositionAgeMs: number; priority: number },
@@ -198,4 +293,8 @@ function clamp01(n: number): number {
 
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }

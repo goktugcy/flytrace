@@ -7,6 +7,7 @@ import {
   makeEnvelope,
 } from '@flytrace/shared';
 import type { Redis } from 'ioredis';
+import { createApiMetrics } from '../metrics.ts';
 import { WsHub } from './hub.ts';
 import type { Socket } from './hub.ts';
 import type { ServerMessage } from './protocol.ts';
@@ -118,12 +119,13 @@ function endedEnvelope(flightId: string): EventEnvelope<{ flightId: string; icao
   );
 }
 
-function makeHub(redis: FakeRedis) {
+function makeHub(redis: FakeRedis, metrics?: ReturnType<typeof createApiMetrics>) {
   return new WsHub({
     redis: redis as unknown as Redis,
     prefix: PREFIX,
     clock: fixedClock(1_700_000_000_000),
     logger: createLogger({ level: 'error', base: {} }),
+    ...(metrics ? { metrics } : {}),
   });
 }
 
@@ -281,5 +283,35 @@ describe('WsHub', () => {
     hub.add(s, guest);
     await hub.handleMessage('c1', { t: 'ping' });
     expect(s.ofType('pong')).toHaveLength(1);
+  });
+
+  test('records websocket message, reconnect and snapshot metrics', async () => {
+    const metrics = createApiMetrics();
+    hub = makeHub(redis, metrics);
+    redis.strings.set(
+      `${PREFIX}flight:state:F1`,
+      JSON.stringify({
+        flightId: 'F1',
+        icao24: 'abc123',
+        callsign: 'THY1',
+        lat: 41,
+        lon: 29,
+        altFt: 1000,
+        gsKt: 100,
+        headingDeg: 90,
+        vrateFpm: 0,
+        lastTs: '2023-11-14T22:13:20.000Z',
+      }),
+    );
+
+    const s = new FakeSocket('c1');
+    hub.add(s, guest);
+    await hub.handleMessage('c1', { t: 'subscribe', channel: 'flight:F1', cursor: '1-0' });
+
+    const rendered = metrics.registry.render();
+    expect(rendered).toContain('ws_messages_sent_total{channel="control",type="hello"} 1');
+    expect(rendered).toContain('ws_messages_sent_total{channel="flight",type="snapshot"} 1');
+    expect(rendered).toContain('ws_reconnects_total{channel="flight"} 1');
+    expect(rendered).toContain('ws_snapshot_size_count{channel="flight",scope="flight"} 1');
   });
 });

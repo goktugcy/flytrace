@@ -5,7 +5,12 @@ import {
   type Logger,
   makeEnvelope,
 } from '@flytrace/shared';
-import { detectStep, endFlightEvent, flightLifecycleEvent } from '../domain/detectors.ts';
+import {
+  appendTransitionHistory,
+  detectStep,
+  endFlightEvent,
+  flightLifecycleEvent,
+} from '../domain/detectors.ts';
 import {
   type DetectorConfig,
   type FlightLifecycleConfig,
@@ -14,6 +19,9 @@ import {
   classifyFlightQuality,
   currentFlightQuality,
 } from '../domain/flight-state.ts';
+import type { ObservationRejectionReason } from '../domain/observation-debug.ts';
+import type { Position } from '../domain/position.ts';
+import type { TrackerMetrics } from '../metrics.ts';
 import type { PositionSource, SourceTimeMode } from '../source/port.ts';
 import type { FlightRegistry, FlightStateStore, Lock } from '../state/port.ts';
 
@@ -41,6 +49,7 @@ export interface TrackerDeps {
   clock: Clock;
   logger: Logger;
   options: TrackerOptions;
+  metrics?: TrackerMetrics;
 }
 
 /**
@@ -66,7 +75,20 @@ export class Tracker {
 
   /** One poll → process → sweep cycle. Safe to call directly in tests. */
   async tick(): Promise<void> {
-    const positions = await this.deps.source.poll();
+    const source = this.deps.source.name;
+    const startedAt = this.deps.clock.now();
+    this.deps.metrics?.providerRequests.inc({ source });
+    let positions: Awaited<ReturnType<PositionSource['poll']>>;
+    try {
+      positions = await this.deps.source.poll();
+    } catch (err) {
+      this.deps.metrics?.providerFailures.inc({ source, reason: 'poll_error' });
+      throw err;
+    } finally {
+      this.deps.metrics?.providerLatency.observe((this.deps.clock.now() - startedAt) / 1000, {
+        source,
+      });
+    }
     await this.process(positions);
     await this.sweep();
   }
@@ -75,6 +97,8 @@ export class Tracker {
     const { store, registry, options, clock, logger } = this.deps;
     const receivedAtMs = clock.now();
     for (const obs of positions) {
+      const source = obs.source ?? options.sourceLabel;
+      this.deps.metrics?.observationsReceived.inc({ source });
       const obsMs = Date.parse(obs.ts);
       if (!Number.isFinite(obsMs)) continue;
       const sourceMs = Date.parse(obs.sourceTimestamp ?? obs.ts);
@@ -84,6 +108,10 @@ export class Tracker {
           ? Math.max(0, receivedAtMs - sourceMs)
           : Math.max(0, receivedAtMs - obsMs));
       if (options.sourceTimeMode === 'wall' && ageMs > options.lifecycle.maxPositionAgeMs) {
+        this.deps.metrics?.observationsRejected.inc({
+          source,
+          reason: 'stale_observation',
+        });
         logger.debug('dropping stale provider observation', {
           icao24: obs.icao24,
           ts: obs.ts,
@@ -101,16 +129,43 @@ export class Tracker {
           : options.sourceTimeMode === 'wall'
             ? receivedAtMs
             : obsMs;
-      const { events, next, accepted } = detectStep(prev, obs, flightId, {
+      const { events, next, accepted, rejectionReason } = detectStep(prev, obs, flightId, {
         config: options.detector,
-        source: obs.source ?? options.sourceLabel,
+        source,
         acceptedAt: new Date(acceptedAtMs).toISOString(),
         ageMs: options.sourceTimeMode === 'wall' ? ageMs : 0,
       });
-      if (!accepted) continue;
+      if (!accepted) {
+        const reason = rejectionReason ?? 'out_of_order';
+        this.deps.metrics?.observationsRejected.inc({ source, reason });
+        logger.debug('dropping provider observation', {
+          icao24: obs.icao24,
+          source,
+          reason,
+          ts: obs.ts,
+          previous_ts: prev?.lastTs,
+        });
+        if (prev) {
+          await store.set(
+            recordRejectedObservation(
+              prev,
+              obs,
+              reason,
+              new Date(acceptedAtMs).toISOString(),
+              ageMs,
+              source,
+            ),
+          );
+        }
+        continue;
+      }
+      this.deps.metrics?.observationsAccepted.inc({ source });
       this.observedMs = Math.max(this.observedMs, obsMs);
       await store.set(next);
       await this.emitAll(events, flightId);
+      if (events.some((event) => event.type === 'FlightRecovered')) {
+        this.deps.metrics?.recoveredFlights.inc();
+      }
     }
   }
 
@@ -134,6 +189,7 @@ export class Tracker {
       const reason = state.landingEmitted ? 'landed' : 'timeout';
       const endedAt = new Date(reference).toISOString();
       await this.emitAll([endFlightEvent(state, reason, endedAt)], state.flightId);
+      this.deps.metrics?.endedFlights.inc({ reason });
       await store.delete(state.flightId);
       await registry.release(state.icao24);
     }
@@ -148,13 +204,24 @@ export class Tracker {
     if (nextQuality === currentFlightQuality(state)) return;
 
     const at = new Date(referenceMs).toISOString();
+    const lifecycleSeq = (state.lifecycleSeq ?? 0) + 1;
     const next: FlightState & { qualityState: FlightQualityState } = {
       ...state,
       qualityState: nextQuality,
       lastQualityTransitionAt: at,
-      lifecycleSeq: (state.lifecycleSeq ?? 0) + 1,
+      lifecycleSeq,
     };
+    next.transitionHistory = appendTransitionHistory(state, {
+      at,
+      from: currentFlightQuality(state),
+      to: nextQuality,
+      ageMs,
+      sequence: lifecycleSeq,
+    });
     await this.deps.store.set(next);
+    if (nextQuality === 'stale') this.deps.metrics?.staleFlights.inc();
+    else if (nextQuality === 'signal_lost') this.deps.metrics?.signalLostFlights.inc();
+    else if (nextQuality === 'live') this.deps.metrics?.recoveredFlights.inc();
     await this.emitAll(
       [flightLifecycleEvent(lifecycleEventType(nextQuality), next, at, ageMs)],
       state.flightId,
@@ -228,6 +295,30 @@ export class Tracker {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function recordRejectedObservation(
+  state: FlightState,
+  obs: Position,
+  reason: ObservationRejectionReason,
+  rejectedAt: string,
+  ageMs: number,
+  source: string,
+): FlightState {
+  const entry = {
+    at: rejectedAt,
+    reason,
+    source,
+    sourceTimestamp: obs.sourceTimestamp ?? obs.ts,
+    receivedAt: obs.receivedAt ?? rejectedAt,
+    ageMs,
+  };
+  return {
+    ...state,
+    lastRejectedAt: rejectedAt,
+    rejectionReason: reason,
+    rejectionHistory: [...(state.rejectionHistory ?? []), entry].slice(-12),
+  };
 }
 
 function lifecycleEventType(

@@ -42,7 +42,13 @@ export class WsGateway {
     hubOptions: Partial<HubOptions> = {},
   ) {
     this.hub = new WsHub(
-      { redis: ctx.redis, prefix: ctx.redisPrefix, clock: ctx.clock, logger: ctx.logger },
+      {
+        redis: ctx.redis,
+        prefix: ctx.redisPrefix,
+        clock: ctx.clock,
+        logger: ctx.logger,
+        metrics: ctx.metrics,
+      },
       hubOptions,
     );
     this.fanout = new RedisFanout(ctx.redis, ctx.redisPrefix, this.hub, ctx.logger);
@@ -91,6 +97,7 @@ export class WsGateway {
         const msg = parseClientMessage(typeof raw === 'string' ? raw : raw.toString());
         if (!msg) {
           ws.data.socket?.send({ t: 'error', code: 'BAD_MESSAGE', message: 'unparseable' });
+          this.ctx.metrics?.wsMessagesSent.inc({ type: 'error', channel: 'control' });
           return;
         }
         void this.hub.handleMessage(ws.data.connId, msg);

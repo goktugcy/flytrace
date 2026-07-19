@@ -195,6 +195,12 @@ Each event: **payload · producer · consumers · transport · retry strategy ·
   (position → takeoff → notificationRequested → notificationSent).
 - Metrics: events/sec by type, consumer lag (stream), DLQ depth, retry counts, end-to-end
   latency histograms (event→WS, event→notification).
+- Tracker hot state carries per-flight debug fields for production diagnosis: selected provider,
+  candidate providers, provider candidate scores, source/receive timestamps, last accept/reject
+  times, rejection reason, quality transition history, sequence, and the last WS publish marker.
+- Standard tracker rejection reasons include `stale_observation`, `duplicate_timestamp`,
+  `out_of_order`, `invalid_coordinates`, `impossible_jump`, `provider_timeout`,
+  `missing_position`, `invalid_speed`, and `lower_quality_candidate`.
 - Dashboards + alerts in [14](./14-infrastructure.md).
 
 ## 7.9 Local/testing affordances

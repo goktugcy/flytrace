@@ -109,6 +109,7 @@ email verification, password reset. (Shapes owned by Better Auth; see [15](./15-
 | POST | `/api/v1/admin/queues/:name/dlq/retry` | replay DLQ items |
 | GET | `/api/v1/admin/cache` | cache stats |
 | GET | `/api/v1/admin/flights` | live flight monitoring |
+| GET | `/api/v1/admin/debug/flights/:icao24` | active hot-state debug for one aircraft |
 | GET | `/api/v1/admin/logs?level=&module=&correlationId=` | log search |
 | GET | `/api/v1/admin/stats` | platform statistics time-series |
 | GET | `/api/v1/admin/audit?entity=&actor=` | audit log |

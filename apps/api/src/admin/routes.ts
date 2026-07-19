@@ -4,6 +4,7 @@ import { type Context, Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { requireRole } from '../auth/routes.ts';
 import type { AppContext } from '../context.ts';
+import { readFlightDebug } from './flight-debug.ts';
 
 /**
  * Admin console API (docs/11 §11.6, docs/03 §3.4.7). Role-gated. Reads the
@@ -61,6 +62,10 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
       from flights order by last_seen_at desc nulls last limit 50
     `)) as unknown as unknown[];
     return ok(c, { flights: rows });
+  });
+
+  app.get('/admin/debug/flights/:icao24', async (c) => {
+    return ok(c, { flight: await readFlightDebug(ctx, c.req.param('icao24')) });
   });
 
   const requireQueue = () => {

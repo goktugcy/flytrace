@@ -10,6 +10,7 @@ import { RedisEventBus } from './bus/redis-bus.ts';
 import type { TrackerConfig, TrackerProviderName } from './config.ts';
 import { DEFAULT_DETECTOR_CONFIG } from './domain/flight-state.ts';
 import { Tracker, type TrackerOptions } from './engine/tracker.ts';
+import { type TrackerMetrics, createTrackerMetrics } from './metrics.ts';
 import { AdsbPositionSource } from './source/adsb-source.ts';
 import { CompositePositionSource } from './source/composite-source.ts';
 import { FixturePositionSource } from './source/fixture-source.ts';
@@ -21,6 +22,7 @@ export interface TrackerContext {
   config: TrackerConfig;
   logger: Logger;
   clock: Clock;
+  metrics: TrackerMetrics;
   tracker: Tracker;
   bus: RedisEventBus;
   close: () => Promise<void>;
@@ -32,6 +34,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     base: { app: 'tracker', env: config.APP_ENV },
   });
   const clock = systemClock;
+  const metrics = createTrackerMetrics();
   const prefix = redisKeyPrefix(config.APP_ENV);
 
   const redis = new Redis(config.REDIS_URL, {
@@ -45,7 +48,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
   const lock = new RedisLock(redis, prefix, clock);
   const bus = new RedisEventBus(redis, prefix);
 
-  const source = await buildSource(config, logger, clock);
+  const source = await buildSource(config, logger, clock, metrics);
 
   const options: TrackerOptions = {
     detector: DEFAULT_DETECTOR_CONFIG,
@@ -63,12 +66,23 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     lockTtlMs: config.TRACKER_LOCK_TTL_MS,
   };
 
-  const tracker = new Tracker({ source, store, registry, lock, bus, clock, logger, options });
+  const tracker = new Tracker({
+    source,
+    store,
+    registry,
+    lock,
+    bus,
+    clock,
+    logger,
+    options,
+    metrics,
+  });
 
   return {
     config,
     logger,
     clock,
+    metrics,
     tracker,
     bus,
     close: async () => {
@@ -83,6 +97,7 @@ async function buildSource(
   config: TrackerConfig,
   logger: Logger,
   clock: Clock,
+  metrics: TrackerMetrics,
 ): Promise<PositionSource> {
   // Explicit fixture flag wins (offline/demo), regardless of TRACKER_SOURCE.
   if (config.TRACKER_USE_FIXTURE || config.TRACKER_SOURCE === 'fixture') {
@@ -104,6 +119,7 @@ async function buildSource(
       switchMargin: config.TRACKER_PROVIDER_SWITCH_MARGIN,
       maxJumpSpeedKt: config.TRACKER_PROVIDER_MAX_JUMP_SPEED_KT,
       providerPriority: config.TRACKER_PROVIDER_PRIORITY,
+      metrics,
     });
   }
   return buildLiveSource(config.TRACKER_SOURCE, config, logger, clock);

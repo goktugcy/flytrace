@@ -41,6 +41,9 @@ enrich.
   not fail the whole tracker tick. Observations are deduped by ICAO24, scored by freshness,
   completeness, plausibility, provider priority, and source type, then a hysteresis margin keeps
   small score differences from flipping the selected provider every poll.
+- **Composite debug metadata:** selected observations include `candidateProviders` and
+  `providerCandidates` so an admin can see which provider won, which candidates were lower
+  quality, and which were rejected as stale, invalid, or physically implausible.
 - **Jump guard:** when switching providers, the selected position must remain physically
   plausible versus the previously accepted provider position. The default
   `TRACKER_PROVIDER_MAX_JUMP_SPEED_KT=1200` is intentionally high enough for aircraft but still

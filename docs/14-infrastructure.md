@@ -109,6 +109,8 @@ Branch protection: all gates green + review required to merge to `main`.
 
 - **Logs:** structured JSON → stdout → Loki (or hosted). Correlation-id + trace-id on every line.
 - **Metrics:** Prometheus scrape of `/metrics` per app (RED metrics, queue depth, WS conns,
+  WS messages/snapshot sizes/reconnects, tracker provider requests/failures/latency,
+  observation accept/reject counts, stale/signal-lost/recovered/ended flight counters,
   event latency histograms, provider health, cache hit-rate) → Grafana dashboards (per subsystem:
   API, tracker, queues, providers, WS, notifications).
 - **Tracing:** OpenTelemetry across the causal chain (OpenSky poll → event → WS/notification).

@@ -150,5 +150,9 @@ A binary/compressed encoding (MessagePack + per-message-deflate) is an optimizat
 
 - Metrics: active connections/node, subscribe/unsubscribe rates, messages/sec by channel,
   fan-out lag (produce→client), reconnects, resume-replay counts, dropped-old deltas.
+- The API metrics registry currently exposes active connections, sent WS messages by type/channel,
+  reconnect subscriptions with cursors, and snapshot item counts. When a bus event is delivered to
+  at least one socket, the hub marks `websocketPublishedAt` in the flight hot state for admin
+  debugging.
 - Each socket carries a `connectionId` + `correlationId` for tracing an event from OpenSky poll
   → bus → WS node → client (see [07](./07-event-system.md) §7.8).

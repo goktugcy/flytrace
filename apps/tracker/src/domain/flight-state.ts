@@ -4,8 +4,23 @@
  * of truth. Kept deliberately small and JSON-serializable (Redis hash value).
  */
 
+import type {
+  ObservationRejectionDebug,
+  ObservationRejectionReason,
+  ProviderCandidateDebug,
+} from './observation-debug.ts';
+
 export type VerticalMachineState = 'climb' | 'level' | 'descent';
 export type FlightQualityState = 'live' | 'delayed' | 'stale' | 'signal_lost';
+
+export interface FlightTransitionDebug {
+  at: string;
+  from?: FlightQualityState;
+  to: FlightQualityState | 'ended';
+  ageMs?: number;
+  reason?: string;
+  sequence: number;
+}
 
 export interface FlightState {
   flightId: string;
@@ -34,14 +49,23 @@ export interface FlightState {
   lastQualityTransitionAt?: string;
   /** Monotonic index of quality transitions (idempotency keys). */
   lifecycleSeq?: number;
+  /** Monotonic accepted-position sequence for debugging/reconciliation. */
+  sequence?: number;
   /** Position provider selected for the latest accepted sample. */
   selectedProvider?: string;
+  candidateProviders?: string[];
+  providerCandidates?: ProviderCandidateDebug[];
   sourceTimestamp?: string;
   receivedAt?: string;
   ageMs?: number;
+  lastRejectedAt?: string;
+  rejectionReason?: ObservationRejectionReason;
+  rejectionHistory?: ObservationRejectionDebug[];
   qualityScore?: number;
   positionSource?: string;
   isMlat?: boolean;
+  websocketPublishedAt?: string;
+  transitionHistory?: FlightTransitionDebug[];
 
   // ground/air phase (hysteresis-confirmed)
   airborne: boolean;

@@ -82,6 +82,7 @@ describe('detectStep — invariants', () => {
     const first = detectStep(null, pos({ ts: '2023-11-14T22:13:20.000Z' }), FLIGHT_ID);
     const stale = detectStep(first.next, pos({ ts: '2023-11-14T22:13:10.000Z' }), FLIGHT_ID);
     expect(stale.accepted).toBe(false);
+    expect(stale.rejectionReason).toBe('out_of_order');
     expect(stale.events).toHaveLength(0);
     expect(stale.next).toBe(first.next);
   });
@@ -90,6 +91,7 @@ describe('detectStep — invariants', () => {
     const first = detectStep(null, pos({ ts: '2023-11-14T22:13:20.000Z' }), FLIGHT_ID);
     const duplicate = detectStep(first.next, pos({ lat: 99, ts: first.next.lastTs }), FLIGHT_ID);
     expect(duplicate.accepted).toBe(false);
+    expect(duplicate.rejectionReason).toBe('duplicate_timestamp');
     expect(duplicate.events).toHaveLength(0);
     expect(duplicate.next).toBe(first.next);
   });
