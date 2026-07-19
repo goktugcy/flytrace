@@ -88,3 +88,32 @@ describe('GET /airspace/current', () => {
     expect(body.data.name).toBeNull();
   });
 });
+
+describe('GET /airspace/viewport', () => {
+  test('400 when bbox is missing/invalid', async () => {
+    const res = await makeApp().request('/api/v1/airspace/viewport?bbox=28,40,30');
+    expect(res.status).toBe(400);
+  });
+
+  test('200 returns GeoJSON features for the requested bbox', async () => {
+    const res = await makeApp().request(
+      '/api/v1/airspace/viewport?bbox=28,40,30,42&types=CTR,TMA&limit=10',
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: {
+        type: 'FeatureCollection';
+        count: number;
+        truncated: boolean;
+        features: { geometry: { type: string }; properties: { id: string; type: string } }[];
+      };
+    };
+    expect(body.data.type).toBe('FeatureCollection');
+    expect(body.data.truncated).toBe(false);
+    expect(body.data.features.map((feature) => feature.properties.id).sort()).toEqual([
+      'mock-ist-ctr',
+      'mock-ist-tma',
+    ]);
+    expect(body.data.features.every((feature) => feature.geometry.type === 'Polygon')).toBe(true);
+  });
+});

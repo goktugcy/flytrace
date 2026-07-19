@@ -9,7 +9,7 @@ import { ErrorState } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
-import { LocateFixed, Plane, X } from 'lucide-react';
+import { Layers, LocateFixed, Plane, RadioTower, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { type RenderedFlight, stepRenderedFlight } from '../lib/flight-motion';
@@ -47,6 +47,8 @@ interface SelInfo {
   flightId: string;
   icao24: string;
   callsign: string;
+  lat: number;
+  lon: number;
   altFt: number | null;
   gsKt: number | null;
   heading: number | null;
@@ -59,12 +61,24 @@ function toSel(f: FlightSample): SelInfo {
     flightId: f.flightId,
     icao24: f.icao24,
     callsign: f.callsign ?? f.icao24,
+    lat: f.lat,
+    lon: f.lon,
     altFt: f.altFt,
     gsKt: f.gsKt,
     heading: f.heading,
     onGround: f.onGround,
     category: flightCategory(f),
   };
+}
+
+interface AirspaceSummary {
+  id: string;
+  name: string;
+  type: string;
+  class: string | null;
+  frequency: string | null;
+  lowerFt: number | null;
+  upperFt: number | null;
 }
 
 /** Top-down airliner silhouette (points north) as an SDF image for tinting + rotation. */
@@ -213,6 +227,46 @@ const ICON_SIZE: maplibregl.ExpressionSpecification = [
   ['*', 0.95, ['get', 'sizeMul']],
 ];
 
+const AIRSPACE_MIN_ZOOM = 5.2;
+const AIRSPACE_TYPES_QUERY = 'CTR,TMA,CTA,RESTRICTED,DANGER,PROHIBITED';
+const EMPTY_FEATURES: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+
+const AIRSPACE_FILL_COLOR: maplibregl.ExpressionSpecification = [
+  'match',
+  ['get', 'type'],
+  'CTR',
+  '#38bdf8',
+  'TMA',
+  '#a78bfa',
+  'CTA',
+  '#22c55e',
+  'RESTRICTED',
+  '#f97316',
+  'DANGER',
+  '#ef4444',
+  'PROHIBITED',
+  '#dc2626',
+  '#64748b',
+];
+
+const AIRSPACE_LINE_COLOR: maplibregl.ExpressionSpecification = [
+  'match',
+  ['get', 'type'],
+  'CTR',
+  '#7dd3fc',
+  'TMA',
+  '#c4b5fd',
+  'CTA',
+  '#86efac',
+  'RESTRICTED',
+  '#fdba74',
+  'DANGER',
+  '#fca5a5',
+  'PROHIBITED',
+  '#fecaca',
+  '#94a3b8',
+];
+
 interface Airport {
   iata: string;
   name: string;
@@ -281,10 +335,22 @@ export function LiveMap() {
   const [sel, setSel] = useState<SelInfo | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [route, setRoute] = useState<RouteInfo | null>(null);
+  const [airspaceEnabled, setAirspaceEnabled] = useState(false);
+  const [airspaceCount, setAirspaceCount] = useState(0);
+  const [airspaceStatus, setAirspaceStatus] = useState<
+    'idle' | 'loading' | 'ready' | 'zoom' | 'error'
+  >('idle');
+  const [selectedAirspaces, setSelectedAirspaces] = useState<AirspaceSummary[]>([]);
+  const [selectedAirspaceStatus, setSelectedAirspaceStatus] = useState<
+    'idle' | 'loading' | 'ready' | 'error'
+  >('idle');
   const [band, setBand] = useState<Band>('all');
   const [airline, setAirline] = useState('');
   const filterRef = useRef<{ band: Band; airline: string }>({ band: 'all', airline: '' });
   const applyFilterRef = useRef<() => void>(() => {});
+  const airspaceEnabledRef = useRef(false);
+  const applyAirspaceRef = useRef<() => void>(() => {});
+  const selectedAirspaceRef = useRef<SelInfo | null>(null);
   const t = useT();
 
   const changeBand = (b: Band) => {
@@ -296,6 +362,12 @@ export function LiveMap() {
     setAirline(v);
     filterRef.current.airline = v;
     applyFilterRef.current();
+  };
+  const toggleAirspace = () => {
+    const next = !airspaceEnabledRef.current;
+    airspaceEnabledRef.current = next;
+    setAirspaceEnabled(next);
+    applyAirspaceRef.current();
   };
 
   useEffect(() => {
@@ -338,9 +410,20 @@ export function LiveMap() {
     let raf = 0;
     let started = false;
     let remoteTileOk = false;
-    const OURS = new Set(['world', 'grid', 'flights', 'trail', 'selected', 'route', 'route-ends']);
+    const OURS = new Set([
+      'world',
+      'grid',
+      'flights',
+      'trail',
+      'selected',
+      'route',
+      'route-ends',
+      'airspaces',
+    ]);
     let selectedId: string | null = null;
     let pulse = 0;
+    let airspaceSeq = 0;
+    let airspaceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -407,6 +490,72 @@ export function LiveMap() {
     const sendViewport = () => {
       const b = map.getBounds();
       client.setViewport([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    };
+
+    const setAirspaceMapData = (data: GeoJSON.FeatureCollection) => {
+      const src = map.getSource('airspaces') as maplibregl.GeoJSONSource | undefined;
+      if (src) src.setData(data);
+    };
+
+    const setAirspaceVisibility = () => {
+      const visibility = airspaceEnabledRef.current ? 'visible' : 'none';
+      for (const layer of ['airspace-fill', 'airspace-line', 'airspace-label']) {
+        if (map.getLayer(layer)) map.setLayoutProperty(layer, 'visibility', visibility);
+      }
+    };
+
+    const loadAirspaces = async () => {
+      const seq = ++airspaceSeq;
+      if (!airspaceEnabledRef.current) {
+        setAirspaceMapData(EMPTY_FEATURES);
+        setAirspaceCount(0);
+        setAirspaceStatus('idle');
+        return;
+      }
+      if (map.getZoom() < AIRSPACE_MIN_ZOOM) {
+        setAirspaceMapData(EMPTY_FEATURES);
+        setAirspaceCount(0);
+        setAirspaceStatus('zoom');
+        return;
+      }
+      try {
+        setAirspaceStatus('loading');
+        const b = map.getBounds();
+        const west = Math.max(-180, b.getWest());
+        const south = Math.max(-90, b.getSouth());
+        const east = Math.min(180, b.getEast());
+        const north = Math.min(90, b.getNorth());
+        const params = new URLSearchParams({
+          bbox: [west, south, east, north].map((v) => v.toFixed(5)).join(','),
+          types: AIRSPACE_TYPES_QUERY,
+          limit: '700',
+        });
+        const res = await fetch(`${API_BASE}/api/v1/airspace/viewport?${params.toString()}`);
+        if (!res.ok) throw new Error(`airspace ${res.status}`);
+        const data = (
+          (await res.json()) as {
+            data: GeoJSON.FeatureCollection & { count?: number };
+          }
+        ).data;
+        if (seq !== airspaceSeq) return;
+        setAirspaceMapData(data);
+        setAirspaceCount(data.count ?? data.features.length);
+        setAirspaceStatus('ready');
+      } catch {
+        if (seq !== airspaceSeq) return;
+        setAirspaceMapData(EMPTY_FEATURES);
+        setAirspaceCount(0);
+        setAirspaceStatus('error');
+      }
+    };
+
+    const scheduleAirspaceLoad = () => {
+      if (airspaceTimer) clearTimeout(airspaceTimer);
+      airspaceTimer = setTimeout(() => void loadAirspaces(), 180);
+    };
+    applyAirspaceRef.current = () => {
+      setAirspaceVisibility();
+      scheduleAirspaceLoad();
     };
 
     const loadTrail = async (flightId: string) => {
@@ -603,6 +752,50 @@ export function LiveMap() {
         map.addImage('helo', makeHeloImage(64), { sdf: true, pixelRatio: 2 });
       }
 
+      if (!map.getSource('airspaces')) {
+        map.addSource('airspaces', { type: 'geojson', data: EMPTY_FEATURES });
+        map.addLayer({
+          id: 'airspace-fill',
+          type: 'fill',
+          source: 'airspaces',
+          layout: { visibility: airspaceEnabledRef.current ? 'visible' : 'none' },
+          paint: {
+            'fill-color': AIRSPACE_FILL_COLOR,
+            'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.05, 8, 0.13, 11, 0.2],
+          },
+        });
+        map.addLayer({
+          id: 'airspace-line',
+          type: 'line',
+          source: 'airspaces',
+          layout: { visibility: airspaceEnabledRef.current ? 'visible' : 'none' },
+          paint: {
+            'line-color': AIRSPACE_LINE_COLOR,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.7, 9, 1.4],
+            'line-opacity': 0.9,
+          },
+        });
+        map.addLayer({
+          id: 'airspace-label',
+          type: 'symbol',
+          source: 'airspaces',
+          minzoom: 7,
+          layout: {
+            visibility: airspaceEnabledRef.current ? 'visible' : 'none',
+            'text-field': ['concat', ['get', 'name'], '\n', ['get', 'type']],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 7, 10, 10, 12],
+            'text-allow-overlap': false,
+            'text-padding': 8,
+          },
+          paint: {
+            'text-color': '#dbeafe',
+            'text-halo-color': '#050912',
+            'text-halo-width': 1.2,
+            'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 0.86],
+          },
+        });
+      }
+
       // Planned route (origin → destination great circle), dashed + muted.
       if (!map.getSource('route')) {
         map.addSource('route', {
@@ -736,7 +929,11 @@ export function LiveMap() {
     };
 
     map.on('style.load', () => {
-      void ensureLayers().then(startFeed);
+      void ensureLayers().then(() => {
+        setAirspaceVisibility();
+        scheduleAirspaceLoad();
+        startFeed();
+      });
     });
 
     // Interaction handlers — attached once; bound by layer id they survive setStyle.
@@ -773,7 +970,10 @@ export function LiveMap() {
       }
     }, 4500);
 
-    map.on('moveend', sendViewport);
+    map.on('moveend', () => {
+      sendViewport();
+      scheduleAirspaceLoad();
+    });
     const unsub = client.store.subscribe(() => {
       setCount(client.store.size);
       if (selectedId) {
@@ -785,6 +985,7 @@ export function LiveMap() {
 
     return () => {
       clearTimeout(fallbackTimer);
+      if (airspaceTimer) clearTimeout(airspaceTimer);
       cancelAnimationFrame(raf);
       ro.disconnect();
       unsub();
@@ -816,6 +1017,52 @@ export function LiveMap() {
       cancelled = true;
     };
   }, [sel?.icao24]);
+
+  useEffect(() => {
+    selectedAirspaceRef.current = sel;
+  }, [sel]);
+
+  const selectedAirspaceKey = sel
+    ? [
+        sel.flightId,
+        sel.lat.toFixed(2),
+        sel.lon.toFixed(2),
+        sel.altFt != null ? Math.round(sel.altFt / 1000) : 'na',
+      ].join(':')
+    : '';
+
+  useEffect(() => {
+    const selected = selectedAirspaceRef.current;
+    if (!selectedAirspaceKey || !selected) {
+      setSelectedAirspaces([]);
+      setSelectedAirspaceStatus('idle');
+      return;
+    }
+    let cancelled = false;
+    setSelectedAirspaceStatus('loading');
+    const params = new URLSearchParams({
+      lat: String(selected.lat),
+      lon: String(selected.lon),
+      ...(selected.altFt != null ? { alt: String(selected.altFt) } : {}),
+    });
+    fetch(`${API_BASE}/api/v1/airspace/current?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled) return;
+        const matches = (body?.data?.matches as AirspaceSummary[] | undefined) ?? [];
+        setSelectedAirspaces(matches);
+        setSelectedAirspaceStatus('ready');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedAirspaces([]);
+          setSelectedAirspaceStatus('error');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAirspaceKey]);
 
   if (failed) {
     return (
@@ -883,6 +1130,29 @@ export function LiveMap() {
             placeholder={t('map.filter.airline')}
             className="h-8 w-40 rounded-md border border-border bg-card/85 px-2.5 text-xs shadow-soft-md backdrop-blur-md outline-none placeholder:text-muted-foreground focus-visible:border-ring"
           />
+          <button
+            type="button"
+            onClick={toggleAirspace}
+            aria-pressed={airspaceEnabled}
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
+              airspaceEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Layers className="size-3.5" />
+            {t('map.airspace')}
+            {airspaceEnabled && (
+              <span className="tabular-nums text-muted-foreground">
+                {airspaceStatus === 'loading'
+                  ? '...'
+                  : airspaceStatus === 'zoom'
+                    ? t('map.airspace.zoom')
+                    : airspaceStatus === 'error'
+                      ? t('map.airspace.error')
+                      : airspaceCount.toLocaleString()}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -960,6 +1230,12 @@ export function LiveMap() {
                 </div>
               )}
 
+              <AirspaceSummaryBlock
+                airspaces={selectedAirspaces}
+                status={selectedAirspaceStatus}
+                label={t('map.airspace')}
+              />
+
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <Metric
                   label={t('map.altitude')}
@@ -995,6 +1271,63 @@ export function LiveMap() {
 
 function fmtFt(ft: number | null): string {
   return ft != null ? `${Math.round(ft).toLocaleString()} ft` : '—';
+}
+
+function fmtBand(a: AirspaceSummary): string {
+  const lower = a.lowerFt == null || a.lowerFt <= 0 ? 'GND' : `${a.lowerFt.toLocaleString()} ft`;
+  const upper = a.upperFt == null ? 'UNL' : `${a.upperFt.toLocaleString()} ft`;
+  return `${lower}-${upper}`;
+}
+
+function AirspaceSummaryBlock({
+  airspaces,
+  status,
+  label,
+}: {
+  airspaces: AirspaceSummary[];
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  label: string;
+}) {
+  if (status === 'idle') return null;
+  const primary = airspaces[0];
+  return (
+    <div className="mt-3 rounded-md bg-muted/50 px-3 py-2">
+      <div className="flex items-start gap-2">
+        <RadioTower className="mt-0.5 size-3.5 shrink-0 text-accent-bright" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-medium uppercase text-muted-foreground">{label}</span>
+            {primary && (
+              <span className="text-[10px] text-muted-foreground">{fmtBand(primary)}</span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate text-sm font-medium">
+            {status === 'loading'
+              ? 'Loading...'
+              : status === 'error'
+                ? 'Unavailable'
+                : primary
+                  ? primary.name
+                  : 'Outside controlled airspace'}
+          </div>
+          {primary && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {airspaces.slice(0, 3).map((airspace) => (
+                <span
+                  key={airspace.id}
+                  className="rounded bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                >
+                  {airspace.type}
+                  {airspace.class ? ` ${airspace.class}` : ''}
+                  {airspace.frequency ? ` · ${airspace.frequency}` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

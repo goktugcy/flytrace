@@ -87,6 +87,11 @@ export class AirspaceService {
     return matches.filter((a) => withinBand(altFt, a.lowerFt, a.upperFt));
   }
 
+  /** Loaded airspaces, used by read-only viewport APIs for non-DB providers. */
+  allAirspaces(): Airspace[] {
+    return this.provider.allAirspaces();
+  }
+
   /**
    * Compute the airspace-entry transition for a position given the set of ids
    * the flight was already inside. Pure w.r.t. the loaded dataset.

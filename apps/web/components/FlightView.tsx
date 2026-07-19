@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
 import type { FlightDetail } from '@flytrace/shared';
-import { ArrowLeft, Bell, BellRing, Check, Clock } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, Check, Clock, RadioTower } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
@@ -20,6 +20,16 @@ type Live = NonNullable<FlightDetail['live']>;
 interface TimelineEntry {
   type: string;
   occurredAt: string;
+}
+
+interface AirspaceSummary {
+  id: string;
+  name: string;
+  type: string;
+  class: string | null;
+  frequency: string | null;
+  lowerFt: number | null;
+  upperFt: number | null;
 }
 
 const EVENT_LABEL: Record<string, string> = {
@@ -49,6 +59,10 @@ export function FlightView({ flightId }: { flightId: string }) {
   const [detail, setDetail] = useState<FlightDetail | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const [airspaces, setAirspaces] = useState<AirspaceSummary[]>([]);
+  const [airspaceState, setAirspaceState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
   const [error, setError] = useState<string | null>(null);
   const [watchState, setWatchState] = useState<'idle' | 'working' | 'watching' | 'error'>('idle');
   const [watchMsg, setWatchMsg] = useState<string>('');
@@ -104,6 +118,47 @@ export function FlightView({ flightId }: { flightId: string }) {
       client.close();
     };
   }, [flightId]);
+
+  const airspaceKey =
+    live?.lat != null && live.lon != null
+      ? [
+          live.lat.toFixed(2),
+          live.lon.toFixed(2),
+          live.altitudeFt != null ? Math.round(live.altitudeFt / 1000) : 'na',
+        ].join(':')
+      : '';
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: airspaceKey intentionally quantizes live movement
+  useEffect(() => {
+    if (!live || live.lat == null || live.lon == null) {
+      setAirspaces([]);
+      setAirspaceState('idle');
+      return;
+    }
+    let cancelled = false;
+    setAirspaceState('loading');
+    const params = new URLSearchParams({
+      lat: String(live.lat),
+      lon: String(live.lon),
+      ...(live.altitudeFt != null ? { alt: String(live.altitudeFt) } : {}),
+    });
+    fetch(`${API_BASE}/api/v1/airspace/current?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled) return;
+        setAirspaces((body?.data?.matches as AirspaceSummary[] | undefined) ?? []);
+        setAirspaceState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAirspaces([]);
+          setAirspaceState('error');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [airspaceKey]);
 
   async function onWatch() {
     setWatchState('working');
@@ -210,32 +265,47 @@ export function FlightView({ flightId }: { flightId: string }) {
           </CardHeader>
           <CardContent>
             {live ? (
-              <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3">
-                <Metric
-                  label="Altitude"
-                  value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
-                />
-                <Metric
-                  label="Ground speed"
-                  value={live.groundSpeedKt != null ? `${Math.round(live.groundSpeedKt)} kt` : '—'}
-                />
-                <Metric
-                  label="Heading"
-                  value={live.headingDeg != null ? `${Math.round(live.headingDeg)}°` : '—'}
-                />
-                <Metric
-                  label="Vertical"
-                  value={live.verticalRateFpm != null ? `${live.verticalRateFpm} fpm` : '—'}
-                />
-                <Metric
-                  label="Position"
-                  value={
-                    live.lat != null && live.lon != null
-                      ? `${live.lat.toFixed(2)}, ${live.lon.toFixed(2)}`
-                      : '—'
-                  }
-                />
-                <Metric label="On ground" value={live.onGround ? 'Yes' : 'No'} />
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3">
+                  <Metric
+                    label="Altitude"
+                    value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
+                  />
+                  <Metric
+                    label="Ground speed"
+                    value={
+                      live.groundSpeedKt != null ? `${Math.round(live.groundSpeedKt)} kt` : '—'
+                    }
+                  />
+                  <Metric
+                    label="Heading"
+                    value={live.headingDeg != null ? headingLabel(live.headingDeg) : '—'}
+                  />
+                  <Metric
+                    label="Vertical"
+                    value={
+                      live.verticalRateFpm != null
+                        ? `${live.verticalRateFpm.toLocaleString()} fpm`
+                        : '—'
+                    }
+                  />
+                  <Metric
+                    label="Trend"
+                    value={verticalTrend(live.verticalRateFpm, live.onGround)}
+                  />
+                  <Metric label="Signal age" value={signalAge(live.ts)} />
+                  <Metric
+                    label="Position"
+                    value={
+                      live.lat != null && live.lon != null
+                        ? `${live.lat.toFixed(4)}, ${live.lon.toFixed(4)}`
+                        : '—'
+                    }
+                  />
+                  <Metric label="On ground" value={live.onGround ? 'Yes' : 'No'} />
+                  <Metric label="Updated" value={new Date(live.ts).toLocaleTimeString()} />
+                </div>
+                <AirspacePanel airspaces={airspaces} state={airspaceState} />
               </div>
             ) : (
               <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
@@ -296,6 +366,84 @@ function BackLink() {
       <ArrowLeft className="size-4" />
       Live map
     </Link>
+  );
+}
+
+function signalAge(ts: string): string {
+  const ageSec = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
+  if (!Number.isFinite(ageSec)) return '—';
+  if (ageSec < 60) return `${ageSec}s`;
+  const min = Math.round(ageSec / 60);
+  return `${min}m`;
+}
+
+function headingLabel(deg: number): string {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % dirs.length;
+  return `${Math.round(deg)}° ${dirs[idx]}`;
+}
+
+function verticalTrend(vr: number | null, onGround: boolean): string {
+  if (onGround) return 'Ground';
+  if (vr == null) return '—';
+  if (vr > 300) return 'Climbing';
+  if (vr < -300) return 'Descending';
+  return 'Level';
+}
+
+function airspaceBand(a: AirspaceSummary): string {
+  const lower = a.lowerFt == null || a.lowerFt <= 0 ? 'GND' : `${a.lowerFt.toLocaleString()} ft`;
+  const upper = a.upperFt == null ? 'UNL' : `${a.upperFt.toLocaleString()} ft`;
+  return `${lower}-${upper}`;
+}
+
+function AirspacePanel({
+  airspaces,
+  state,
+}: {
+  airspaces: AirspaceSummary[];
+  state: 'idle' | 'loading' | 'ready' | 'error';
+}) {
+  const primary = airspaces[0];
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <div className="flex items-start gap-2">
+        <RadioTower className="mt-0.5 size-4 shrink-0 text-accent-bright" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium uppercase text-muted-foreground">Airspace</span>
+            {primary && (
+              <span className="text-xs text-muted-foreground">{airspaceBand(primary)}</span>
+            )}
+          </div>
+          <div className="mt-1 truncate font-medium">
+            {state === 'loading'
+              ? 'Loading...'
+              : state === 'error'
+                ? 'Unavailable'
+                : primary
+                  ? primary.name
+                  : state === 'ready'
+                    ? 'Outside controlled airspace'
+                    : '—'}
+          </div>
+          {primary && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {airspaces.slice(0, 4).map((airspace) => (
+                <span
+                  key={airspace.id}
+                  className="rounded bg-background px-2 py-1 text-xs text-muted-foreground"
+                >
+                  {airspace.type}
+                  {airspace.class ? ` ${airspace.class}` : ''}
+                  {airspace.frequency ? ` · ${airspace.frequency}` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

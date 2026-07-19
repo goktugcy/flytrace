@@ -3,6 +3,8 @@ import {
   type AirspaceProvider,
   AirspaceService,
   BaseAirspaceProvider,
+  type Bbox2D,
+  geometryBbox,
   groupByType,
   selectAirspaceProvider,
 } from '@flytrace/airspace';
@@ -54,6 +56,75 @@ function summarize(a: Airspace) {
     lowerFt: a.lowerFt,
     upperFt: a.upperFt,
   };
+}
+
+interface AirspaceFeatureCollection {
+  type: 'FeatureCollection';
+  features: {
+    type: 'Feature';
+    id: string;
+    geometry: Airspace['polygon'];
+    properties: ReturnType<typeof summarize> & {
+      provider: string | null;
+      datasetVersion: string | null;
+    };
+  }[];
+}
+
+function toFeature(a: Airspace): AirspaceFeatureCollection['features'][number] {
+  return {
+    type: 'Feature',
+    id: a.id,
+    geometry: a.polygon,
+    properties: {
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      class: a.icaoClass,
+      frequency: a.frequency ?? null,
+      lowerFt: a.lowerFt,
+      upperFt: a.upperFt,
+      provider: a.provider ?? a.source ?? null,
+      datasetVersion: a.datasetVersion ?? null,
+    },
+  };
+}
+
+function intersectsBbox(a: Bbox2D, b: Bbox2D): boolean {
+  return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+function parseBbox(raw: string | undefined): Bbox2D {
+  const values = raw?.split(',').map(Number) ?? [];
+  if (values.length !== 4 || values.some((v) => !Number.isFinite(v))) {
+    throw new AppError('BAD_REQUEST', 'bbox must be "west,south,east,north"');
+  }
+  const [west, south, east, north] = values as Bbox2D;
+  if (west < -180 || west > 180 || east < -180 || east > 180) {
+    throw new AppError('BAD_REQUEST', 'bbox longitudes must be in [-180, 180]');
+  }
+  if (south < -90 || south > 90 || north < -90 || north > 90) {
+    throw new AppError('BAD_REQUEST', 'bbox latitudes must be in [-90, 90]');
+  }
+  if (west >= east || south >= north) {
+    throw new AppError('BAD_REQUEST', 'bbox must be ordered west < east and south < north');
+  }
+  return [west, south, east, north];
+}
+
+const AIRSPACE_TYPES = ['FIR', 'TMA', 'CTA', 'CTR', 'RESTRICTED', 'DANGER', 'PROHIBITED'] as const;
+
+function parseTypes(raw: string | undefined): Airspace['type'][] | undefined {
+  if (!raw) return undefined;
+  const types = raw
+    .split(',')
+    .map((type) => type.trim().toUpperCase())
+    .filter(Boolean);
+  const valid = new Set<string>(AIRSPACE_TYPES);
+  if (types.some((type) => !valid.has(type))) {
+    throw new AppError('BAD_REQUEST', `types must be one of ${AIRSPACE_TYPES.join(',')}`);
+  }
+  return [...new Set(types)] as Airspace['type'][];
 }
 
 type AirspaceRouteConfig =
@@ -166,8 +237,17 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
       throw new AppError('BAD_REQUEST', 'alt must be a number (feet)');
     }
 
-    const service = await getService();
-    const matches = service.currentAirspace(lat, lon, altFt);
+    const provider = config?.AIRSPACE_PROVIDER ?? process.env.AIRSPACE_PROVIDER;
+    const matches =
+      provider === 'db'
+        ? await createAirspaceReadRepo(ctx.db).findContainingPoint({
+            lat,
+            lon,
+            altFt,
+            provider:
+              config?.AIRSPACE_DB_SOURCE_PROVIDER ?? process.env.AIRSPACE_DB_SOURCE_PROVIDER,
+          })
+        : (await getService()).currentAirspace(lat, lon, altFt);
     const grouped = groupByType(matches);
 
     // Primary controlling class/frequency: prefer the smallest/most operationally
@@ -196,6 +276,39 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
       frequency: primary?.frequency ?? null,
       name: primary?.name ?? null,
       matches: matches.map(summarize),
+    });
+  });
+
+  app.get('/airspace/viewport', async (c) => {
+    const bbox = parseBbox(c.req.query('bbox'));
+    const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 500) || 500, 1), 1500);
+    const types = parseTypes(c.req.query('types'));
+    const provider = config?.AIRSPACE_PROVIDER ?? process.env.AIRSPACE_PROVIDER;
+
+    let airspaces: Airspace[];
+    if (provider === 'db' && ctx.db) {
+      airspaces = await createAirspaceReadRepo(ctx.db).listActiveInBbox({
+        bbox,
+        provider: config?.AIRSPACE_DB_SOURCE_PROVIDER ?? process.env.AIRSPACE_DB_SOURCE_PROVIDER,
+        types,
+        limit,
+      });
+    } else {
+      const service = await getService();
+      const wanted = types ? new Set(types) : null;
+      airspaces = service
+        .allAirspaces()
+        .filter((airspace) => !wanted || wanted.has(airspace.type))
+        .filter((airspace) => intersectsBbox(geometryBbox(airspace.polygon), bbox))
+        .slice(0, limit);
+    }
+
+    return ok(c, {
+      type: 'FeatureCollection',
+      features: airspaces.map(toFeature),
+      count: airspaces.length,
+      truncated: airspaces.length >= limit,
+      query: { bbox, limit, types: types ?? null },
     });
   });
 
