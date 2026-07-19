@@ -67,10 +67,13 @@ const position = (ts: string, lat: number) =>
       lat,
       lon: 29,
       altFt: 1000.6,
+      geoAltitudeFt: 1100.4,
       headingDeg: 90,
       gsKt: 100,
       vrateFpm: 640.2,
       onGround: false,
+      squawk: '7000',
+      source: 'adsb',
       ts,
     },
   });
@@ -147,8 +150,11 @@ describe('Persister', () => {
     expect(repo.positions).toHaveLength(2);
     expect(repo.positions[0]).toMatchObject({
       altitudeFt: 1001,
+      geoAltitudeFt: 1100,
       verticalRateFpm: 640,
       onGround: false,
+      squawk: '7000',
+      source: 'adsb',
     });
 
     const types = repo.events.map((e) => e.type);

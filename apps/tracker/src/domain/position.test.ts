@@ -44,6 +44,15 @@ describe('normalizeStateVector', () => {
     expect(p?.isMlat).toBe(true);
   });
 
+  test('keeps OpenSky geometric altitude and squawk when present', () => {
+    const enriched = [...base];
+    enriched[13] = 1200; // geo_altitude m
+    enriched[14] = '7000';
+    const p = normalizeStateVector(enriched);
+    expect(p?.geoAltitudeFt).toBe(3937);
+    expect(p?.squawk).toBe('7000');
+  });
+
   test('returns null when position is missing', () => {
     const noPos = [...base];
     noPos[5] = null; // lon
@@ -106,6 +115,8 @@ describe('normalizeAdsbResponse', () => {
             gs: 510.7,
             track: 145.13,
             baro_rate: -64,
+            alt_geom: 39125,
+            squawk: '2451',
             seen_pos: 2,
             mlat: ['lat', 'lon'],
           },
@@ -121,6 +132,8 @@ describe('normalizeAdsbResponse', () => {
     expect(p?.gsKt).toBe(510.7);
     expect(p?.headingDeg).toBe(145.13);
     expect(p?.vrateFpm).toBe(-64);
+    expect(p?.geoAltitudeFt).toBe(39125);
+    expect(p?.squawk).toBe('2451');
     expect(p?.onGround).toBe(false);
     expect(p?.ts).toBe(new Date(now - 2000).toISOString()); // seen_pos age applied
     expect(p?.positionSource).toBe('mlat');

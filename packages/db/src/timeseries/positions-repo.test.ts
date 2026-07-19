@@ -25,10 +25,13 @@ const sampleRow = {
   lat: 41.1,
   lon: 29.0,
   altitudeFt: 35000,
+  geoAltitudeFt: 35200,
   headingDeg: 90,
   groundSpeedKt: 450,
   verticalRateFpm: 0,
   onGround: false,
+  squawk: '7000',
+  source: 'opensky',
 };
 
 describe('PgPositionRepo', () => {

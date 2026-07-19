@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
 import type { FlightDetail } from '@flytrace/shared';
-import { ArrowLeft, Bell, BellRing, Check, Clock, RadioTower } from 'lucide-react';
+import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, RadioTower } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
@@ -17,9 +17,12 @@ const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
 type Live = NonNullable<FlightDetail['live']>;
+type StatusSnapshot = NonNullable<FlightDetail['statusSnapshot']>;
 interface TimelineEntry {
   type: string;
   occurredAt: string;
+  confidence?: number | null;
+  source?: string | null;
 }
 
 interface AirspaceSummary {
@@ -38,6 +41,11 @@ const EVENT_LABEL: Record<string, string> = {
   ClimbDetected: 'Climb',
   DescentDetected: 'Descent',
   FlightEnded: 'Flight ended',
+  ProviderUpdated: 'Provider update',
+  GateChanged: 'Gate change',
+  DelayDetected: 'Delay',
+  FlightCancelled: 'Cancelled',
+  ArrivedAtGate: 'Arrived',
   takeoff: 'Takeoff',
   landing: 'Landing',
   climb: 'Climb',
@@ -46,6 +54,12 @@ const EVENT_LABEL: Record<string, string> = {
   top_of_descent: 'Top of descent',
   flight_detected: 'Detected',
   flight_ended: 'Flight ended',
+  gate_change: 'Gate change',
+  delay: 'Delay',
+  cancelled: 'Cancelled',
+  arrived: 'Arrived',
+  entered_airspace: 'Airspace',
+  aircraft_changed: 'Aircraft',
 };
 
 function statusVariant(status: string): 'success' | 'warning' | 'destructive' | 'default' {
@@ -82,7 +96,14 @@ export function FlightView({ flightId }: { flightId: string }) {
         if (cancelled) return;
         setDetail(d);
         setLive(d.live);
-        setTimeline(d.timeline.map((e) => ({ type: e.type, occurredAt: e.occurredAt })));
+        setTimeline(
+          d.timeline.map((e) => ({
+            type: e.type,
+            occurredAt: e.occurredAt,
+            confidence: e.confidence,
+            source: e.source,
+          })),
+        );
       } catch {
         if (!cancelled) setError('Failed to load flight');
       }
@@ -94,16 +115,19 @@ export function FlightView({ flightId }: { flightId: string }) {
       const m = raw as {
         t: string;
         channel?: string;
-        event?: { type: string; payload?: Live; occurredAt?: string };
+        event?: { type: string; payload?: unknown; occurredAt?: string; producer?: string };
       };
       if (m.t === 'event' && m.event) {
         if (m.event.type === 'PositionUpdated' && m.event.payload) {
-          setLive(m.event.payload);
+          setLive((prev) => liveFromPositionPayload(m.event?.payload, prev));
         } else {
+          const confidence = eventConfidence(m.event.payload);
           setTimeline((prev) => [
             {
               type: m.event?.type ?? 'event',
               occurredAt: m.event?.occurredAt ?? new Date().toISOString(),
+              ...(confidence !== null ? { confidence } : {}),
+              ...(m.event?.producer ? { source: m.event.producer } : {}),
             },
             ...prev,
           ]);
@@ -271,6 +295,7 @@ export function FlightView({ flightId }: { flightId: string }) {
                     label="Altitude"
                     value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
                   />
+                  <Metric label="Geo altitude" value={fmtFt(live.geoAltitudeFt ?? null)} />
                   <Metric
                     label="Ground speed"
                     value={
@@ -293,6 +318,7 @@ export function FlightView({ flightId }: { flightId: string }) {
                     label="Trend"
                     value={verticalTrend(live.verticalRateFpm, live.onGround)}
                   />
+                  <Metric label="Squawk" value={live.squawk ?? '—'} />
                   <Metric label="Signal age" value={signalAge(live.ts)} />
                   <Metric
                     label="Position"
@@ -303,8 +329,9 @@ export function FlightView({ flightId }: { flightId: string }) {
                     }
                   />
                   <Metric label="On ground" value={live.onGround ? 'Yes' : 'No'} />
-                  <Metric label="Updated" value={new Date(live.ts).toLocaleTimeString()} />
+                  <Metric label="Updated" value={timeShort(live.ts)} />
                 </div>
+                <SignalPanel live={live} />
                 <AirspacePanel airspaces={airspaces} state={airspaceState} />
               </div>
             ) : (
@@ -316,7 +343,9 @@ export function FlightView({ flightId }: { flightId: string }) {
           </CardContent>
         </Card>
 
-        <Card>
+        <OperationsPanel snapshot={detail.statusSnapshot ?? null} />
+
+        <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Clock className="size-4 text-muted-foreground" />
@@ -336,10 +365,13 @@ export function FlightView({ flightId }: { flightId: string }) {
                 {timeline.map((e, i) => (
                   <li key={`${e.type}-${e.occurredAt}-${i}`} className="relative">
                     <span className="absolute -left-6 top-1.5 size-2 rounded-full bg-accent-bright ring-4 ring-background" />
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-medium">{EVENT_LABEL[e.type] ?? e.type}</span>
-                      <time className="text-sm text-muted-foreground">
-                        {new Date(e.occurredAt).toLocaleTimeString()}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <span className="font-medium">{EVENT_LABEL[e.type] ?? e.type}</span>
+                        <TimelineMeta entry={e} />
+                      </div>
+                      <time className="shrink-0 text-sm text-muted-foreground">
+                        {timeShort(e.occurredAt)}
                       </time>
                     </div>
                   </li>
@@ -369,12 +401,274 @@ function BackLink() {
   );
 }
 
+function liveFromPositionPayload(raw: unknown, prev: Live | null): Live | null {
+  if (!raw || typeof raw !== 'object') return prev;
+  const p = raw as {
+    flightId?: unknown;
+    icao24?: unknown;
+    callsign?: unknown;
+    lat?: unknown;
+    lon?: unknown;
+    altitudeFt?: unknown;
+    altFt?: unknown;
+    geoAltitudeFt?: unknown;
+    headingDeg?: unknown;
+    groundSpeedKt?: unknown;
+    gsKt?: unknown;
+    verticalRateFpm?: unknown;
+    vrateFpm?: unknown;
+    onGround?: unknown;
+    squawk?: unknown;
+    category?: unknown;
+    qualityState?: unknown;
+    source?: unknown;
+    sourceTimestamp?: unknown;
+    receivedAt?: unknown;
+    ageMs?: unknown;
+    quality?: unknown;
+    qualityScore?: unknown;
+    positionSource?: unknown;
+    isMlat?: unknown;
+    ts?: unknown;
+  };
+  if (typeof p.lat !== 'number' || typeof p.lon !== 'number') return prev;
+
+  const next: Live = {
+    ...(prev ?? {}),
+    lat: p.lat,
+    lon: p.lon,
+    altitudeFt: nullableNumberOrFallback(
+      firstDefined(p.altitudeFt, p.altFt),
+      prev?.altitudeFt ?? null,
+    ),
+    headingDeg: nullableNumberOrFallback(p.headingDeg, prev?.headingDeg ?? null),
+    groundSpeedKt: nullableNumberOrFallback(
+      firstDefined(p.groundSpeedKt, p.gsKt),
+      prev?.groundSpeedKt ?? null,
+    ),
+    verticalRateFpm: nullableNumberOrFallback(
+      firstDefined(p.verticalRateFpm, p.vrateFpm),
+      prev?.verticalRateFpm ?? null,
+    ),
+    onGround: typeof p.onGround === 'boolean' ? p.onGround : (prev?.onGround ?? false),
+    ts: typeof p.ts === 'string' ? p.ts : (prev?.ts ?? new Date().toISOString()),
+  };
+
+  const geoAltitudeFt = nullableNumber(p.geoAltitudeFt);
+  if (geoAltitudeFt !== undefined) next.geoAltitudeFt = geoAltitudeFt;
+  else if (prev?.geoAltitudeFt !== undefined) next.geoAltitudeFt = prev.geoAltitudeFt;
+
+  const qualityScore = nullableNumber(firstDefined(p.qualityScore, p.quality));
+  if (qualityScore !== undefined && qualityScore !== null)
+    next.qualityScore = clamp01(qualityScore);
+  else if (prev?.qualityScore !== undefined) next.qualityScore = prev.qualityScore;
+
+  if (typeof p.flightId === 'string') next.flightId = p.flightId;
+  if (typeof p.icao24 === 'string') next.icao24 = p.icao24;
+  if (typeof p.callsign === 'string' || p.callsign === null) next.callsign = p.callsign;
+  if (typeof p.squawk === 'string' || p.squawk === null) next.squawk = p.squawk;
+  if (typeof p.category === 'string' || p.category === null) next.category = p.category;
+  if (isQualityState(p.qualityState)) next.qualityState = p.qualityState;
+  else if (prev?.qualityState !== undefined) next.qualityState = prev.qualityState;
+  if (typeof p.source === 'string' || p.source === null) next.source = p.source;
+  if (typeof p.sourceTimestamp === 'string') next.sourceTimestamp = p.sourceTimestamp;
+  if (typeof p.receivedAt === 'string') next.receivedAt = p.receivedAt;
+  if (typeof p.ageMs === 'number' && Number.isFinite(p.ageMs)) {
+    next.ageMs = Math.max(0, Math.round(p.ageMs));
+  } else if (prev?.ageMs !== undefined) {
+    next.ageMs = prev.ageMs;
+  }
+  if (typeof p.positionSource === 'string') next.positionSource = p.positionSource;
+  if (typeof p.isMlat === 'boolean') next.isMlat = p.isMlat;
+
+  return next;
+}
+
+function eventConfidence(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const confidence = (payload as { confidence?: unknown }).confidence;
+  return typeof confidence === 'number' && Number.isFinite(confidence) ? clamp01(confidence) : null;
+}
+
+function SignalPanel({ live }: { live: Live }) {
+  const quality = live.qualityState ?? derivedQuality(live.ts);
+  const source = sourceLabel(
+    live.source ?? null,
+    live.positionSource ?? null,
+    live.isMlat ?? false,
+  );
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={qualityVariant(quality)} className="capitalize">
+          {qualityText(quality)}
+        </Badge>
+        {source !== '—' && <Badge variant="outline">{source}</Badge>}
+        {live.qualityScore != null && (
+          <Badge variant="outline">Quality {formatPercent(live.qualityScore)}</Badge>
+        )}
+        <span className="text-xs text-muted-foreground">
+          Age {live.ageMs != null ? fmtAgeMs(live.ageMs) : signalAge(live.ts)}
+        </span>
+        {live.sourceTimestamp && (
+          <span className="text-xs text-muted-foreground">
+            Source {timeShort(live.sourceTimestamp)}
+          </span>
+        )}
+        {live.receivedAt && (
+          <span className="text-xs text-muted-foreground">Rx {timeShort(live.receivedAt)}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Activity className="size-4 text-muted-foreground" />
+          Operations
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {snapshot ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={statusVariant(snapshot.status)} className="capitalize">
+                {snapshot.status}
+              </Badge>
+              <Badge variant="outline">{snapshot.providerKey}</Badge>
+              <span className="text-xs text-muted-foreground">
+                Fetched {dateTimeShort(snapshot.fetchedAt)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+              <Field label="Gate" value={snapshot.gate ?? '—'} />
+              <Field label="Terminal" value={snapshot.terminal ?? '—'} />
+              <Field label="Baggage" value={snapshot.baggageBelt ?? '—'} />
+              <Field label="Scheduled dep" value={dateTimeShort(snapshot.scheduledDeparture)} />
+              <Field label="Estimated dep" value={dateTimeShort(snapshot.estimatedDeparture)} />
+              <Field label="Actual dep" value={dateTimeShort(snapshot.actualDeparture)} />
+              <Field label="Scheduled arr" value={dateTimeShort(snapshot.scheduledArrival)} />
+              <Field label="Estimated arr" value={dateTimeShort(snapshot.estimatedArrival)} />
+              <Field label="Actual arr" value={dateTimeShort(snapshot.actualArrival)} />
+            </div>
+          </div>
+        ) : (
+          <EmptyState icon={Activity} title="No provider status" className="border-0 py-8" />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TimelineMeta({ entry }: { entry: TimelineEntry }) {
+  const items = [
+    entry.source,
+    entry.confidence != null ? `${formatPercent(entry.confidence)} confidence` : null,
+  ].filter(Boolean);
+  if (items.length === 0) return null;
+  return <div className="mt-0.5 text-xs text-muted-foreground">{items.join(' · ')}</div>;
+}
+
 function signalAge(ts: string): string {
   const ageSec = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
   if (!Number.isFinite(ageSec)) return '—';
   if (ageSec < 60) return `${ageSec}s`;
   const min = Math.round(ageSec / 60);
   return `${min}m`;
+}
+
+function fmtAgeMs(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  if (ms < 60_000) return `${Math.max(0, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+}
+
+function fmtFt(ft: number | null): string {
+  return ft != null ? `${Math.round(ft).toLocaleString()} ft` : '—';
+}
+
+function nullableNumber(raw: unknown): number | null | undefined {
+  if (raw === null) return null;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
+function nullableNumberOrFallback(raw: unknown, fallback: number | null): number | null {
+  const parsed = nullableNumber(raw);
+  return parsed === undefined ? fallback : parsed;
+}
+
+function firstDefined(a: unknown, b: unknown): unknown {
+  return a === undefined ? b : a;
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
+}
+
+function isQualityState(raw: unknown): raw is NonNullable<Live['qualityState']> {
+  return raw === 'live' || raw === 'delayed' || raw === 'stale' || raw === 'signal_lost';
+}
+
+function derivedQuality(ts: string): NonNullable<Live['qualityState']> {
+  const ageMs = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ageMs) || ageMs <= 15_000) return 'live';
+  if (ageMs <= 30_000) return 'delayed';
+  if (ageMs <= 60_000) return 'stale';
+  return 'signal_lost';
+}
+
+function qualityVariant(
+  state: NonNullable<Live['qualityState']>,
+): 'success' | 'warning' | 'destructive' | 'default' {
+  if (state === 'live') return 'success';
+  if (state === 'delayed' || state === 'stale') return 'warning';
+  if (state === 'signal_lost') return 'destructive';
+  return 'default';
+}
+
+function qualityText(state: NonNullable<Live['qualityState']>): string {
+  if (state === 'signal_lost') return 'Signal lost';
+  return state.replace('_', ' ');
+}
+
+function sourceLabel(
+  source: string | null,
+  positionSource: string | null,
+  isMlat: boolean,
+): string {
+  const base = (positionSource ?? source)?.trim();
+  if (!base) return '—';
+  const normalized = base.toUpperCase().replace(/[_-]/g, ' ');
+  if (base.toLowerCase() === 'mlat') return 'MLAT';
+  return isMlat ? `${normalized} / MLAT` : normalized;
+}
+
+function formatPercent(n: number): string {
+  return `${Math.round(clamp01(n) * 100)}%`;
+}
+
+function timeShort(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function dateTimeShort(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleString([], {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function headingLabel(deg: number): string {
@@ -452,6 +746,15 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-lg font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-0.5 truncate text-sm font-medium tabular-nums">{value}</div>
     </div>
   );
 }

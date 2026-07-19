@@ -40,10 +40,12 @@ export interface TimeseriesPositionInput {
   lon: number;
   lat: number;
   altitudeFt: number | null;
+  geoAltitudeFt?: number | null;
   headingDeg: number | null;
   groundSpeedKt: number | null;
   verticalRateFpm: number | null;
   onGround: boolean;
+  squawk?: string | null;
   source: string;
 }
 
@@ -77,9 +79,10 @@ export class PgPositionRepo implements PositionTimeseriesRepo {
     const rows = (await this.db.execute(sql`
       select ts,
              ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
-             altitude_ft as "altitudeFt", heading_deg as "headingDeg",
+             altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
+             heading_deg as "headingDeg",
              ground_speed_kt as "groundSpeedKt", vertical_rate_fpm as "verticalRateFpm",
-             on_ground as "onGround"
+             on_ground as "onGround", squawk, source
       from flight_positions
       where flight_id = ${flightId}
       order by ts desc
@@ -92,9 +95,10 @@ export class PgPositionRepo implements PositionTimeseriesRepo {
     return (await this.db.execute(sql`
       select ts,
              ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
-             altitude_ft as "altitudeFt", heading_deg as "headingDeg",
+             altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
+             heading_deg as "headingDeg",
              ground_speed_kt as "groundSpeedKt", vertical_rate_fpm as "verticalRateFpm",
-             on_ground as "onGround"
+             on_ground as "onGround", squawk, source
       from flight_positions
       where flight_id = ${flightId}
       order by ts asc
@@ -126,14 +130,15 @@ export class PgPositionRepo implements PositionTimeseriesRepo {
       (r) => sql`(
         ${r.flightId}, ${r.ts}, ${r.icao24},
         ${ewktPoint(r.lon, r.lat)}::geography,
-        ${r.altitudeFt}, ${r.headingDeg}, ${r.groundSpeedKt},
-        ${r.verticalRateFpm}, ${r.onGround}, ${r.source}
+        ${r.altitudeFt}, ${r.geoAltitudeFt ?? null}, ${r.headingDeg},
+        ${r.groundSpeedKt}, ${r.verticalRateFpm}, ${r.onGround},
+        ${r.squawk ?? null}, ${r.source}
       )`,
     );
     await this.db.execute(sql`
       insert into flight_positions
-        (flight_id, ts, icao24, location, altitude_ft, heading_deg,
-         ground_speed_kt, vertical_rate_fpm, on_ground, source)
+        (flight_id, ts, icao24, location, altitude_ft, geo_altitude_ft,
+         heading_deg, ground_speed_kt, vertical_rate_fpm, on_ground, squawk, source)
       values ${sql.join(tuples, sql`, `)}
       on conflict (flight_id, ts) do nothing
     `);

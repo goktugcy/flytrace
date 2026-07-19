@@ -49,6 +49,7 @@ class FakeStatusRepo implements FlightStatusRepo {
   async upsertSnapshot(i: SnapshotUpsert) {
     this.upserts.push(i);
     this.snap = {
+      providerKey: i.providerKey,
       status: i.status,
       gate: i.gate ?? null,
       terminal: i.terminal ?? null,
@@ -59,6 +60,7 @@ class FakeStatusRepo implements FlightStatusRepo {
       scheduledArrival: i.scheduledArrival ?? null,
       estimatedArrival: i.estimatedArrival ?? null,
       actualArrival: i.actualArrival ?? null,
+      fetchedAt: i.fetchedAt.toISOString(),
     };
   }
 }
@@ -126,6 +128,7 @@ describe('diffStatus', () => {
 
   test('reports only changed fields', () => {
     const before: SnapshotStatus = {
+      providerKey: 'fixture',
       status: 'active',
       gate: 'A12',
       terminal: '1',
@@ -136,6 +139,7 @@ describe('diffStatus', () => {
       scheduledArrival: null,
       estimatedArrival: null,
       actualArrival: null,
+      fetchedAt: clock.nowIso(),
     };
     expect(diffStatus(before, { status: 'active', gate: 'B7', terminal: '1' })).toEqual(['gate']);
   });

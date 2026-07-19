@@ -25,10 +25,12 @@ export interface PositionInput {
   lon: number;
   lat: number;
   altitudeFt: number | null;
+  geoAltitudeFt?: number | null;
   headingDeg: number | null;
   groundSpeedKt: number | null;
   verticalRateFpm: number | null;
   onGround: boolean;
+  squawk?: string | null;
   source: string;
 }
 
@@ -92,10 +94,12 @@ export function createFlightRepo(db: Database) {
         icao24: r.icao24,
         location: sql`${ewktPoint(r.lon, r.lat)}::geography`,
         altitudeFt: r.altitudeFt,
+        geoAltitudeFt: r.geoAltitudeFt ?? null,
         headingDeg: r.headingDeg,
         groundSpeedKt: r.groundSpeedKt,
         verticalRateFpm: r.verticalRateFpm,
         onGround: r.onGround,
+        squawk: r.squawk ?? null,
         source: r.source,
       }));
       await db.insert(flightPositions).values(values).onConflictDoNothing();

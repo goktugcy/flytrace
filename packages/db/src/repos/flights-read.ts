@@ -23,10 +23,13 @@ export interface PositionRow {
   lat: number | null;
   lon: number | null;
   altitudeFt: number | null;
+  geoAltitudeFt: number | null;
   headingDeg: number | null;
   groundSpeedKt: number | null;
   verticalRateFpm: number | null;
   onGround: boolean;
+  squawk: string | null;
+  source: string | null;
 }
 
 export interface SearchResultRow {
@@ -79,9 +82,10 @@ function createReadRepo(db: Database) {
       const rows = (await db.execute(sql`
         select ts,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
-               altitude_ft as "altitudeFt", heading_deg as "headingDeg",
+               altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
+               heading_deg as "headingDeg",
                ground_speed_kt as "groundSpeedKt", vertical_rate_fpm as "verticalRateFpm",
-               on_ground as "onGround"
+               on_ground as "onGround", squawk, source
         from flight_positions
         where flight_id = ${flightId}
         order by ts desc
@@ -94,9 +98,10 @@ function createReadRepo(db: Database) {
       return (await db.execute(sql`
         select ts,
                ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon,
-               altitude_ft as "altitudeFt", heading_deg as "headingDeg",
+               altitude_ft as "altitudeFt", geo_altitude_ft as "geoAltitudeFt",
+               heading_deg as "headingDeg",
                ground_speed_kt as "groundSpeedKt", vertical_rate_fpm as "verticalRateFpm",
-               on_ground as "onGround"
+               on_ground as "onGround", squawk, source
         from flight_positions
         where flight_id = ${flightId}
         order by ts asc

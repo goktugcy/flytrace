@@ -13,7 +13,11 @@ import { Layers, LocateFixed, Plane, RadioTower, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { type RenderedFlight, stepRenderedFlight } from '../lib/flight-motion';
-import { type FlightSample, classifyFlightSample } from '../lib/flight-store';
+import {
+  type FlightQualityState,
+  type FlightSample,
+  classifyFlightSample,
+} from '../lib/flight-store';
 import { RealtimeClient, type RealtimeStatus } from '../lib/realtime-client';
 
 /** The live map needs a WebGL context (maplibre); some browsers/GPUs disable it. */
@@ -50,10 +54,22 @@ interface SelInfo {
   lat: number;
   lon: number;
   altFt: number | null;
+  geoAltitudeFt: number | null;
   gsKt: number | null;
+  verticalRateFpm: number | null;
   heading: number | null;
   onGround: boolean;
+  squawk: string | null;
   category: string;
+  source: string | null;
+  sourceTimestamp: string | null;
+  ageMs: number | null;
+  qualityScore: number | null;
+  positionSource: string | null;
+  isMlat: boolean | null;
+  qualityState: FlightQualityState;
+  ts: string;
+  tsMs: number;
 }
 
 function toSel(f: FlightSample): SelInfo {
@@ -64,10 +80,22 @@ function toSel(f: FlightSample): SelInfo {
     lat: f.lat,
     lon: f.lon,
     altFt: f.altFt,
+    geoAltitudeFt: f.geoAltitudeFt,
     gsKt: f.gsKt,
+    verticalRateFpm: f.verticalRateFpm,
     heading: f.heading,
     onGround: f.onGround,
+    squawk: f.squawk,
     category: flightCategory(f),
+    source: f.source,
+    sourceTimestamp: f.sourceTimestamp,
+    ageMs: f.ageMs,
+    qualityScore: f.qualityScore,
+    positionSource: f.positionSource,
+    isMlat: f.isMlat,
+    qualityState: f.qualityState,
+    ts: f.ts,
+    tsMs: f.tsMs,
   };
 }
 
@@ -1195,6 +1223,29 @@ export function LiveMap() {
                   <div className="text-xs text-muted-foreground">
                     {sel.icao24.toUpperCase()} · {t(`map.cat.${sel.category}`)}
                   </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase',
+                        qualityChipClass(sel.qualityState),
+                      )}
+                    >
+                      {t(`map.signal.${sel.qualityState}`)}
+                    </span>
+                    {sourceLabel(sel.source, sel.positionSource, sel.isMlat ?? false) !== '—' && (
+                      <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {sourceLabel(sel.source, sel.positionSource, sel.isMlat ?? false)}
+                      </span>
+                    )}
+                    {sel.qualityScore != null && (
+                      <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        Q {formatPercent(sel.qualityScore)}
+                      </span>
+                    )}
+                    <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                      {fmtAgeMs(sel.ageMs ?? Date.now() - sel.tsMs)}
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -1249,6 +1300,9 @@ export function LiveMap() {
                   label={t('map.heading')}
                   value={sel.heading != null ? `${Math.round(sel.heading)}°` : '—'}
                 />
+                <Metric label={t('map.geoAltitude')} value={fmtFt(sel.geoAltitudeFt)} />
+                <Metric label={t('map.vertical')} value={fmtVRate(sel.verticalRateFpm)} />
+                <Metric label={t('map.squawk')} value={sel.squawk ?? '—'} />
               </div>
 
               {/* Live adsb.lol hits (id `adsb:*`) aren't persisted, so they have
@@ -1271,6 +1325,42 @@ export function LiveMap() {
 
 function fmtFt(ft: number | null): string {
   return ft != null ? `${Math.round(ft).toLocaleString()} ft` : '—';
+}
+
+function fmtVRate(vrate: number | null): string {
+  if (vrate == null) return '—';
+  const rounded = Math.round(vrate);
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()} fpm`;
+}
+
+function fmtAgeMs(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  if (ms < 60_000) return `${Math.max(0, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+}
+
+function formatPercent(n: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+}
+
+function sourceLabel(
+  source: string | null,
+  positionSource: string | null,
+  isMlat: boolean,
+): string {
+  const base = (positionSource ?? source)?.trim();
+  if (!base) return '—';
+  const normalized = base.toUpperCase().replace(/[_-]/g, ' ');
+  if (base.toLowerCase() === 'mlat') return 'MLAT';
+  return isMlat ? `${normalized}/MLAT` : normalized;
+}
+
+function qualityChipClass(state: FlightQualityState): string {
+  if (state === 'live') return 'bg-success/15 text-success';
+  if (state === 'delayed') return 'bg-warning/15 text-warning';
+  if (state === 'stale') return 'bg-warning/15 text-warning';
+  return 'bg-destructive/15 text-destructive';
 }
 
 function fmtBand(a: AirspaceSummary): string {

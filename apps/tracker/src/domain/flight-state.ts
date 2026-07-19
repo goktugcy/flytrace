@@ -31,9 +31,11 @@ export interface FlightState {
   lat: number;
   lon: number;
   altFt: number | null;
+  geoAltitudeFt?: number | null;
   vrateFpm: number | null;
   gsKt: number | null;
   headingDeg: number | null;
+  squawk?: string | null;
   /** Coarse aircraft class (light | jet | heavy | helo) for map iconography. */
   category: string | null;
   lastTs: string; // ISO of the last accepted sample

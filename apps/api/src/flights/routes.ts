@@ -3,8 +3,9 @@ import {
   type SearchResultRow,
   createCatalogRepo,
   createFlightReadRepo,
+  createFlightStatusRepo,
 } from '@flytrace/db';
-import { AppError, type FlightDetail } from '@flytrace/shared';
+import { AppError, type FlightDetail, type LiveFlight } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
@@ -85,6 +86,7 @@ const bboxSchema = z.string().transform((v, ctx) => {
 export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   const read = createFlightReadRepo(ctx.db);
   const catalog = createCatalogRepo(ctx.db);
+  const statusRead = createFlightStatusRepo(ctx.db);
   const hot = createHotState(ctx.redis, ctx.redisPrefix);
 
   const app = new Hono<AppEnv>();
@@ -213,10 +215,34 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   const detailFor = async (flight: FlightRow): Promise<FlightDetail> => {
-    const [live, events] = await Promise.all([
+    const [dbLive, hotLive, events, statusSnapshot] = await Promise.all([
       read.getLatestPosition(flight.id),
+      hot.get(flight.id).catch((err) => {
+        ctx.logger.warn('flight detail hot state unavailable', {
+          flightId: flight.id,
+          err: String(err),
+        });
+        return null;
+      }),
       read.getEvents(flight.id),
+      statusRead.getSnapshot(flight.id),
     ]);
+    const persistedLive: FlightDetail['live'] = dbLive
+      ? {
+          lat: dbLive.lat,
+          lon: dbLive.lon,
+          altitudeFt: dbLive.altitudeFt,
+          geoAltitudeFt: dbLive.geoAltitudeFt,
+          headingDeg: dbLive.headingDeg,
+          groundSpeedKt: dbLive.groundSpeedKt,
+          verticalRateFpm: dbLive.verticalRateFpm,
+          onGround: dbLive.onGround,
+          squawk: dbLive.squawk,
+          source: dbLive.source,
+          ts: dbLive.ts,
+        }
+      : null;
+    const live: FlightDetail['live'] = hotLive ? detailLiveFromHot(hotLive) : persistedLive;
     return {
       flight: {
         flightId: flight.id,
@@ -226,18 +252,8 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
         flightDate: flight.flightDate,
         source: flight.source,
       },
-      live: live
-        ? {
-            lat: live.lat,
-            lon: live.lon,
-            altitudeFt: live.altitudeFt,
-            headingDeg: live.headingDeg,
-            groundSpeedKt: live.groundSpeedKt,
-            verticalRateFpm: live.verticalRateFpm,
-            onGround: live.onGround,
-            ts: live.ts,
-          }
-        : null,
+      live,
+      statusSnapshot,
       timeline: events.map((e) => ({
         type: e.type,
         occurredAt: e.occurredAt,
@@ -290,6 +306,33 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   });
 
   return app;
+}
+
+function detailLiveFromHot(live: LiveFlight): NonNullable<FlightDetail['live']> {
+  return {
+    flightId: live.flightId,
+    icao24: live.icao24,
+    callsign: live.callsign,
+    lat: live.lat,
+    lon: live.lon,
+    altitudeFt: live.altitudeFt,
+    ...(live.geoAltitudeFt !== undefined ? { geoAltitudeFt: live.geoAltitudeFt } : {}),
+    headingDeg: live.headingDeg,
+    groundSpeedKt: live.groundSpeedKt,
+    verticalRateFpm: live.verticalRateFpm ?? null,
+    onGround: live.onGround,
+    ...(live.squawk !== undefined ? { squawk: live.squawk } : {}),
+    ...(live.category !== undefined ? { category: live.category } : {}),
+    ...(live.qualityState !== undefined ? { qualityState: live.qualityState } : {}),
+    ...(live.source !== undefined ? { source: live.source } : {}),
+    ...(live.sourceTimestamp !== undefined ? { sourceTimestamp: live.sourceTimestamp } : {}),
+    ...(live.receivedAt !== undefined ? { receivedAt: live.receivedAt } : {}),
+    ...(live.ageMs !== undefined ? { ageMs: live.ageMs } : {}),
+    ...(live.qualityScore !== undefined ? { qualityScore: live.qualityScore } : {}),
+    ...(live.positionSource !== undefined ? { positionSource: live.positionSource } : {}),
+    ...(live.isMlat !== undefined ? { isMlat: live.isMlat } : {}),
+    ts: live.ts,
+  };
 }
 
 /**

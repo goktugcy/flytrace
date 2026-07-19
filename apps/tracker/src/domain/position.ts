@@ -13,10 +13,12 @@ export interface Position {
   lat: number;
   lon: number;
   altFt: number | null;
+  geoAltitudeFt?: number | null;
   headingDeg: number | null;
   gsKt: number | null;
   vrateFpm: number | null;
   onGround: boolean;
+  squawk?: string | null;
   /** Coarse aircraft class for map iconography: light | jet | heavy | helo. */
   category: string | null;
   /** Event time (UTC ISO) — when the source observed this sample. */
@@ -170,6 +172,9 @@ export function normalizeStateVector(raw: unknown): Position | null {
     gsKt: velMs === null ? null : round(velMs * MS_TO_KT, 1),
     vrateFpm: vrateMs === null ? null : round(vrateMs * MS_TO_FPM, 0),
     onGround,
+    geoAltitudeFt:
+      typeof parsed.data[13] === 'number' ? round((parsed.data[13] as number) * M_TO_FT, 0) : null,
+    squawk: typeof parsed.data[14] === 'string' ? (parsed.data[14] as string) : null,
     category: null, // OpenSky state vectors carry no emitter category
     ts: new Date(tsSec * 1000).toISOString(),
     sourceTimestamp: new Date(tsSec * 1000).toISOString(),
@@ -204,6 +209,8 @@ const adsbAircraftSchema = z
     gs: z.number().nullish(),
     track: z.number().nullish(),
     baro_rate: z.number().nullish(),
+    alt_geom: z.number().nullish(),
+    squawk: z.string().nullish(),
     seen_pos: z.number().nullish(),
     category: z.string().nullish(),
     mlat: z.array(z.string()).nullish(),
@@ -232,6 +239,8 @@ export function normalizeAdsbAircraft(raw: unknown, nowMs: number): Position | n
     gsKt: a.gs === null || a.gs === undefined ? null : round(a.gs, 1),
     vrateFpm: a.baro_rate === null || a.baro_rate === undefined ? null : Math.round(a.baro_rate),
     onGround,
+    geoAltitudeFt: a.alt_geom === null || a.alt_geom === undefined ? null : Math.round(a.alt_geom),
+    squawk: a.squawk ?? null,
     category: adsbCategory(a.category),
     ts,
     sourceTimestamp: ts,

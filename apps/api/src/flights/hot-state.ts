@@ -17,15 +17,22 @@ const hotStateSchema = z
     lat: z.number(),
     lon: z.number(),
     altFt: z.number().nullable(),
+    geoAltitudeFt: z.number().nullable().optional(),
     headingDeg: z.number().nullable(),
     gsKt: z.number().nullable(),
+    vrateFpm: z.number().nullable().optional(),
     airborne: z.boolean(),
+    squawk: z.string().nullable().optional(),
+    category: z.string().nullable().optional(),
     lastTs: z.string(),
     qualityState: flightQualityStateSchema.optional(),
     lastAcceptedAt: z.string().optional(),
     selectedProvider: z.string().optional(),
     sourceTimestamp: z.string().optional(),
+    ageMs: z.number().optional(),
     qualityScore: z.number().optional(),
+    positionSource: z.string().optional(),
+    isMlat: z.boolean().optional(),
   })
   .passthrough();
 
@@ -40,10 +47,20 @@ export function createHotState(redis: Redis, prefix: string) {
     lat: s.lat,
     lon: s.lon,
     altitudeFt: s.altFt,
+    ...(s.geoAltitudeFt !== undefined ? { geoAltitudeFt: s.geoAltitudeFt } : {}),
     headingDeg: s.headingDeg,
     groundSpeedKt: s.gsKt,
+    ...(s.vrateFpm !== undefined ? { verticalRateFpm: s.vrateFpm } : {}),
     onGround: !s.airborne,
+    ...(s.squawk !== undefined ? { squawk: s.squawk } : {}),
+    ...(s.category !== undefined ? { category: s.category } : {}),
     ...(s.qualityState !== undefined ? { qualityState: s.qualityState } : {}),
+    ...(s.selectedProvider !== undefined ? { source: s.selectedProvider } : {}),
+    ...(s.sourceTimestamp !== undefined ? { sourceTimestamp: s.sourceTimestamp } : {}),
+    ...(s.ageMs !== undefined ? { ageMs: Math.max(0, Math.round(s.ageMs)) } : {}),
+    ...(s.qualityScore !== undefined ? { qualityScore: s.qualityScore } : {}),
+    ...(s.positionSource !== undefined ? { positionSource: s.positionSource } : {}),
+    ...(s.isMlat !== undefined ? { isMlat: s.isMlat } : {}),
     ...(s.lastAcceptedAt !== undefined ? { receivedAt: s.lastAcceptedAt } : {}),
     ts: s.lastTs,
   });
@@ -68,6 +85,19 @@ export function createHotState(redis: Redis, prefix: string) {
         out.push(toLive(parsed.data));
       }
       return out;
+    },
+
+    /** Latest hot state for one active flight, if it is still in Redis. */
+    async get(flightId: string): Promise<LiveFlight | null> {
+      const raw = await redis.get(stateKey(flightId));
+      if (!raw) return null;
+      let parsed: z.SafeParseReturnType<unknown, z.infer<typeof hotStateSchema>>;
+      try {
+        parsed = hotStateSchema.safeParse(JSON.parse(raw));
+      } catch {
+        return null;
+      }
+      return parsed.success ? toLive(parsed.data) : null;
     },
 
     /** Count of currently-active flights (landing-page counter). */

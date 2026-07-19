@@ -94,11 +94,16 @@ export class Persister {
       lon: p.lon,
       lat: p.lat,
       altitudeFt: p.altFt === null ? null : Math.round(p.altFt),
+      geoAltitudeFt:
+        p.geoAltitudeFt === undefined || p.geoAltitudeFt === null
+          ? null
+          : Math.round(p.geoAltitudeFt),
       headingDeg: p.headingDeg,
       groundSpeedKt: p.gsKt,
       verticalRateFpm: p.vrateFpm === null ? null : Math.round(p.vrateFpm),
       onGround: p.onGround,
-      source: env.producer,
+      squawk: p.squawk ?? null,
+      source: p.source ?? env.producer,
     });
   }
 

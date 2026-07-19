@@ -22,6 +22,59 @@ describe('FlightStore', () => {
     expect(s.get('F1')?.lat).toBe(41);
   });
 
+  test('keeps signal and source metadata from position updates', () => {
+    const s = new FlightStore();
+    expect(
+      s.applyPosition(
+        pos('F1', 41, '2023-11-14T22:13:20.000Z', {
+          geoAltitudeFt: 1200,
+          verticalRateFpm: -320,
+          squawk: '7700',
+          source: 'composite',
+          sourceTimestamp: '2023-11-14T22:13:19.000Z',
+          ageMs: 1000,
+          quality: 0.82,
+          positionSource: 'mlat',
+          isMlat: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(s.get('F1')).toMatchObject({
+      geoAltitudeFt: 1200,
+      verticalRateFpm: -320,
+      squawk: '7700',
+      source: 'composite',
+      sourceTimestamp: '2023-11-14T22:13:19.000Z',
+      ageMs: 1000,
+      qualityScore: 0.82,
+      positionSource: 'mlat',
+      isMlat: true,
+    });
+
+    expect(
+      s.applyPosition(
+        pos('F1', 42, '2023-11-14T22:13:30.000Z', {
+          geoAltitudeFt: null,
+          verticalRateFpm: null,
+          squawk: null,
+          ageMs: null,
+          qualityScore: null,
+          positionSource: null,
+          isMlat: null,
+        }),
+      ),
+    ).toBe(true);
+    expect(s.get('F1')).toMatchObject({
+      geoAltitudeFt: null,
+      verticalRateFpm: null,
+      squawk: null,
+      ageMs: null,
+      qualityScore: null,
+      positionSource: null,
+      isMlat: null,
+    });
+  });
+
   test('guards against out-of-order deltas', () => {
     const s = new FlightStore();
     s.applyPosition(pos('F1', 41, '2023-11-14T22:13:20.000Z'));

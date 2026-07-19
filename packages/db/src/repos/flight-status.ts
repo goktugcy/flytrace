@@ -8,6 +8,7 @@ import { flightStatusSnapshot } from '../schema/flights.ts';
  * snapshot drives ProviderUpdated + derived gate/delay/cancelled events.
  */
 export interface SnapshotStatus {
+  providerKey: string;
   status: string;
   gate: string | null;
   terminal: string | null;
@@ -18,12 +19,22 @@ export interface SnapshotStatus {
   scheduledArrival: string | null;
   estimatedArrival: string | null;
   actualArrival: string | null;
+  fetchedAt: string;
 }
 
-export interface SnapshotUpsert extends Partial<SnapshotStatus> {
+export interface SnapshotUpsert {
   flightId: string;
   providerKey: string;
   status: string;
+  gate?: string | null;
+  terminal?: string | null;
+  baggageBelt?: string | null;
+  scheduledDeparture?: string | null;
+  estimatedDeparture?: string | null;
+  actualDeparture?: string | null;
+  scheduledArrival?: string | null;
+  estimatedArrival?: string | null;
+  actualArrival?: string | null;
   raw?: unknown;
   fetchedAt: Date;
 }
@@ -34,10 +45,11 @@ export function createFlightStatusRepo(db: Database) {
   return {
     async getSnapshot(flightId: string): Promise<SnapshotStatus | null> {
       const rows = (await db.execute(sql`
-        select status, gate, terminal, baggage_belt as "baggageBelt",
+        select provider_key as "providerKey", status, gate, terminal, baggage_belt as "baggageBelt",
                scheduled_departure as "scheduledDeparture", estimated_departure as "estimatedDeparture",
                actual_departure as "actualDeparture", scheduled_arrival as "scheduledArrival",
-               estimated_arrival as "estimatedArrival", actual_arrival as "actualArrival"
+               estimated_arrival as "estimatedArrival", actual_arrival as "actualArrival",
+               fetched_at as "fetchedAt"
         from flight_status_snapshots where flight_id = ${flightId} limit 1
       `)) as unknown as SnapshotStatus[];
       return rows[0] ?? null;

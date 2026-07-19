@@ -27,10 +27,19 @@ export interface FlightSample {
   lon: number;
   heading: number | null;
   altFt: number | null;
+  geoAltitudeFt: number | null;
   gsKt: number | null;
+  verticalRateFpm: number | null;
   onGround: boolean;
+  squawk: string | null;
   /** Coarse aircraft class (light | jet | heavy | helo) for map icons. */
   category: string | null;
+  source: string | null;
+  sourceTimestamp: string | null;
+  ageMs: number | null;
+  qualityScore: number | null;
+  positionSource: string | null;
+  isMlat: boolean | null;
   /** Freshness derived from server lifecycle events or local age. */
   qualityState: FlightQualityState;
   /** Client receive time for reconnect/snapshot ordering. */
@@ -107,9 +116,19 @@ export class FlightStore {
     lon: number;
     headingDeg: number | null;
     altFt: number | null;
+    geoAltitudeFt?: number | null;
     gsKt: number | null;
+    verticalRateFpm?: number | null;
     onGround: boolean;
+    squawk?: string | null;
     category?: string | null;
+    source?: string | null;
+    sourceTimestamp?: string | null;
+    ageMs?: number | null;
+    quality?: number | null;
+    qualityScore?: number | null;
+    positionSource?: string | null;
+    isMlat?: boolean | null;
     qualityState?: string;
     receivedAt?: string;
     ts: string;
@@ -128,9 +147,21 @@ export class FlightStore {
       lon: p.lon,
       heading: p.headingDeg,
       altFt: p.altFt,
+      geoAltitudeFt: optionalValue(p.geoAltitudeFt, prev?.geoAltitudeFt ?? null),
       gsKt: p.gsKt,
+      verticalRateFpm: optionalValue(p.verticalRateFpm, prev?.verticalRateFpm ?? null),
       onGround: p.onGround,
-      category: p.category ?? prev?.category ?? null,
+      squawk: optionalValue(p.squawk, prev?.squawk ?? null),
+      category: optionalValue(p.category, prev?.category ?? null),
+      source: optionalValue(p.source, prev?.source ?? null),
+      sourceTimestamp: optionalValue(p.sourceTimestamp, prev?.sourceTimestamp ?? null),
+      ageMs: optionalValue(p.ageMs, prev?.ageMs ?? null),
+      qualityScore: optionalValue(
+        p.qualityScore !== undefined ? p.qualityScore : p.quality,
+        prev?.qualityScore ?? null,
+      ),
+      positionSource: optionalValue(p.positionSource, prev?.positionSource ?? null),
+      isMlat: optionalValue(p.isMlat, prev?.isMlat ?? null),
       qualityState: normalizeQuality(p.qualityState) ?? 'live',
       receivedAtMs,
       connectionGeneration: this.connectionGeneration,
@@ -150,10 +181,21 @@ export class FlightStore {
     lon: number;
     headingDeg?: number | null;
     altFt: number | null;
+    geoAltitudeFt?: number | null;
     gsKt: number | null;
+    vrateFpm?: number | null;
+    verticalRateFpm?: number | null;
     airborne?: boolean;
     onGround?: boolean;
+    squawk?: string | null;
     category?: string | null;
+    selectedProvider?: string | null;
+    source?: string | null;
+    sourceTimestamp?: string | null;
+    ageMs?: number | null;
+    qualityScore?: number | null;
+    positionSource?: string | null;
+    isMlat?: boolean | null;
     qualityState?: string;
     lastAcceptedAt?: string;
     lastTs: string;
@@ -249,10 +291,21 @@ export class FlightStore {
       lon: number;
       headingDeg?: number | null;
       altFt: number | null;
+      geoAltitudeFt?: number | null;
       gsKt: number | null;
+      vrateFpm?: number | null;
+      verticalRateFpm?: number | null;
       airborne?: boolean;
       onGround?: boolean;
+      squawk?: string | null;
       category?: string | null;
+      selectedProvider?: string | null;
+      source?: string | null;
+      sourceTimestamp?: string | null;
+      ageMs?: number | null;
+      qualityScore?: number | null;
+      positionSource?: string | null;
+      isMlat?: boolean | null;
       qualityState?: string;
       lastAcceptedAt?: string;
       lastTs: string;
@@ -284,9 +337,24 @@ export class FlightStore {
       lon: s.lon,
       heading: s.headingDeg ?? null,
       altFt: s.altFt,
+      geoAltitudeFt: optionalValue(s.geoAltitudeFt, prev?.geoAltitudeFt ?? null),
       gsKt: s.gsKt,
+      verticalRateFpm: optionalValue(
+        s.verticalRateFpm !== undefined ? s.verticalRateFpm : s.vrateFpm,
+        prev?.verticalRateFpm ?? null,
+      ),
       onGround,
-      category: s.category ?? prev?.category ?? null,
+      squawk: optionalValue(s.squawk, prev?.squawk ?? null),
+      category: optionalValue(s.category, prev?.category ?? null),
+      source: optionalValue(
+        s.source !== undefined ? s.source : s.selectedProvider,
+        prev?.source ?? null,
+      ),
+      sourceTimestamp: optionalValue(s.sourceTimestamp, prev?.sourceTimestamp ?? null),
+      ageMs: optionalValue(s.ageMs, prev?.ageMs ?? null),
+      qualityScore: optionalValue(s.qualityScore, prev?.qualityScore ?? null),
+      positionSource: optionalValue(s.positionSource, prev?.positionSource ?? null),
+      isMlat: optionalValue(s.isMlat, prev?.isMlat ?? null),
       qualityState,
       receivedAtMs,
       connectionGeneration: this.connectionGeneration,
@@ -336,6 +404,10 @@ function normalizeQuality(raw: unknown): FlightQualityState | null {
   return typeof raw === 'string' && QUALITY_STATES.has(raw as FlightQualityState)
     ? (raw as FlightQualityState)
     : null;
+}
+
+function optionalValue<T>(next: T | null | undefined, fallback: T | null): T | null {
+  return next === undefined ? fallback : next;
 }
 
 function parseIsoMs(raw: string | undefined): number | null {
