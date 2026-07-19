@@ -12,6 +12,7 @@
     "db:generate": "drizzle-kit generate && bun run scripts/fix-postgis-migration.ts",
     "db:migrate": "bun run src/migrate.ts",
     "db:seed": "bun run src/seed.ts",
+    "airlines:import": "bun run src/import-airlines.ts",
     "airports:import": "bun run src/import-airports.ts",
     "airspace:import": "bun run src/import-airspace.ts",
     "db:studio": "drizzle-kit studio",
