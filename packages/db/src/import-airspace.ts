@@ -23,6 +23,11 @@ async function main() {
   const provider = await selectAirspaceProvider({
     kind: config.AIRSPACE_PROVIDER,
     openaipDatasetPath: config.OPENAIP_DATASET_PATH,
+    openaipApiKey: config.OPENAIP_API_KEY,
+    openaipBaseUrl: config.OPENAIP_BASE_URL,
+    openaipCountry: config.OPENAIP_COUNTRY,
+    openaipBbox: config.OPENAIP_BBOX,
+    openaipPageLimit: config.OPENAIP_PAGE_LIMIT,
     openflightmapsDatasetPath: config.OPENFLIGHTMAPS_DATASET_PATH,
     aixmDatasetPath: config.AIXM_DATASET_PATH,
     logger,

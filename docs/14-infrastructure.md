@@ -156,6 +156,10 @@ Branch protection: all gates green + review required to merge to `main`.
 
 - Real OpenAIP, open-flightmaps, or AIXM datasets are opt-in; vendor dataset files are not
   committed. Configure `AIRSPACE_PROVIDER`, `*_DATASET_PATH`, and `AIRSPACE_DATASET_VERSION`.
+- OpenAIP can also be imported directly from the Core API by setting
+  `AIRSPACE_PROVIDER=openaip`, `OPENAIP_API_KEY`, and either `OPENAIP_COUNTRY` (for example `TR`)
+  or `OPENAIP_BBOX`. The key is sent server-side with `x-openaip-api-key`; do not expose it to
+  the web app.
 - Import command: `bun run --cwd packages/db airspace:import`. It loads the provider dataset,
   validates geometry through PostGIS, reports invalid polygons, and upserts by
   `(provider,dataset_version,source_id)`.

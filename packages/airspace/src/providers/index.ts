@@ -30,6 +30,16 @@ export interface AirspaceProviderOptions {
   kind?: string | undefined;
   /** openAIP dataset path or URL (config `OPENAIP_DATASET_PATH`). */
   openaipDatasetPath?: string | undefined;
+  /** openAIP Core API key (config `OPENAIP_API_KEY`). */
+  openaipApiKey?: string | undefined;
+  /** openAIP Core API base URL (config `OPENAIP_BASE_URL`). */
+  openaipBaseUrl?: string | undefined;
+  /** ISO alpha-2 country filter for openAIP API mode (config `OPENAIP_COUNTRY`). */
+  openaipCountry?: string | undefined;
+  /** Bounding box filter for openAIP API mode (config `OPENAIP_BBOX`). */
+  openaipBbox?: string | undefined;
+  /** Page size for openAIP API mode (config `OPENAIP_PAGE_LIMIT`). */
+  openaipPageLimit?: number | undefined;
   /** open-flightmaps dataset path or URL (config `OPENFLIGHTMAPS_DATASET_PATH`). */
   openflightmapsDatasetPath?: string | undefined;
   /** AIXM dataset path or URL (config `AIXM_DATASET_PATH`). */
@@ -96,7 +106,13 @@ export async function selectAirspaceProvider(
       },
       openaip: async () => {
         const { OpenAipAirspaceProvider } = await import('./openaip.ts');
-        return new OpenAipAirspaceProvider(opts.openaipDatasetPath, opts.cellDeg, logger);
+        return new OpenAipAirspaceProvider(opts.openaipDatasetPath, opts.cellDeg, logger, {
+          apiKey: opts.openaipApiKey,
+          baseUrl: opts.openaipBaseUrl,
+          country: opts.openaipCountry,
+          bbox: opts.openaipBbox,
+          pageLimit: opts.openaipPageLimit,
+        });
       },
       openflightmaps: async () => {
         const { OpenFlightmapsAirspaceProvider } = await import('./openflightmaps.ts');

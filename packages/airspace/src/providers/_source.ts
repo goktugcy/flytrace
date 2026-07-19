@@ -16,12 +16,16 @@ export async function readDatasetText(
   location: string | undefined,
   label: string,
   logger?: Logger,
+  opts: { headers?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<string | null> {
   const loc = location?.trim();
   if (!loc) return null;
   try {
     if (/^https?:\/\//i.test(loc)) {
-      const res = await fetch(loc, { signal: AbortSignal.timeout(15_000) });
+      const res = await fetch(loc, {
+        headers: opts.headers,
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
+      });
       if (!res.ok) {
         logger?.warn(`airspace(${label}): dataset fetch failed`, { status: res.status, loc });
         return null;

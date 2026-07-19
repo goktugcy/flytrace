@@ -37,6 +37,11 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
     | {
         AIRSPACE_PROVIDER?: string;
         OPENAIP_DATASET_PATH?: string;
+        OPENAIP_API_KEY?: string;
+        OPENAIP_BASE_URL?: string;
+        OPENAIP_COUNTRY?: string;
+        OPENAIP_BBOX?: string;
+        OPENAIP_PAGE_LIMIT?: number;
         OPENFLIGHTMAPS_DATASET_PATH?: string;
         AIXM_DATASET_PATH?: string;
       }
@@ -56,6 +61,25 @@ export function createAirspaceRoutes(ctx: AppContext): Hono<AppEnv> {
             ? {
                 openaipDatasetPath:
                   config?.OPENAIP_DATASET_PATH ?? process.env.OPENAIP_DATASET_PATH,
+              }
+            : {}),
+          ...((config?.OPENAIP_API_KEY ?? process.env.OPENAIP_API_KEY)
+            ? { openaipApiKey: config?.OPENAIP_API_KEY ?? process.env.OPENAIP_API_KEY }
+            : {}),
+          ...((config?.OPENAIP_BASE_URL ?? process.env.OPENAIP_BASE_URL)
+            ? { openaipBaseUrl: config?.OPENAIP_BASE_URL ?? process.env.OPENAIP_BASE_URL }
+            : {}),
+          ...((config?.OPENAIP_COUNTRY ?? process.env.OPENAIP_COUNTRY)
+            ? { openaipCountry: config?.OPENAIP_COUNTRY ?? process.env.OPENAIP_COUNTRY }
+            : {}),
+          ...((config?.OPENAIP_BBOX ?? process.env.OPENAIP_BBOX)
+            ? { openaipBbox: config?.OPENAIP_BBOX ?? process.env.OPENAIP_BBOX }
+            : {}),
+          ...((config?.OPENAIP_PAGE_LIMIT ?? process.env.OPENAIP_PAGE_LIMIT)
+            ? {
+                openaipPageLimit: Number(
+                  config?.OPENAIP_PAGE_LIMIT ?? process.env.OPENAIP_PAGE_LIMIT,
+                ),
               }
             : {}),
           ...((config?.OPENFLIGHTMAPS_DATASET_PATH ?? process.env.OPENFLIGHTMAPS_DATASET_PATH)

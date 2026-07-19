@@ -141,6 +141,11 @@ const infraSchema = z.object({
   TIMESERIES_BACKEND: z.enum(['postgres', 'timescale']).default('postgres'),
   // Airspace (Phase 3 §1): provider + optional dataset paths.
   AIRSPACE_PROVIDER: z.string().default('mock'),
+  OPENAIP_API_KEY: z.string().optional(),
+  OPENAIP_BASE_URL: z.string().url().default('https://api.core.openaip.net/api'),
+  OPENAIP_COUNTRY: z.string().optional(),
+  OPENAIP_BBOX: z.string().optional(),
+  OPENAIP_PAGE_LIMIT: z.coerce.number().int().positive().default(1000),
   OPENAIP_DATASET_PATH: z.string().optional(),
   OPENFLIGHTMAPS_DATASET_PATH: z.string().optional(),
   AIXM_DATASET_PATH: z.string().optional(),

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { aixmLimitToFt, normalizeAixmBlock, parseAixmDataset, parsePosList } from './aixm.ts';
-import { normalizeOpenAipRecord, parseOpenAipDataset } from './openaip.ts';
+import { OpenAipAirspaceProvider, normalizeOpenAipRecord, parseOpenAipDataset } from './openaip.ts';
 import { normalizeOfmFeature, parseOfmAltitude, parseOfmDataset } from './openflightmaps.ts';
 
 const polygon = {
@@ -76,6 +76,56 @@ describe('openAIP parser', () => {
   test('un-configured / invalid dataset degrades to empty', () => {
     expect(parseOpenAipDataset(null)).toEqual([]);
     expect(parseOpenAipDataset('{ not json')).toEqual([]);
+  });
+
+  test('fetches paginated API data with the openAIP API key header', async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; apiKey: string | null }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const headers = init?.headers as Record<string, string> | undefined;
+      calls.push({ url, apiKey: headers?.['x-openaip-api-key'] ?? null });
+      const page = new URL(url).searchParams.get('page');
+      return new Response(
+        JSON.stringify({
+          page: Number(page),
+          limit: 1,
+          totalCount: 2,
+          totalPages: 2,
+          ...(page === '1' ? { nextPage: 2 } : {}),
+          items: [
+            {
+              _id: `page-${page}`,
+              name: page === '1' ? 'ISTANBUL CTR' : 'ANKARA TMA',
+              type: page === '1' ? 4 : 7,
+              geometry: polygon,
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const provider = new OpenAipAirspaceProvider(undefined, undefined, undefined, {
+        apiKey: 'open-aip-secret',
+        baseUrl: 'https://api.core.openaip.net/api',
+        country: 'tr',
+        pageLimit: 1,
+      });
+      await provider.load();
+      const airspaces = provider.allAirspaces();
+      expect(airspaces).toHaveLength(2);
+      expect(airspaces.map((a) => a.type)).toEqual(['CTR', 'TMA']);
+      expect(calls).toHaveLength(2);
+      expect(calls.every((c) => c.apiKey === 'open-aip-secret')).toBe(true);
+      const firstUrl = new URL(calls[0]?.url ?? '');
+      expect(firstUrl.searchParams.get('country')).toBe('TR');
+      expect(firstUrl.searchParams.get('limit')).toBe('1');
+      expect(firstUrl.searchParams.getAll('type')).toEqual(['1', '2', '3', '4', '7', '10', '26']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
