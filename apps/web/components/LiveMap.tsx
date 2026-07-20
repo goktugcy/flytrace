@@ -684,6 +684,23 @@ export function LiveMap() {
       };
     };
 
+    // Live trail buffer for the selected flight: seeded from the DB track
+    // (loadTrail) and extended every time the animated marker moves far enough,
+    // so the path draws + grows in real time even when DB history is shallow.
+    let trailCoords: [number, number][] = [];
+    let trailLast: [number, number] | null = null;
+    const TRAIL_MIN_DEG = 0.0008; // ~90 m — append threshold (skips jitter)
+    const TRAIL_MAX = 3000;
+    const renderTrail = () => {
+      const trail = map.getSource('trail') as maplibregl.GeoJSONSource | undefined;
+      if (trail)
+        trail.setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: trailCoords },
+          properties: {},
+        });
+    };
+
     const tick = () => {
       const nowMs = Date.now();
       client.store.pruneStale(nowMs);
@@ -692,6 +709,21 @@ export function LiveMap() {
         rendered.set(f.flightId, next);
       }
       for (const id of rendered.keys()) if (!client.store.get(id)) rendered.delete(id);
+
+      // Extend the selected flight's trail as its marker advances.
+      if (selectedId) {
+        const r = rendered.get(selectedId);
+        if (
+          r &&
+          (!trailLast ||
+            Math.abs(r.lon - trailLast[0]) + Math.abs(r.lat - trailLast[1]) > TRAIL_MIN_DEG)
+        ) {
+          trailCoords.push([r.lon, r.lat]);
+          if (trailCoords.length > TRAIL_MAX) trailCoords.shift();
+          trailLast = [r.lon, r.lat];
+          renderTrail();
+        }
+      }
 
       const src = map.getSource('flights') as maplibregl.GeoJSONSource | undefined;
       if (src) src.setData(featureCollection());
@@ -873,27 +905,33 @@ export function LiveMap() {
     };
 
     const loadTrail = async (flightId: string) => {
+      // Seed the buffer with whatever history the DB has; tick() extends it live.
+      // Fall back to the marker's current position so a brand-new flight (no DB
+      // history yet) still starts a trail instead of showing nothing.
       try {
         const res = await fetch(`${API_BASE}/api/v1/flights/id/${flightId}/track?limit=2000`);
-        if (!res.ok) return;
-        const points = ((await res.json()) as { data: { points: { lat: number; lon: number }[] } })
-          .data.points;
-        const coords = points
+        const points = res.ok
+          ? ((await res.json()) as { data: { points: { lat: number; lon: number }[] } }).data.points
+          : [];
+        if (selectedId !== flightId) return; // selection changed while fetching
+        trailCoords = points
           .filter((p) => p.lat != null && p.lon != null)
           .map((p) => [p.lon, p.lat] as [number, number]);
-        const trail = map.getSource('trail') as maplibregl.GeoJSONSource | undefined;
-        if (trail)
-          trail.setData({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: coords },
-            properties: {},
-          });
       } catch {
-        /* no trail available */
+        if (selectedId !== flightId) return;
+        trailCoords = [];
       }
+      if (trailCoords.length === 0) {
+        const r = rendered.get(flightId);
+        if (r) trailCoords = [[r.lon, r.lat]];
+      }
+      trailLast = trailCoords.length ? (trailCoords[trailCoords.length - 1] ?? null) : null;
+      renderTrail();
     };
 
     const clearTrail = () => {
+      trailCoords = [];
+      trailLast = null;
       const trail = map.getSource('trail') as maplibregl.GeoJSONSource | undefined;
       if (trail) trail.setData({ type: 'FeatureCollection', features: [] });
     };
