@@ -101,11 +101,18 @@ export class ProviderFetchService {
         by: 'flightNumber',
         flightNumber: job.flightNumber,
         date: job.date,
+        callsign: job.callsign ?? null,
+        icao24: job.icao24 ?? null,
       });
       await this.log({
         providerKey: provider.key,
         operation: 'getFlightStatus',
-        request: { flightNumber: job.flightNumber, date: job.date },
+        request: {
+          flightNumber: job.flightNumber,
+          date: job.date,
+          callsign: job.callsign ?? null,
+          icao24: job.icao24 ?? null,
+        },
         latencyMs: this.deps.clock.now() - startedAt,
         success: result !== null,
         error: result === null ? 'no result (miss/rate-limit/circuit)' : null,

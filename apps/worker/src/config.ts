@@ -1,6 +1,9 @@
 import { configSchemas, loadConfig } from '@flytrace/shared';
 import { z } from 'zod';
 
+const emptyToUndefined = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
 const workerSchema = z.object({
   WORKER_GROUP: z.string().default('worker'),
   WORKER_CONSUMER: z.string().default('worker-1'),
@@ -66,6 +69,13 @@ const workerSchema = z.object({
         return z.NEVER;
       }
     }),
+  WORKER_PROVIDER_FETCH_SCOPE: z.enum(['watched', 'all']).default('watched'),
+  AERODATABOX_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  AERODATABOX_MARKETPLACE: z.preprocess(
+    emptyToUndefined,
+    z.enum(['apimarket', 'rapidapi']).default('apimarket'),
+  ),
+  AERODATABOX_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
 });
 
 const workerConfigSchema = configSchemas.base

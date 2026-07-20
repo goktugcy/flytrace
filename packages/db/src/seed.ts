@@ -1,3 +1,4 @@
+import { loadRootEnv } from '@flytrace/shared';
 import { createDb } from './index.ts';
 import { ewktPoint } from './schema/_custom.ts';
 import { airlines, airports, providers, settings } from './schema/index.ts';
@@ -8,6 +9,7 @@ import { airlines, airports, providers, settings } from './schema/index.ts';
  * Usage: `bun run src/seed.ts` (reads DATABASE_URL).
  */
 async function main() {
+  loadRootEnv();
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required to run the seed');
   const { db, close } = createDb({ url, max: 1 });
@@ -120,6 +122,7 @@ async function main() {
   await db
     .insert(providers)
     .values([
+      { key: 'aerodatabox', name: 'AeroDataBox', enabled: false },
       { key: 'thy', name: 'Turkish Airlines', enabled: false },
       { key: 'pegasus', name: 'Pegasus', enabled: false },
       { key: 'ajet', name: 'AJet', enabled: false },

@@ -7,6 +7,7 @@ import {
   createPooledDb,
   createSystemRepo,
   resolvePoolConfig,
+  sql,
 } from '@flytrace/db';
 import {
   ProviderRegistry,
@@ -94,11 +95,16 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   const providerQueue = createProviderFetchQueue(bullConnection);
   const airspaceImportQueue = createAirspaceImportQueue(bullConnection);
 
+  const catalogRepo = createCatalogRepo(db);
+
   // Schedule a provider fetch when a flight of a known airline is detected.
   const scheduler = new ProviderScheduler({
     queue: providerQueue,
-    catalog: createCatalogRepo(db),
+    catalog: catalogRepo,
     logger,
+    ...(config.WORKER_PROVIDER_FETCH_SCOPE === 'watched'
+      ? { shouldFetchFlight: (flightId: string) => hasActiveWatch(db, flightId) }
+      : {}),
   });
 
   // ── Persistence pipeline (stream consumer) ──
@@ -130,7 +136,14 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     logger,
     clock: { now: Date.now, nowIso: () => new Date().toISOString() },
     // Per-provider base URLs (compliance/legal basis; docs/08 §8.9), keyed by provider key.
-    config: { statusUrls: config.WORKER_PROVIDER_STATUS_URLS },
+    config: {
+      statusUrls: config.WORKER_PROVIDER_STATUS_URLS,
+      aerodatabox: {
+        apiKey: config.AERODATABOX_API_KEY,
+        marketplace: config.AERODATABOX_MARKETPLACE,
+        baseUrl: config.AERODATABOX_BASE_URL,
+      },
+    },
   };
   const fixtureIatas = config.WORKER_FIXTURE_PROVIDER_IATAS;
   // Every real provider is registered; only keys in `enabled` are instantiated.
@@ -143,6 +156,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   ];
   const enabled = new Set<string>(config.WORKER_ENABLED_PROVIDERS);
   if (fixtureIatas.length > 0) enabled.add('fixture');
+  if (config.AERODATABOX_API_KEY) enabled.add('aerodatabox');
   const registry = await ProviderRegistry.build(factories, {
     enabled,
     priority: config.WORKER_PROVIDER_PRIORITY,
@@ -235,4 +249,16 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
       await closeDb();
     },
   };
+}
+
+async function hasActiveWatch(db: Database, flightId: string): Promise<boolean> {
+  const rows = (await db.execute(sql`
+    select 1
+    from watchlist_items
+    where flight_id = ${flightId}
+      and active = true
+      and deleted_at is null
+    limit 1
+  `)) as unknown as unknown[];
+  return rows.length > 0;
 }

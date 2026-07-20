@@ -22,6 +22,7 @@ export interface ProviderSchedulerDeps {
   queue: EnqueueQueue;
   catalog: CatalogRepo;
   logger: Logger;
+  shouldFetchFlight?: (flightId: string) => Promise<boolean>;
 }
 
 /**
@@ -47,12 +48,20 @@ export class ProviderScheduler {
 
     const airline = await this.deps.catalog.getAirlineByIcao(parsed.icao);
     if (!airline?.iata) return; // unknown airline → no provider fetch
+    if (this.deps.shouldFetchFlight && !(await this.deps.shouldFetchFlight(p.flightId))) return;
 
     const flightNumber = `${airline.iata}${parsed.number}`;
     const date = p.firstPosition.ts.slice(0, 10);
     await this.deps.queue.add(
       'fetch',
-      { flightId: p.flightId, airlineIata: airline.iata, flightNumber, date },
+      {
+        flightId: p.flightId,
+        airlineIata: airline.iata,
+        flightNumber,
+        date,
+        callsign: p.callsign,
+        icao24: (env.payload as { icao24?: string }).icao24 ?? null,
+      },
       { jobId: `pf-${p.flightId}` }, // one fetch per flight leg (BullMQ jobId: no ':')
     );
     this.deps.logger.debug('scheduled provider fetch', { flightId: p.flightId, flightNumber });

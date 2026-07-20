@@ -142,6 +142,11 @@ Branch protection: all gates green + review required to merge to `main`.
 - **Email:** `EMAIL_PROVIDER=mock|resend|brevo|smtp`. Mock is the default. Resend/Brevo use
   injectable HTTP adapters, SMTP uses an injected transport, and digest sends include stable
   idempotency keys so retry does not intentionally duplicate provider submissions.
+- **Flight operations:** `AERODATABOX_API_KEY` enables the `aerodatabox` provider automatically.
+  `AERODATABOX_MARKETPLACE=apimarket|rapidapi` selects the auth/header style, and
+  `AERODATABOX_BASE_URL` overrides the default marketplace URL. Keep
+  `WORKER_PROVIDER_FETCH_SCOPE=watched` on free tiers; `all` intentionally spends provider quota
+  for every detected airline flight.
 - **Secrets:** `SECRET_PROVIDER=env|infisical|vault`. Remote providers cache values and fall
   back to env when unavailable; missing remote credentials do not break local startup.
 - **Tracing:** `OTEL_TRACES_EXPORTER=noop|console|otlp`. OTLP export is best-effort and never

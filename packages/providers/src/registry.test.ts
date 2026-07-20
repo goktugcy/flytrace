@@ -39,6 +39,15 @@ describe('ProviderRegistry', () => {
     expect(reg.forAirline('TK')?.key).toBe('b'); // higher priority wins
   });
 
+  test('uses a wildcard provider as fallback for unmapped airlines', async () => {
+    const reg = await ProviderRegistry.build([factory('aerodatabox', ['*'])], {
+      enabled: new Set(['aerodatabox']),
+      ctx: fakeProviderContext(),
+    });
+    expect(reg.forAirline('XQ')?.key).toBe('aerodatabox');
+    expect(reg.get('aerodatabox')?.key).toBe('aerodatabox');
+  });
+
   test('reports per-provider health', async () => {
     const reg = await ProviderRegistry.build([factory('thy', ['TK'])], {
       enabled: new Set(['thy']),

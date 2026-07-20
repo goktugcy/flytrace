@@ -41,7 +41,13 @@ export const normalizedFlightStatusSchema = z.object({
 export type NormalizedFlightStatus = z.infer<typeof normalizedFlightStatusSchema>;
 
 export type FlightStatusQuery =
-  | { by: 'flightNumber'; flightNumber: string; date: string }
+  | {
+      by: 'flightNumber';
+      flightNumber: string;
+      date: string;
+      callsign?: string | null;
+      icao24?: string | null;
+    }
   | { by: 'route'; from: string; to: string; date: string };
 
 export interface ProviderCapabilities {
@@ -104,7 +110,9 @@ export interface ProviderFactory {
 }
 
 export function cacheKey(providerKey: string, q: FlightStatusQuery): string {
-  return q.by === 'flightNumber'
-    ? `provider:cache:${providerKey}:fn:${q.flightNumber}:${q.date}`
-    : `provider:cache:${providerKey}:rt:${q.from}-${q.to}:${q.date}`;
+  if (q.by !== 'flightNumber')
+    return `provider:cache:${providerKey}:rt:${q.from}-${q.to}:${q.date}`;
+  const callsign = q.callsign?.trim().toUpperCase() ?? '';
+  const icao24 = q.icao24?.trim().toLowerCase() ?? '';
+  return `provider:cache:${providerKey}:fn:${q.flightNumber}:${q.date}:cs:${callsign}:hex:${icao24}`;
 }

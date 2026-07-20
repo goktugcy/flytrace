@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { createLogger, fixedClock } from '@flytrace/shared';
 import {
+  type AeroDataBoxRaw,
   type AjetRaw,
   type BaRaw,
   type LhRaw,
   type PegasusRaw,
   type ThyRaw,
   concreteProviderFactories,
+  normalizeAeroDataBox,
   normalizeAjet,
   normalizeBa,
   normalizeLufthansa,
@@ -132,6 +134,62 @@ describe('normalizeBa', () => {
   });
 });
 
+describe('normalizeAeroDataBox', () => {
+  const raw: AeroDataBoxRaw = [
+    {
+      number: 'XQ 3',
+      callSign: 'SXS3SB',
+      status: 'Arrived',
+      codeshareStatus: 'IsOperator',
+      lastUpdatedUtc: '2026-07-19T22:10:00Z',
+      departure: {
+        airport: { iata: 'AYT', icao: 'LTAI', name: 'Antalya' },
+        scheduledTime: { utc: '2026-07-19 20:35Z', local: '2026-07-19T23:35:00' },
+        runwayTime: { utc: '2026-07-19 20:52:00Z', local: '2026-07-19T23:52:00' },
+        gate: '211',
+        terminal: '1',
+      },
+      arrival: {
+        airport: { iata: 'IST', icao: 'LTFM', name: 'Istanbul' },
+        scheduledTime: { utc: '2026-07-19T21:45:00Z', local: '2026-07-20T00:45:00' },
+        revisedTime: { utc: '2026-07-19T21:58:00Z', local: '2026-07-20T00:58:00' },
+        gate: 'A4',
+        terminal: 'D',
+        baggageBelt: '12',
+      },
+      airline: { iata: 'XQ', icao: 'SXS', name: 'SunExpress' },
+      aircraft: { reg: 'TC-SOZ', model: 'Boeing 737-800' },
+      isCargo: false,
+    },
+  ];
+
+  test('maps AeroDataBox operations fields from callsign result', () => {
+    const n = normalizeAeroDataBox(
+      raw,
+      {
+        by: 'flightNumber',
+        flightNumber: 'XQ3',
+        date: '2026-07-19',
+        callsign: 'SXS3SB',
+        icao24: '4bce43',
+      },
+      FETCHED,
+    );
+    expect(n?.status).toBe('landed');
+    expect(n?.flightNumber).toBe('XQ3');
+    expect(n?.airlineIata).toBe('XQ');
+    expect(n?.origin).toBe('AYT');
+    expect(n?.destination).toBe('IST');
+    expect(n?.gate).toBe('A4');
+    expect(n?.terminal).toBe('D');
+    expect(n?.baggageBelt).toBe('12');
+    expect(n?.scheduledDeparture).toBe('2026-07-19T20:35:00Z');
+    expect(n?.actualDeparture).toBe('2026-07-19T20:52:00Z');
+    expect(n?.actualArrival).toBe('2026-07-19T21:58:00Z');
+    expect(n?.registration).toBe('TC-SOZ');
+  });
+});
+
 // ── Contract: registration list + through-the-base fetch/normalize ──
 
 function ctxWith(raw: unknown, config: Record<string, unknown>): ProviderContext {
@@ -148,13 +206,13 @@ function ctxWith(raw: unknown, config: Record<string, unknown>): ProviderContext
 describe('concrete provider factories', () => {
   test('register all concrete providers with their IATA codes', () => {
     const keys = concreteProviderFactories().map((f) => f.key);
-    expect(keys).toEqual(['thy', 'pegasus', 'ajet', 'lufthansa', 'ba']);
+    expect(keys).toEqual(['aerodatabox', 'thy', 'pegasus', 'ajet', 'lufthansa', 'ba']);
     const iatas = concreteProviderFactories().flatMap((f) => f.airlineIata);
-    expect(iatas).toEqual(['TK', 'PC', 'VF', 'LH', 'BA']);
+    expect(iatas).toEqual(['*', 'TK', 'PC', 'VF', 'LH', 'BA']);
   });
 
   test('THY fetches + normalizes through the base pipeline when configured', async () => {
-    const factory = concreteProviderFactories()[0];
+    const factory = concreteProviderFactories()[1];
     if (!factory) throw new Error('missing factory');
     const p: FlightProvider = factory.create();
     await p.init(
@@ -175,7 +233,7 @@ describe('concrete provider factories', () => {
   });
 
   test('is inert (null) when statusUrl is not configured', async () => {
-    const factory = concreteProviderFactories()[1]; // pegasus
+    const factory = concreteProviderFactories()[2]; // pegasus
     if (!factory) throw new Error('missing factory');
     const p = factory.create();
     await p.init(ctxWith({}, {})); // no statusUrl → fetchRaw throws → base returns null
@@ -183,6 +241,19 @@ describe('concrete provider factories', () => {
       by: 'flightNumber',
       flightNumber: 'PC1',
       date: '2023-11-14',
+    });
+    expect(res).toBeNull();
+  });
+
+  test('AeroDataBox treats a null upstream response as a miss', async () => {
+    const factory = concreteProviderFactories()[0];
+    if (!factory) throw new Error('missing factory');
+    const p = factory.create();
+    await p.init(ctxWith(null, { aerodatabox: { apiKey: 'test-key' } }));
+    const res = await p.getFlightStatus({
+      by: 'flightNumber',
+      flightNumber: 'XQ75',
+      date: '2026-07-19',
     });
     expect(res).toBeNull();
   });

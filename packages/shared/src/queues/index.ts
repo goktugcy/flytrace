@@ -26,5 +26,7 @@ export const providerFetchJobSchema = z.object({
   airlineIata: z.string(),
   flightNumber: z.string(),
   date: z.string(), // YYYY-MM-DD
+  callsign: z.string().nullable().optional(),
+  icao24: z.string().nullable().optional(),
 });
 export type ProviderFetchJob = z.infer<typeof providerFetchJobSchema>;

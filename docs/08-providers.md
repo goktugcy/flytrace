@@ -56,7 +56,7 @@ enrich.
 
 ```
 interface FlightProvider {
-  readonly key: string;            // "thy", "pegasus", "ajet", "lufthansa", "ba"
+  readonly key: string;            // "aerodatabox", "thy", "pegasus", "ajet", "lufthansa", "ba"
   readonly airlineIata: string[];  // which airlines this provider covers, e.g. ["TK"]
   readonly capabilities: ProviderCapabilities; // { status, gate, baggage, schedule }
 
@@ -72,7 +72,7 @@ interface FlightProvider {
 }
 
 type FlightStatusQuery =
-  | { by: "flightNumber"; flightNumber: string; date: string }
+  | { by: "flightNumber"; flightNumber: string; date: string; callsign?: string; icao24?: string }
   | { by: "route"; from: string; to: string; date: string };
 
 type NormalizedFlightStatus = {
@@ -87,8 +87,9 @@ type NormalizedFlightStatus = {
 };
 ```
 
-- **Concrete providers** (`THYProvider`, `PegasusProvider`, `AJetProvider`, `LufthansaProvider`,
-  `BritishAirwaysProvider`) implement only the *fetch + map* logic. **All cross-cutting
+- **Concrete providers** (`AeroDataBoxProvider`, `THYProvider`, `PegasusProvider`,
+  `AJetProvider`, `LufthansaProvider`, `BritishAirwaysProvider`) implement only the *fetch + map*
+  logic. **All cross-cutting
   behavior lives in a `BaseProvider`** they extend: HTTP client with timeout, retry/backoff,
   rate-limit token bucket, cache read-through, structured logging to `provider_logs`, and error
   wrapping. A provider author writes ~two methods: `fetchRaw()` and `normalize(raw)`.
@@ -127,6 +128,11 @@ Registry build:
 Conflict rule: if two providers claim the same IATA, config `priority` decides; ties → log +
 first-registered wins, surfaced in admin.
 
+Wildcard providers may claim `airlineIata:["*"]`; the registry uses them as a fallback for
+airlines without a more specific provider. The current global operations fallback is
+`AeroDataBoxProvider`, enabled when `AERODATABOX_API_KEY` is configured or `aerodatabox` is listed
+in `WORKER_ENABLED_PROVIDERS`.
+
 ## 8.7 Provider health monitoring
 
 - **Per-provider circuit breaker** (closed → open → half-open): opens after `N` consecutive
@@ -150,9 +156,12 @@ first-registered wins, surfaced in admin.
   replicas share one budget; requests beyond budget queue or serve stale-cache.
 - **Coalescing:** concurrent requests for the same `cache_key` are de-duplicated (single-flight
   lock) so a spike doesn't multiply upstream calls.
-- **Scheduling:** provider fetches are **BullMQ repeatable jobs** for actively-watched flights
-  (cadence scales with flight phase: sparse when far out, frequent near dep/arr), plus on-demand
-  fetches when a flight page is opened (debounced, cache-first).
+- **Scheduling:** provider fetches are **BullMQ jobs** for actively-watched flights by default
+  (`WORKER_PROVIDER_FETCH_SCOPE=watched`) so free-tier provider quota is not spent on every global
+  ADS-B detection. `WORKER_PROVIDER_FETCH_SCOPE=all` enables all detected airline flights and
+  should only be used with a paid quota/budget. Watch creation also enqueues an immediate
+  cache-first fetch so the flight detail page can populate operations fields without waiting for a
+  later detection cycle.
 
 ## 8.9 Compliance & politeness (hard requirements)
 
@@ -168,6 +177,10 @@ first-registered wins, surfaced in admin.
 
 ## 8.10 Example provider skeletons (design, not implementation)
 
+- **`AeroDataBoxProvider`** (`key:"aerodatabox"`, `airlineIata:["*"]`): official marketplace API
+  adapter for global operations status. It searches by ADS-B callsign first, then ICAO24, then
+  flight number; maps status/gate/terminal/baggage/scheduled/estimated/actual times when the
+  upstream response includes them. Capabilities: `{status,gate,baggage,schedule}`.
 - **`THYProvider`** (`key:"thy"`, `airlineIata:["TK"]`): queries Turkish Airlines' public flight
   status by `flightNumber+date`; maps their status vocabulary → canonical enum; extracts gate/
   terminal/times. Capabilities: `{status,gate,schedule}`.

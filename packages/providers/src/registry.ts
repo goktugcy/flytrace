@@ -16,6 +16,7 @@ export interface RegistryBuildOptions {
 export class ProviderRegistry {
   private readonly byKey = new Map<string, FlightProvider>();
   private readonly byAirline = new Map<string, FlightProvider>();
+  private fallback: FlightProvider | null = null;
 
   private constructor() {}
 
@@ -30,6 +31,10 @@ export class ProviderRegistry {
       await provider.init(opts.ctx);
       reg.byKey.set(provider.key, provider);
       for (const iata of provider.airlineIata) {
+        if (iata === '*') {
+          reg.fallback = provider;
+          continue;
+        }
         reg.assignAirline(iata.toUpperCase(), provider, opts);
       }
     }
@@ -56,7 +61,7 @@ export class ProviderRegistry {
   }
 
   forAirline(iata: string): FlightProvider | null {
-    return this.byAirline.get(iata.toUpperCase()) ?? null;
+    return this.byAirline.get(iata.toUpperCase()) ?? this.fallback;
   }
 
   get(key: string): FlightProvider | null {

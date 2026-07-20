@@ -77,8 +77,22 @@ describe('ProviderScheduler', () => {
       airlineIata: 'TK',
       flightNumber: 'TK1',
       date: '2023-11-14',
+      callsign: 'THY1TG',
+      icao24: '4bb1a2',
     });
     expect(queue.added[0]?.opts?.jobId).toBe(`pf-${FLIGHT}`);
+  });
+
+  test('can restrict fetches to watched flights', async () => {
+    const queue = new FakeQueue();
+    const scheduler = new ProviderScheduler({
+      queue,
+      catalog: catalog({ THY: 'TK' }),
+      logger: createLogger({ level: 'error', base: {} }),
+      shouldFetchFlight: async () => false,
+    });
+    await scheduler.onEvent(detected('THY1TG'));
+    expect(queue.added).toHaveLength(0);
   });
 
   test('skips unknown airlines, missing callsigns, and non-detection events', async () => {

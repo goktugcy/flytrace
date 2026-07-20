@@ -1,4 +1,4 @@
-import { createFlightReadRepo, createNotifyRepo } from '@flytrace/db';
+import { createCatalogRepo, createFlightReadRepo, createNotifyRepo } from '@flytrace/db';
 import { HttpEmailTransport, WebPushChannel } from '@flytrace/notifications';
 import { AppError, DB_EVENT_TYPES } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
@@ -42,6 +42,7 @@ const emailVerifySchema = z.object({ token: z.string().min(1) });
 export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
   const repo = createNotifyRepo(ctx.db);
   const flights = createFlightReadRepo(ctx.db);
+  const catalog = createCatalogRepo(ctx.db);
   const app = new Hono<AppEnv>();
   const ok = (c: Context<AppEnv>, data: unknown, status = 200) =>
     c.json({ data, meta: { requestId: c.get('requestId') } }, status as 200);
@@ -72,6 +73,12 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
       match,
       eventTypes: parsed.data.eventTypes,
       channels: parsed.data.channels,
+    });
+    await enqueueProviderFetch(parsed.data.flightId, created.id).catch((err) => {
+      ctx.logger.warn('watch provider fetch enqueue failed', {
+        flightId: parsed.data.flightId,
+        err: String(err),
+      });
     });
     return ok(c, { id: created.id }, 201);
   });
@@ -232,4 +239,38 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     const icao24 = latest?.icao24?.trim().toLowerCase();
     return icao24 ? { ...base, icao24 } : base;
   }
+
+  async function enqueueProviderFetch(flightId: string, watchId: string): Promise<void> {
+    if (!ctx.providerQueue) return;
+    const flight = await flights.getFlightById(flightId);
+    if (!flight?.callsign) return;
+
+    const parsed = parseCallsign(flight.callsign);
+    if (!parsed) return;
+
+    const airline = await catalog.getAirlineByIcao(parsed.icao);
+    if (!airline?.iata) return;
+
+    const latest = await flights.getLatestPosition(flightId).catch(() => null);
+    await ctx.providerQueue.add(
+      'fetch',
+      {
+        flightId,
+        airlineIata: airline.iata,
+        flightNumber: `${airline.iata}${parsed.number}`,
+        date: flight.flightDate,
+        callsign: flight.callsign,
+        icao24: latest?.icao24 ?? null,
+      },
+      { jobId: `pf-watch-${watchId}` },
+    );
+  }
+}
+
+function parseCallsign(callsign: string): { icao: string; number: string } | null {
+  const match = callsign
+    .trim()
+    .toUpperCase()
+    .match(/^([A-Z]{3})(\d+)/);
+  return match ? { icao: match[1] as string, number: match[2] as string } : null;
 }

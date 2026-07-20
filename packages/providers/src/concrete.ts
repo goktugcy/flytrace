@@ -1,3 +1,4 @@
+import { aerodataboxProviderFactory } from './aerodatabox/provider.ts';
 import { ajetProviderFactory } from './ajet/provider.ts';
 import { baProviderFactory } from './ba/provider.ts';
 import { lufthansaProviderFactory } from './lufthansa/provider.ts';
@@ -13,6 +14,7 @@ import type { ProviderFactory } from './types.ts';
  */
 export function concreteProviderFactories(): ProviderFactory[] {
   return [
+    aerodataboxProviderFactory(),
     thyProviderFactory(),
     pegasusProviderFactory(),
     ajetProviderFactory(),
@@ -22,6 +24,7 @@ export function concreteProviderFactories(): ProviderFactory[] {
 }
 
 export * from './thy/provider.ts';
+export * from './aerodatabox/provider.ts';
 export * from './pegasus/provider.ts';
 export * from './ajet/provider.ts';
 export * from './lufthansa/provider.ts';
