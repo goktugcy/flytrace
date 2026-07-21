@@ -7,13 +7,15 @@ import { createAirspaceRoutes } from './routes.ts';
 
 /**
  * Mount the airspace routes on a bare app with the same request-id middleware +
- * error mapping the real app applies, so AppError → its HTTP status. The route
- * defaults to the in-repo mock provider (no AIRSPACE_PROVIDER env), so this test
- * runs fully offline.
+ * error mapping the real app applies, so AppError → its HTTP status. The ctx
+ * pins the in-repo mock provider so the suite is hermetic — independent of any
+ * AIRSPACE_PROVIDER value in the developer's .env (e.g. `db` after a real
+ * import) that would otherwise leak in and need a live Postgres.
  */
 function makeApp() {
   const ctx = {
     logger: createLogger({ level: 'error', base: {} }),
+    config: { AIRSPACE_PROVIDER: 'mock' },
   } as unknown as AppContext;
 
   const app = new Hono<AppEnv>();
