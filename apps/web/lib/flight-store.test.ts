@@ -185,6 +185,32 @@ describe('applyServerMessage', () => {
     expect(s.get('F1')).toBeDefined();
   });
 
+  test('keeps supplemental ADS-B rows when tracker viewport snapshots reconcile', () => {
+    let now = Date.parse('2026-01-01T00:00:00.000Z');
+    const s = new FlightStore({ now: () => now });
+    s.applySnapshotState({
+      flightId: 'adsb:abc123',
+      icao24: 'abc123',
+      lat: 41,
+      lon: 29,
+      altFt: 10_000,
+      gsKt: 250,
+      lastTs: new Date(now).toISOString(),
+    });
+
+    now += 1000;
+    applyServerMessage(s, {
+      t: 'snapshot',
+      channel: 'viewport',
+      snapshotId: 'tracker-only-snapshot',
+      generatedAt: new Date(now).toISOString(),
+      scope: { kind: 'viewport', bbox: [28, 40, 33, 42] },
+      data: [],
+    });
+
+    expect(s.get('adsb:abc123')).toBeDefined();
+  });
+
   test('applies a PositionUpdated event and removes on FlightEnded', () => {
     const s = new FlightStore();
     applyServerMessage(s, {

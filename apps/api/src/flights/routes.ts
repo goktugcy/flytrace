@@ -5,6 +5,7 @@ import {
   createFlightReadRepo,
   createFlightRepo,
   createFlightStatusRepo,
+  sql,
 } from '@flytrace/db';
 import { AppError, type FlightDetail, type LiveFlight, uuidv7 } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
@@ -149,6 +150,47 @@ const promoteLiveSchema = z
   .refine((v) => v.snapshot || v.icao24 || v.flightId?.startsWith('adsb:'), {
     message: 'snapshot, icao24 or adsb flightId is required',
   });
+const liveTrackSeedSchema = z.object({
+  flights: z
+    .array(
+      z.object({
+        flightId: z.string().min(1),
+        icao24: z
+          .string()
+          .regex(/^[0-9a-fA-F]{6}$/)
+          .optional(),
+      }),
+    )
+    .max(250),
+  limitPerFlight: z.coerce.number().int().positive().max(240).default(90),
+  sinceMinutes: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(24 * 60)
+    .default(12 * 60),
+});
+
+interface LiveTrackSeedRow {
+  requestKey: string;
+  transientFlightId: string | null;
+  flightId: string;
+  ts: string;
+  icao24: string | null;
+  lat: number | null;
+  lon: number | null;
+  altitudeFt: number | null;
+  headingDeg: number | null;
+}
+
+interface LiveTrackSeedPoint {
+  ts: string;
+  icao24: string | null;
+  lat: number | null;
+  lon: number | null;
+  altitudeFt: number | null;
+  headingDeg: number | null;
+}
 
 /**
  * Public flight read endpoints (docs/11 §11.6). Live reads come from Redis hot
@@ -288,6 +330,117 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
       viewport: lookup
         ? { center: lookup.center, radiusNm: lookup.radiusNm, clipped: lookup.clipped }
         : null,
+    });
+  });
+
+  app.post('/flights/live/tracks', async (c) => {
+    const parsed = liveTrackSeedSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      throw new AppError('VALIDATION_ERROR', 'invalid track seed request', {
+        details: parsed.error.issues,
+      });
+
+    const flightIds = [
+      ...new Set(
+        parsed.data.flights
+          .map((f) => f.flightId.trim())
+          .filter((id) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id),
+          ),
+      ),
+    ];
+    const icao24s = [
+      ...new Set(
+        parsed.data.flights
+          .flatMap((f) => [f.icao24, f.flightId.startsWith('adsb:') ? f.flightId.slice(5) : null])
+          .filter((hex): hex is string => typeof hex === 'string' && /^[0-9a-fA-F]{6}$/.test(hex))
+          .map((hex) => hex.toLowerCase()),
+      ),
+    ];
+    if (flightIds.length === 0 && icao24s.length === 0) return ok(c, { tracks: [] }, true);
+
+    const since = new Date(ctx.clock.now() - parsed.data.sinceMinutes * 60_000);
+    const flightIdCsv = flightIds.join(',');
+    const icao24Csv = icao24s.join(',');
+    const rows = (await ctx.db.execute(sql`
+      with candidate_flights as (
+        select f.id as flight_id,
+               f.id::text as request_key,
+               null::text as transient_flight_id
+        from flights f
+        where f.id = any(string_to_array(nullif(${flightIdCsv}, ''), ',')::uuid[])
+
+        union
+
+        select latest.flight_id, latest.request_key, latest.transient_flight_id
+        from (
+          select distinct on (lower(fp.icao24::text))
+                 fp.flight_id,
+                 ('adsb:' || lower(fp.icao24::text)) as request_key,
+                 ('adsb:' || lower(fp.icao24::text)) as transient_flight_id
+          from flight_positions fp
+          where lower(fp.icao24::text) = any(string_to_array(nullif(${icao24Csv}, ''), ',')::text[])
+            and fp.ts >= ${since.toISOString()}::timestamptz
+          order by lower(fp.icao24::text), fp.ts desc
+        ) latest
+      ),
+      ranked as (
+        select c.request_key as "requestKey",
+               c.transient_flight_id as "transientFlightId",
+               fp.flight_id as "flightId",
+               fp.ts,
+               fp.icao24,
+               ST_Y(fp.location::geometry) as lat,
+               ST_X(fp.location::geometry) as lon,
+               fp.altitude_ft as "altitudeFt",
+               fp.heading_deg as "headingDeg",
+               row_number() over (partition by c.request_key order by fp.ts desc) as rn
+        from candidate_flights c
+        join flight_positions fp on fp.flight_id = c.flight_id
+        where fp.ts >= ${since.toISOString()}::timestamptz
+      )
+      select "requestKey", "transientFlightId", "flightId", ts, icao24, lat, lon,
+             "altitudeFt", "headingDeg"
+      from ranked
+      where rn <= ${parsed.data.limitPerFlight}
+      order by "requestKey", ts asc
+    `)) as unknown as LiveTrackSeedRow[];
+
+    const byRequest = new Map<
+      string,
+      { persistedFlightId: string; transientFlightId: string | null; points: LiveTrackSeedPoint[] }
+    >();
+    for (const row of rows) {
+      const current =
+        byRequest.get(row.requestKey) ??
+        ({
+          persistedFlightId: row.flightId,
+          transientFlightId: row.transientFlightId,
+          points: [],
+        } satisfies {
+          persistedFlightId: string;
+          transientFlightId: string | null;
+          points: LiveTrackSeedPoint[];
+        });
+      current.points.push({
+        ts: row.ts,
+        icao24: row.icao24,
+        lat: row.lat,
+        lon: row.lon,
+        altitudeFt: row.altitudeFt,
+        headingDeg: row.headingDeg,
+      });
+      byRequest.set(row.requestKey, current);
+    }
+
+    return ok(c, {
+      tracks: [...byRequest.entries()].map(([flightId, track]) => ({
+        flightId,
+        persistedFlightId: track.persistedFlightId,
+        transientFlightId: track.transientFlightId,
+        points: track.points,
+        count: track.points.length,
+      })),
     });
   });
 
@@ -439,10 +592,24 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
 
   app.get('/flights/id/:flightId/track', async (c) => {
     const flightId = decodePathParam(c.req.param('flightId'));
-    if (flightId.startsWith('adsb:')) return ok(c, { flightId, points: [], count: 0 }, true);
+    const limit = Math.min(Number(c.req.query('limit') ?? 5000) || 5000, 10_000);
+    if (flightId.startsWith('adsb:')) {
+      const icao24 = flightId.slice('adsb:'.length).trim().toLowerCase();
+      const since = new Date(ctx.clock.now() - 24 * 60 * 60 * 1000);
+      const recent = /^[0-9a-f]{6}$/.test(icao24)
+        ? await read.getRecentFlightByIcao24(icao24, since)
+        : null;
+      if (!recent) return ok(c, { flightId, points: [], count: 0 }, true);
+      const points = await read.getTrack(recent.id, limit);
+      return ok(c, {
+        flightId: recent.id,
+        transientFlightId: flightId,
+        points,
+        count: points.length,
+      });
+    }
     const flight = await read.getFlightById(flightId);
     if (!flight) throw new AppError('FLIGHT_NOT_FOUND', 'flight not found');
-    const limit = Math.min(Number(c.req.query('limit') ?? 5000) || 5000, 10_000);
     const points = await read.getTrack(flight.id, limit);
     return ok(c, { flightId: flight.id, points, count: points.length });
   });

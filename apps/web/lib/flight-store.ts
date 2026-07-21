@@ -372,6 +372,10 @@ export class FlightStore {
     let changed = false;
     for (const [flightId, sample] of this.map) {
       if (incoming.has(flightId)) continue;
+      // `adsb:` rows are supplied by the supplemental global viewport lookup,
+      // not by the tracker hot-state snapshot. Keep them until their normal
+      // stale lifecycle expires instead of flickering on every WS resubscribe.
+      if (flightId.startsWith('adsb:')) continue;
       if (!inBbox(sample.lon, sample.lat, bbox)) continue;
       if (sample.receivedAtMs > generatedAtMs) continue;
       this.map.delete(flightId);

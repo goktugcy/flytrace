@@ -119,6 +119,20 @@ describe('flight read routes', () => {
     }
   });
 
+  test('POST /flights/live/tracks returns empty when no DB history exists', async () => {
+    const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/live/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        flights: [{ flightId: 'adsb:4bc854', icao24: '4bc854' }],
+        limitPerFlight: 10,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { tracks: unknown[] } };
+    expect(body.data.tracks).toEqual([]);
+  });
+
   test('GET /flights/live rejects a malformed bbox', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request(
       '/api/v1/flights/live?bbox=1,2,3',
@@ -200,7 +214,7 @@ describe('flight read routes', () => {
     }
   });
 
-  test('GET /flights/id/adsb:<hex>/track returns an empty transient track', async () => {
+  test('GET /flights/id/adsb:<hex>/track returns empty when there is no persisted match', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request(
       '/api/v1/flights/id/adsb%3A4bc854/track',
     );

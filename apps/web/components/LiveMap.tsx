@@ -24,6 +24,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { type RenderedFlight, stepRenderedFlight } from '../lib/flight-motion';
 import {
+  CLIENT_FLIGHT_LIFECYCLE,
   type FlightQualityState,
   type FlightSample,
   classifyFlightSample,
@@ -286,6 +287,17 @@ const EMPTY_FEATURES: GeoJSON.FeatureCollection = { type: 'FeatureCollection', f
 const AIRPORT_POLL_MS = 12_000;
 const VIEWPORT_LIVE_MIN_ZOOM = 3;
 const VIEWPORT_LIVE_POLL_MS = 5_000;
+const FLIGHT_FRAME_IDLE_MS = 100;
+const FLIGHT_FRAME_MOVING_MS = 180;
+const FLIGHT_MAINTENANCE_MS = 1_000;
+const MAP_FLIGHT_LIFECYCLE = {
+  ...CLIENT_FLIGHT_LIFECYCLE,
+  removeAfterMs: 5 * 60_000,
+};
+const LIVE_TRAIL_MIN_DEG = 0.00065; // ~70 m — skips ADS-B jitter.
+const LIVE_TRAIL_RESET_DEG = 8; // Teleport / reused id guard.
+const LIVE_TRAIL_MAX_POINTS = 120;
+const LIVE_TRAIL_RETENTION_MS = 45 * 60_000;
 
 const AIRSPACE_FILL_COLOR: maplibregl.ExpressionSpecification = [
   'match',
@@ -382,6 +394,29 @@ interface AirportFeatureCollection extends GeoJSON.FeatureCollection {
   count?: number;
 }
 
+interface LiveTrailState {
+  coords: [number, number][];
+  last: [number, number] | null;
+  lastTsMs: number;
+  lastSeenMs: number;
+  quality: FlightQualityState;
+}
+
+interface LiveTrackSeed {
+  flightId: string;
+  persistedFlightId: string;
+  transientFlightId: string | null;
+  points: {
+    ts: string;
+    icao24: string | null;
+    lat: number | null;
+    lon: number | null;
+    altitudeFt: number | null;
+    headingDeg: number | null;
+  }[];
+  count: number;
+}
+
 /** Great-circle polyline between two [lon,lat] points (curved route line). */
 function greatCircle(from: [number, number], to: [number, number], n = 64): [number, number][] {
   const rad = Math.PI / 180;
@@ -471,6 +506,13 @@ function liveFlightToSnapshot(f: LiveFlight) {
     lastAcceptedAt: f.receivedAt,
     lastTs: f.ts,
   };
+}
+
+function parseTrackTimeMs(raw: string): number | null {
+  const withT = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const normalized = withT.replace(/([+-]\d{2})$/, '$1:00');
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 function liveDetailFromSelection(sel: SelInfo): FlightDetail {
@@ -625,6 +667,7 @@ export function LiveMap() {
       'world',
       'grid',
       'flights',
+      'live-trails',
       'trail',
       'selected',
       'route',
@@ -643,6 +686,12 @@ export function LiveMap() {
     let viewportLiveTimer: ReturnType<typeof setTimeout> | null = null;
     let viewportLiveInterval: ReturnType<typeof setInterval> | null = null;
     let viewportLiveAbort: AbortController | null = null;
+    const liveTrails = new Map<string, LiveTrailState>();
+    const liveTrailSeeded = new Set<string>();
+    let liveTrailsDirty = false;
+    let liveTrailsLastRender = 0;
+    let flightFrameLastRender = 0;
+    let flightMaintenanceLastRun = 0;
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -684,6 +733,167 @@ export function LiveMap() {
       };
     };
 
+    const renderLiveTrails = (force = false) => {
+      const now = Date.now();
+      if (!force && (!liveTrailsDirty || now - liveTrailsLastRender < 220)) return;
+      const src = map.getSource('live-trails') as maplibregl.GeoJSONSource | undefined;
+      if (!src) return;
+      liveTrailsDirty = false;
+      liveTrailsLastRender = now;
+      src.setData({
+        type: 'FeatureCollection',
+        features: [...liveTrails.entries()]
+          .filter(([flightId]) => flightId === selectedId)
+          .filter(([, trail]) => trail.coords.length >= 2)
+          .map(([flightId, trail]) => ({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: trail.coords },
+            properties: {
+              flightId,
+              selected: flightId === selectedId ? 1 : 0,
+              quality: trail.quality,
+            },
+          })),
+      });
+    };
+
+    const updateLiveTrail = (f: FlightSample, nowMs: number) => {
+      let trail = liveTrails.get(f.flightId);
+      const point: [number, number] = [f.lon, f.lat];
+      if (!trail) {
+        trail = {
+          coords: [point],
+          last: point,
+          lastTsMs: f.tsMs,
+          lastSeenMs: nowMs,
+          quality: f.qualityState,
+        };
+        liveTrails.set(f.flightId, trail);
+        liveTrailsDirty = true;
+        return;
+      }
+
+      trail.lastSeenMs = nowMs;
+      trail.quality = f.qualityState;
+      if (f.tsMs < trail.lastTsMs) return;
+      const d = trail.last
+        ? Math.abs(point[0] - trail.last[0]) + Math.abs(point[1] - trail.last[1])
+        : 0;
+      if (d > LIVE_TRAIL_RESET_DEG) {
+        trail.coords = [point];
+        trail.last = point;
+        trail.lastTsMs = f.tsMs;
+        liveTrailsDirty = true;
+        return;
+      }
+      if (f.tsMs === trail.lastTsMs && d < LIVE_TRAIL_MIN_DEG) return;
+      if (d < LIVE_TRAIL_MIN_DEG) {
+        trail.lastTsMs = Math.max(trail.lastTsMs, f.tsMs);
+        return;
+      }
+      trail.coords.push(point);
+      if (trail.coords.length > LIVE_TRAIL_MAX_POINTS) {
+        trail.coords.splice(0, trail.coords.length - LIVE_TRAIL_MAX_POINTS);
+      }
+      trail.last = point;
+      trail.lastTsMs = f.tsMs;
+      liveTrailsDirty = true;
+    };
+
+    const pruneLiveTrails = (nowMs: number) => {
+      const liveIds = new Set(client.store.list().map((f) => f.flightId));
+      for (const [flightId, trail] of liveTrails) {
+        if (liveIds.has(flightId)) continue;
+        if (nowMs - trail.lastSeenMs > LIVE_TRAIL_RETENTION_MS) {
+          liveTrails.delete(flightId);
+          liveTrailsDirty = true;
+        }
+      }
+    };
+
+    const seedLiveTrailHistory = async (samples: FlightSample[] = client.store.list()) => {
+      const candidates = samples
+        .filter((f) => !liveTrailSeeded.has(f.flightId))
+        .filter((f) => /^[0-9a-f]{6}$/i.test(f.icao24) || !f.flightId.startsWith('adsb:'))
+        .slice(0, 160);
+      if (candidates.length === 0) return;
+      for (const f of candidates) liveTrailSeeded.add(f.flightId);
+
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/flights/live/tracks`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            flights: candidates.map((f) => ({
+              flightId: f.flightId,
+              icao24: f.flightId.startsWith('adsb:') ? f.icao24 : undefined,
+            })),
+            limitPerFlight: LIVE_TRAIL_MAX_POINTS,
+            sinceMinutes: 12 * 60,
+          }),
+        });
+        if (!res.ok) throw new Error(`track seed ${res.status}`);
+        const tracks = ((await res.json()) as { data?: { tracks?: LiveTrackSeed[] } }).data?.tracks;
+        if (!Array.isArray(tracks)) return;
+
+        const nowMs = Date.now();
+        for (const track of tracks) {
+          const live = client.store.get(track.flightId);
+          const points = track.points
+            .filter((p) => p.lat != null && p.lon != null)
+            .map((p) => ({
+              coord: [p.lon as number, p.lat as number] as [number, number],
+              tsMs: parseTrackTimeMs(p.ts),
+            }))
+            .filter((p) => p.tsMs != null) as { coord: [number, number]; tsMs: number }[];
+          if (points.length < 2) continue;
+
+          const coords: [number, number][] = [];
+          let contiguous = true;
+          const appendCoord = (coord: [number, number]) => {
+            const last = coords[coords.length - 1];
+            if (!last) {
+              coords.push(coord);
+              return;
+            }
+            const d = Math.abs(coord[0] - last[0]) + Math.abs(coord[1] - last[1]);
+            if (d > LIVE_TRAIL_RESET_DEG) {
+              contiguous = false;
+              return;
+            }
+            if (d > LIVE_TRAIL_MIN_DEG) coords.push(coord);
+          };
+
+          for (const point of points) appendCoord(point.coord);
+
+          const existing = liveTrails.get(track.flightId);
+          if (contiguous && existing?.coords.length) {
+            for (const coord of existing.coords) appendCoord(coord);
+          } else if (contiguous && live) {
+            appendCoord([live.lon, live.lat]);
+          }
+          if (!contiguous || coords.length < 2) continue;
+
+          const lastPoint = points[points.length - 1];
+          const trimmed =
+            coords.length > LIVE_TRAIL_MAX_POINTS
+              ? coords.slice(coords.length - LIVE_TRAIL_MAX_POINTS)
+              : coords;
+          liveTrails.set(track.flightId, {
+            coords: trimmed,
+            last: trimmed[trimmed.length - 1] ?? null,
+            lastTsMs: live?.tsMs ?? lastPoint.tsMs,
+            lastSeenMs: nowMs,
+            quality: live?.qualityState ?? 'live',
+          });
+          liveTrailsDirty = true;
+        }
+        renderLiveTrails(true);
+      } catch {
+        for (const f of candidates) liveTrailSeeded.delete(f.flightId);
+      }
+    };
+
     // Live trail buffer for the selected flight: seeded from the DB track
     // (loadTrail) and extended every time the animated marker moves far enough,
     // so the path draws + grows in real time even when DB history is shallow.
@@ -703,8 +913,20 @@ export function LiveMap() {
 
     const tick = () => {
       const nowMs = Date.now();
-      client.store.pruneStale(nowMs);
+      if (nowMs - flightMaintenanceLastRun >= FLIGHT_MAINTENANCE_MS) {
+        client.store.pruneStale(nowMs, MAP_FLIGHT_LIFECYCLE);
+        pruneLiveTrails(nowMs);
+        flightMaintenanceLastRun = nowMs;
+      }
+
+      const frameInterval = map.isMoving() ? FLIGHT_FRAME_MOVING_MS : FLIGHT_FRAME_IDLE_MS;
+      if (nowMs - flightFrameLastRender < frameInterval) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
       for (const f of client.store.list()) {
+        updateLiveTrail(f, nowMs);
         const next = stepRenderedFlight(rendered.get(f.flightId), f, nowMs);
         rendered.set(f.flightId, next);
       }
@@ -727,6 +949,7 @@ export function LiveMap() {
 
       const src = map.getSource('flights') as maplibregl.GeoJSONSource | undefined;
       if (src) src.setData(featureCollection());
+      renderLiveTrails();
 
       const selSrc = map.getSource('selected') as maplibregl.GeoJSONSource | undefined;
       if (selSrc) selSrc.setData(selectedFeature());
@@ -735,6 +958,7 @@ export function LiveMap() {
         map.setPaintProperty('sel-ring', 'circle-radius', 16 + Math.sin(pulse) * 4);
         map.setPaintProperty('sel-ring', 'circle-opacity', 0.18 + (Math.sin(pulse) + 1) * 0.06);
       }
+      flightFrameLastRender = nowMs;
       raf = requestAnimationFrame(tick);
     };
 
@@ -767,10 +991,15 @@ export function LiveMap() {
         ).data;
         if (seq !== viewportLiveSeq) return;
         const flights = Array.isArray(data?.flights) ? data.flights : [];
-        client.store.applySnapshot(flights.map(liveFlightToSnapshot), {
+        const snapshots = flights.map(liveFlightToSnapshot);
+        // This endpoint merges tracker hot state with supplemental global ADS-B.
+        // It is not authoritative for absence, so never reconcile existing rows
+        // against a temporarily empty/partial provider response.
+        client.store.applySnapshot(snapshots, {
           generatedAt: new Date().toISOString(),
-          scope: { kind: 'viewport', bbox },
         });
+        const incomingIds = new Set(snapshots.map((f) => f.flightId));
+        void seedLiveTrailHistory(client.store.list().filter((f) => incomingIds.has(f.flightId)));
         setCount(client.store.size);
       } catch {
         /* live viewport is supplemental; keep realtime feed/UI running */
@@ -979,6 +1208,8 @@ export function LiveMap() {
 
     const select = (id: string | null) => {
       selectedId = id;
+      liveTrailsDirty = true;
+      renderLiveTrails(true);
       if (id) {
         airportDetailSeqRef.current += 1;
         setSelAirport(null);
@@ -986,6 +1217,7 @@ export function LiveMap() {
         void loadTrail(id);
         const s = client.store.get(id);
         setSel(s ? toSel(s) : null);
+        if (s) void seedLiveTrailHistory([s]);
         setRoute(null);
         setRouteData(null);
         if (s?.callsign) void loadRoute(s.callsign);
@@ -1001,6 +1233,8 @@ export function LiveMap() {
     const selectAirport = async (id: string) => {
       const seq = ++airportDetailSeqRef.current;
       selectedId = null;
+      liveTrailsDirty = true;
+      renderLiveTrails(true);
       clearTrail();
       setRouteData(null);
       setSel(null);
@@ -1219,6 +1453,59 @@ export function LiveMap() {
             'text-opacity': ['interpolate', ['linear'], ['zoom'], 6.3, 0, 7.2, 0.9],
           },
         });
+      }
+
+      if (!map.getSource('live-trails')) {
+        map.addSource('live-trails', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        map.addLayer({
+          id: 'live-trails',
+          type: 'line',
+          source: 'live-trails',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': [
+              'case',
+              ['==', ['get', 'selected'], 1],
+              '#7dd3fc',
+              [
+                'match',
+                ['get', 'quality'],
+                'live',
+                '#38bdf8',
+                'delayed',
+                '#67e8f9',
+                'stale',
+                '#94a3b8',
+                'signal_lost',
+                '#64748b',
+                '#38bdf8',
+              ],
+            ],
+            'line-width': ['case', ['==', ['get', 'selected'], 1], 2.2, 1.1],
+            'line-opacity': [
+              'case',
+              ['==', ['get', 'selected'], 1],
+              0.65,
+              [
+                'match',
+                ['get', 'quality'],
+                'live',
+                0.46,
+                'delayed',
+                0.34,
+                'stale',
+                0.22,
+                'signal_lost',
+                0.12,
+                0.36,
+              ],
+            ],
+          },
+        });
+        renderLiveTrails(true);
       }
 
       // Planned route (origin → destination great circle), dashed + muted.
