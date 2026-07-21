@@ -270,7 +270,10 @@ export function NotificationSettings() {
 
   async function connectWebPush() {
     await runAction('webpush', async () => {
-      await subscribeWebPush();
+      const hasDisabledEndpoint = channelGroups.webpush.some(
+        (channel) => channel.verified && !channel.enabled,
+      );
+      await subscribeWebPush({ forceRenew: hasDisabledEndpoint });
       setMsg({ text: 'Browser push is connected on this device.', tone: 'ok' });
       await refreshData();
     });
@@ -278,18 +281,25 @@ export function NotificationSettings() {
 
   async function testWebPush() {
     await runAction('webpush:test', async () => {
+      const hasReadyEndpoint = channelGroups.webpush.some(
+        (channel) => channel.verified && channel.enabled,
+      );
+      if (!hasReadyEndpoint) await subscribeWebPush({ forceRenew: true });
       await showLocalWebPushTest();
-      const result = await api<{ sent: number; failed: number }>('/channels/webpush/test', {
-        method: 'POST',
-      });
-      setMsg({
-        text:
-          result.failed > 0
-            ? `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s); ${result.failed} failed.`
-            : `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s).`,
-        tone: result.failed > 0 ? 'err' : 'ok',
-      });
-      await refreshData();
+      try {
+        const result = await api<{ sent: number; failed: number }>('/channels/webpush/test', {
+          method: 'POST',
+        });
+        setMsg({
+          text:
+            result.failed > 0
+              ? `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s); ${result.failed} failed.`
+              : `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s).`,
+          tone: result.failed > 0 ? 'err' : 'ok',
+        });
+      } finally {
+        await refreshData();
+      }
     });
   }
 
@@ -1170,7 +1180,7 @@ function readPushPermission(): NotificationPermission | 'unsupported' {
   return Notification.permission;
 }
 
-async function subscribeWebPush(): Promise<void> {
+async function subscribeWebPush(options: { forceRenew?: boolean } = {}): Promise<void> {
   if (
     !('serviceWorker' in navigator) ||
     !('PushManager' in window) ||
@@ -1188,10 +1198,13 @@ async function subscribeWebPush(): Promise<void> {
 
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
   let existing = await reg.pushManager.getSubscription();
+  let replaceEndpoint: string | undefined;
   if (
     existing &&
-    !sameApplicationServerKey(existing.options.applicationServerKey, applicationServerKey)
+    (options.forceRenew ||
+      !sameApplicationServerKey(existing.options.applicationServerKey, applicationServerKey))
   ) {
+    replaceEndpoint = existing.endpoint;
     await existing.unsubscribe();
     existing = null;
   }
@@ -1209,7 +1222,11 @@ async function subscribeWebPush(): Promise<void> {
   await api<{ ok: true }>('/channels/webpush/subscribe', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      keys: json.keys,
+      ...(replaceEndpoint ? { replaceEndpoint } : {}),
+    }),
   });
 }
 

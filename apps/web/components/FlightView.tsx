@@ -956,10 +956,12 @@ async function subscribeWebPush(): Promise<void> {
 
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
   let existing = await reg.pushManager.getSubscription();
+  let replaceEndpoint: string | undefined;
   if (
     existing &&
     !sameApplicationServerKey(existing.options.applicationServerKey, applicationServerKey)
   ) {
+    replaceEndpoint = existing.endpoint;
     await existing.unsubscribe();
     existing = null;
   }
@@ -978,7 +980,11 @@ async function subscribeWebPush(): Promise<void> {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      keys: json.keys,
+      ...(replaceEndpoint ? { replaceEndpoint } : {}),
+    }),
   });
 }
 

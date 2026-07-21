@@ -97,6 +97,9 @@ domain event (e.g. GateChanged)  ──▶ notifier: RULE MATCHER
   a pre-send `idem:` Redis guard. A retried job that already sent is a no-op.
 - **Retries:** 5× exponential + jitter (5s→10m); on exhaustion → `notify.dlq`, `notifications`
   row marked `failed` with reason, surfaced in dashboard + admin.
+- **Consumer recovery:** notifier reclaims abandoned Redis Stream deliveries after
+  `NOTIFIER_PENDING_CLAIM_IDLE_MS` (default 30s), including cleanup of pending entries whose
+  trimmed stream row no longer exists.
 - **Provider outages:** per-channel circuit awareness; if Telegram Bot API 429s, respect
   `retry_after`; email provider bounce/complaint handling disables the address (`verified=false`)
   and notifies the user in-app.

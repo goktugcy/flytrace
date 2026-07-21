@@ -29,6 +29,7 @@ const channelPatchSchema = z.object({ enabled: z.boolean() });
 const webPushSchema = z.object({
   endpoint: z.string().url(),
   keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+  replaceEndpoint: z.string().url().optional(),
 });
 
 const emailSchema = z.object({ email: z.string().email() });
@@ -112,7 +113,11 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
       throw new AppError('VALIDATION_ERROR', 'invalid subscription', {
         details: parsed.error.issues,
       });
-    await repo.upsertWebPush(user.id, parsed.data);
+    await repo.upsertWebPush(
+      user.id,
+      { endpoint: parsed.data.endpoint, keys: parsed.data.keys },
+      parsed.data.replaceEndpoint,
+    );
     return ok(c, { ok: true }, 201);
   });
 

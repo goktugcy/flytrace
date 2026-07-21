@@ -6,6 +6,7 @@ const notifierSchema = z.object({
   NOTIFIER_CONSUMER: z.string().default('notifier-1'),
   NOTIFIER_BATCH_SIZE: z.coerce.number().int().positive().default(100),
   NOTIFIER_BLOCK_MS: z.coerce.number().int().positive().default(5000),
+  NOTIFIER_PENDING_CLAIM_IDLE_MS: z.coerce.number().int().positive().default(30_000),
   /** Use an in-memory push sender (offline dev / pipeline smoke). */
   NOTIFIER_FAKE_PUSH: configSchemas.boolish.default('false'),
   /** Max non-critical notifications per flight per hour (docs/10 §10.7). */

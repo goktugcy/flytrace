@@ -128,12 +128,22 @@ export function createNotifyRepo(db: Database) {
     },
 
     // ── channels ──
-    async upsertWebPush(userId: string, address: WebPushSubscription['address']): Promise<void> {
-      // Replace any existing subscription with the same endpoint for this user.
+    async upsertWebPush(
+      userId: string,
+      address: WebPushSubscription['address'],
+      replaceEndpoint?: string,
+    ): Promise<void> {
+      // A browser can retain a local PushSubscription after FCM has expired it.
+      // When the client renews that subscription, remove the superseded endpoint
+      // without affecting subscriptions belonging to the user's other devices.
       await db.execute(sql`
         delete from notification_channels
         where user_id = ${userId} and channel = 'webpush'
-          and address->>'endpoint' = ${address.endpoint}
+          and (
+            address->>'endpoint' = ${address.endpoint}
+            or (${replaceEndpoint ?? null}::text is not null
+                and address->>'endpoint' = ${replaceEndpoint ?? null})
+          )
       `);
       await db.insert(notificationChannels).values({
         userId,

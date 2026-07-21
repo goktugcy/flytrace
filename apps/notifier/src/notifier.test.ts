@@ -211,6 +211,7 @@ describe('Notifier', () => {
     await notifier.handle(takeoff());
     expect(repo.disabled).toEqual(['c1']);
     expect(repo.failed).toHaveLength(1);
+    expect(repo.failed[0]?.error).toContain('gone');
   });
 
   test('skips channels with no enabled adapter', async () => {

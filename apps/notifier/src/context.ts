@@ -96,6 +96,7 @@ export function createContext(config: NotifierConfig): NotifierContext {
     consumer: config.NOTIFIER_CONSUMER,
     batchSize: config.NOTIFIER_BATCH_SIZE,
     blockMs: config.NOTIFIER_BLOCK_MS,
+    pendingClaimIdleMs: config.NOTIFIER_PENDING_CLAIM_IDLE_MS,
   });
 
   return {

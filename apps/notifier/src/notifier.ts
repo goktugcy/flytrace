@@ -135,15 +135,19 @@ export class Notifier {
     if (!channel) return;
 
     let anyOk = false;
+    const errors: string[] = [];
     for (const ep of endpoints) {
       const res = await channel.send(ep.address, message);
       if (res.ok) anyOk = true;
-      else if (res.gone) {
-        this.deps.logger.info('pruning dead endpoint', {
-          channel: channelKey,
-          channelId: ep.channelId,
-        });
-        await this.deps.repo.disableChannel(ep.channelId);
+      else {
+        errors.push(res.error);
+        if (res.gone) {
+          this.deps.logger.info('pruning dead endpoint', {
+            channel: channelKey,
+            channelId: ep.channelId,
+          });
+          await this.deps.repo.disableChannel(ep.channelId);
+        }
       }
     }
 
@@ -151,7 +155,14 @@ export class Notifier {
       await this.deps.repo.markSent(row.id);
       await this.deps.onDelivered?.(item.userId, row.id);
     } else {
-      await this.deps.repo.markFailed(row.id, `all ${channelKey} sends failed`);
+      const detail = errors.filter(Boolean).slice(0, 2).join('; ');
+      const error = `all ${channelKey} sends failed${detail ? `: ${detail}` : ''}`;
+      this.deps.logger.warn('notification delivery failed', {
+        notificationId: row.id,
+        channel: channelKey,
+        error,
+      });
+      await this.deps.repo.markFailed(row.id, error);
     }
   }
 }

@@ -8,7 +8,10 @@ export interface ConsumerOptions {
   consumer: string;
   batchSize: number;
   blockMs: number;
+  pendingClaimIdleMs: number;
 }
+
+type StreamEntry = [id: string, fields: string[]];
 
 /**
  * Durable at-least-once consumer of the domain-event stream for the notifier
@@ -40,6 +43,9 @@ export class StreamConsumer {
   }
 
   async runOnce(): Promise<number> {
+    const recovered = await this.recoverPending();
+    if (recovered > 0) return recovered;
+
     const res = (await this.redis.xreadgroup(
       'GROUP',
       this.options.group,
@@ -54,6 +60,25 @@ export class StreamConsumer {
     )) as [string, [string, string[]][]][] | null;
 
     const entries = res?.[0]?.[1] ?? [];
+    return this.processEntries(entries);
+  }
+
+  /** Reclaim deliveries abandoned by a crashed/restarted consumer. XAUTOCLAIM
+   * also clears PEL entries whose stream rows were removed by MAXLEN trimming. */
+  async recoverPending(): Promise<number> {
+    const result = (await this.redis.xautoclaim(
+      this.streamKey,
+      this.options.group,
+      this.options.consumer,
+      this.options.pendingClaimIdleMs,
+      '0-0',
+      'COUNT',
+      this.options.batchSize,
+    )) as [nextId: string, entries: StreamEntry[], deletedIds?: string[]];
+    return this.processEntries(result[1] ?? []);
+  }
+
+  private async processEntries(entries: StreamEntry[]): Promise<number> {
     if (entries.length === 0) return 0;
 
     const ackIds: string[] = [];
