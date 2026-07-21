@@ -1,8 +1,17 @@
 import { loadTrackerConfig } from './config.ts';
 import { createContext } from './context.ts';
+import { startMetricsServer } from './metrics-server.ts';
 
 const config = loadTrackerConfig();
 const ctx = await createContext(config);
+
+// Prometheus scrape endpoint for the tracker's process-local registry.
+const metricsServer = startMetricsServer({
+  port: config.TRACKER_METRICS_PORT,
+  host: config.TRACKER_METRICS_HOST,
+  registry: ctx.metrics.registry,
+  logger: ctx.logger,
+});
 
 ctx.logger.info('tracker booting', {
   source: config.TRACKER_SOURCE,
@@ -19,6 +28,7 @@ ctx.logger.info('tracker booting', {
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
     ctx.logger.info('tracker shutting down', { sig });
+    metricsServer?.stop();
     await ctx.close();
     process.exit(0);
   });

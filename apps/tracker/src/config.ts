@@ -118,6 +118,13 @@ const trackerSchema = z.object({
    * the real aircraft less (the client also dead-reckons between updates).
    */
   ADSB_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  /**
+   * Prometheus scrape server for the tracker's process-local metrics registry.
+   * The tracker is a poll loop with no HTTP surface otherwise; this exposes
+   * GET /metrics (+ /health) so Prometheus can scrape it. 0 disables the server.
+   */
+  TRACKER_METRICS_PORT: z.coerce.number().int().min(0).default(9101),
+  TRACKER_METRICS_HOST: z.string().default('0.0.0.0'),
 });
 
 const trackerConfigSchema = configSchemas.base
