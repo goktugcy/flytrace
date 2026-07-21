@@ -3,6 +3,7 @@
 import { apiBase } from '@/lib/api';
 
 import { SearchBox } from '@/components/SearchBox';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { LOCALES, useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -78,6 +79,7 @@ export function SiteHeader() {
 
         <div className="ml-auto hidden items-center gap-3 md:flex">
           <SearchBox className="w-64" />
+          <ThemeToggle />
           <LangSwitcher />
           <AccountSlot user={user} signIn={t('nav.signin')} />
         </div>
@@ -115,6 +117,7 @@ export function SiteHeader() {
           </nav>
           <div className="mt-4 flex items-center justify-between gap-3">
             <AccountSlot user={user} signIn={t('nav.signin')} full />
+            <ThemeToggle />
             <LangSwitcher />
           </div>
         </div>

@@ -1,17 +1,61 @@
 @import "tailwindcss";
 
 /*
- * FlyTrace design system — dark-mode-first (docs/04).
- * Minimal palette: neutral zinc surfaces + a single Sky Blue accent.
- * Contrast tuned for WCAG AA (muted text ≥ 4.5:1 on background; primary
- * buttons use blue-600 for ≥ 4.5:1 white text).
+ * FlyTrace design system (docs/04). Minimal palette: neutral zinc surfaces +
+ * a single Sky Blue accent, in both light and dark. Light is the default;
+ * `.dark` on <html> overrides. Contrast tuned for WCAG AA in both themes.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ── Light (default) ── */
 :root {
+  --background: #ffffff;
+  --foreground: #0a0a0b;
+
+  --card: #ffffff;
+  --card-foreground: #0a0a0b;
+
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0b;
+
+  --primary: #2563eb; /* blue-600 — AA on white text */
+  --primary-foreground: #ffffff;
+
+  --accent-solid: #2563eb;
+  --accent-bright: #2563eb; /* links on light — 5.1:1 on white */
+
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+
+  --muted: #f6f6f7;
+  --muted-foreground: #52525b; /* zinc-600 — 7:1 on white */
+
+  --accent: #f4f4f5; /* hover surface */
+  --accent-foreground: #18181b;
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  --border: #e4e4e7; /* zinc-200 */
+  --input: #e4e4e7;
+  --ring: #3b82f6;
+
+  --radius: 0.625rem; /* 10px */
+
+  --sh-soft: 0 1px 2px 0 rgb(16 24 40 / 0.06);
+  --sh-soft-md: 0 4px 16px -4px rgb(16 24 40 / 0.1);
+  --sh-soft-lg: 0 12px 40px -8px rgb(16 24 40 / 0.16);
+
+  color-scheme: light;
+}
+
+/* ── Dark ── */
+.dark {
   --background: #09090b; /* zinc-950 */
-  --foreground: #fafafa; /* zinc-50 */
+  --foreground: #fafafa;
 
   --card: #131316;
   --card-foreground: #fafafa;
@@ -19,11 +63,11 @@
   --popover: #18181b; /* zinc-900 */
   --popover-foreground: #fafafa;
 
-  --primary: #2563eb; /* blue-600 — AA on white text */
+  --primary: #2563eb;
   --primary-foreground: #ffffff;
 
-  --accent-solid: #3b82f6; /* blue-500 — links/rings on dark */
-  --accent-bright: #60a5fa; /* blue-400 — focus ring */
+  --accent-solid: #3b82f6; /* blue-500 */
+  --accent-bright: #60a5fa; /* blue-400 — links on dark */
 
   --secondary: #1c1c20;
   --secondary-foreground: #fafafa;
@@ -31,7 +75,7 @@
   --muted: #18181b;
   --muted-foreground: #a1a1aa; /* zinc-400 — 6.4:1 on bg */
 
-  --accent: #1f1f23; /* hover surface */
+  --accent: #1f1f23;
   --accent-foreground: #fafafa;
 
   --success: #22c55e;
@@ -43,7 +87,9 @@
   --input: #27272a;
   --ring: #3b82f6;
 
-  --radius: 0.625rem; /* 10px */
+  --sh-soft: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --sh-soft-md: 0 4px 16px -4px rgb(0 0 0 / 0.4);
+  --sh-soft-lg: 0 12px 40px -8px rgb(0 0 0 / 0.5);
 
   color-scheme: dark;
 }
@@ -81,9 +127,9 @@
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
     "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 
-  --shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --shadow-soft-md: 0 4px 16px -4px rgb(0 0 0 / 0.4);
-  --shadow-soft-lg: 0 12px 40px -8px rgb(0 0 0 / 0.5);
+  --shadow-soft: var(--sh-soft);
+  --shadow-soft-md: var(--sh-soft-md);
+  --shadow-soft-lg: var(--sh-soft-lg);
 }
 
 @layer base {
@@ -100,14 +146,55 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
-  /* Consistent, visible keyboard focus everywhere (accessibility). */
+  /* Smooth theme transition on surfaces (not on everything, to avoid jank). */
+  body,
+  .theme-transition * {
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+  /* Accent text selection. */
+  ::selection {
+    background: color-mix(in srgb, var(--accent-solid) 28%, transparent);
+    color: var(--foreground);
+  }
+  /* Subtle, theme-aware scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+    background-clip: padding-box;
+  }
+  /* Respect reduced-motion for the theme fade + all animations (a11y). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
-/* ── MapLibre dark theming (live map popup + controls) ── */
+/* ── MapLibre theming. The basemap is a dark data-viz surface in BOTH themes
+   (like Flightradar), so the attribution stays light-on-dark; only the control
+   chrome follows the app card colour, with icon inversion limited to dark. ── */
 .maplibregl-popup.flt-popup .maplibregl-popup-content {
   background: var(--popover);
   color: var(--popover-foreground);
@@ -144,13 +231,22 @@
 .maplibregl-ctrl-group button + button {
   border-top: 1px solid var(--border) !important;
 }
-.maplibregl-ctrl button .maplibregl-ctrl-icon {
+/* Dark icons on the light control card by default; invert only in dark mode. */
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
   filter: invert(1) hue-rotate(180deg) brightness(1.1);
 }
+/* Attribution follows the theme now that the basemap is light in light mode. */
 .maplibregl-ctrl-attrib {
-  background: rgba(8, 13, 24, 0.7) !important;
-  color: var(--muted-foreground);
+  background: rgba(255, 255, 255, 0.75) !important;
+  color: #52525b;
 }
 .maplibregl-ctrl-attrib a {
-  color: var(--muted-foreground);
+  color: #52525b;
+}
+.dark .maplibregl-ctrl-attrib {
+  background: rgba(8, 13, 24, 0.7) !important;
+  color: #a1a1aa;
+}
+.dark .maplibregl-ctrl-attrib a {
+  color: #a1a1aa;
 }

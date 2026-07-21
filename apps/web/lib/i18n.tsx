@@ -20,6 +20,8 @@ const en: Record<string, string> = {
   'common.low': 'low',
   'common.high': 'high',
   'common.close': 'Close',
+  'theme.toLight': 'Switch to light theme',
+  'theme.toDark': 'Switch to dark theme',
 
   'landing.badge': 'Live flight data',
   'landing.title.pre': 'Watch the sky, ',
@@ -133,6 +135,8 @@ const tr: Record<string, string> = {
   'common.low': 'alçak',
   'common.high': 'yüksek',
   'common.close': 'Kapat',
+  'theme.toLight': 'Açık temaya geç',
+  'theme.toDark': 'Koyu temaya geç',
 
   'landing.badge': 'Canlı uçuş verisi',
   'landing.title.pre': 'Gökyüzünü ',

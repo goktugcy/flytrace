@@ -45,18 +45,45 @@ function webglAvailable(): boolean {
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
-// Self-contained dark base + bundled first-party geography (public/geo/world.json)
-// so the map always renders — external tile CDNs are routinely blocked by
-// ad/privacy extensions. Set NEXT_PUBLIC_MAP_STYLE to opt into a tile basemap.
-const REMOTE_STYLE =
-  process.env.NEXT_PUBLIC_MAP_STYLE ?? 'https://tiles.openfreemap.org/styles/dark';
+// Theme-aware basemap: a light, Google-Maps-like style (OpenFreeMap "liberty")
+// in light mode and a dark data-viz style in dark mode, switched live when the
+// theme toggles. A bundled first-party geography (public/geo/world.json) is the
+// offline fallback so the map always renders even when tile CDNs are blocked by
+// ad/privacy extensions. NEXT_PUBLIC_MAP_STYLE_{LIGHT,DARK} override each style;
+// NEXT_PUBLIC_MAP_STYLE (legacy) overrides both.
+const REMOTE_STYLE_DARK =
+  process.env.NEXT_PUBLIC_MAP_STYLE_DARK ??
+  process.env.NEXT_PUBLIC_MAP_STYLE ??
+  'https://tiles.openfreemap.org/styles/dark';
+const REMOTE_STYLE_LIGHT =
+  process.env.NEXT_PUBLIC_MAP_STYLE_LIGHT ??
+  process.env.NEXT_PUBLIC_MAP_STYLE ??
+  'https://tiles.openfreemap.org/styles/liberty';
+const remoteStyleFor = (dark: boolean): string => (dark ? REMOTE_STYLE_DARK : REMOTE_STYLE_LIGHT);
 const WORLD_GEOJSON_URL = '/geo/world.json';
 
-const DARK_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {},
-  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#080d18' } }],
-};
+/** Active theme, read from the <html> class the theme toggle manages. */
+function prefersDark(): boolean {
+  if (typeof document === 'undefined') return true;
+  return document.documentElement.classList.contains('dark');
+}
+
+/** Bundled offline fallback background (tile CDN blocked), per theme. */
+function baseStyleFor(dark: boolean): maplibregl.StyleSpecification {
+  return {
+    version: 8,
+    sources: {},
+    layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': dark ? '#080d18' : '#dce6f2' } },
+    ],
+  };
+}
+
+/** Land / border / graticule colours for the bundled geography, per theme. */
+const WORLD_COLORS = {
+  dark: { fill: '#131c2b', line: '#31405a', grid: '#141d30' },
+  light: { fill: '#eef2f6', line: '#b6c2d1', grid: '#e6ebf1' },
+} as const;
 
 interface SelInfo {
   flightId: string;
@@ -631,11 +658,12 @@ export function LiveMap() {
     }
 
     let map: maplibregl.Map;
-    let usingRemote = Boolean(REMOTE_STYLE);
+    let usingRemote = true;
+    let currentDark = prefersDark();
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: REMOTE_STYLE ?? DARK_STYLE,
+        style: remoteStyleFor(currentDark),
         center: [35, 39],
         zoom: 5,
         attributionControl: false,
@@ -645,6 +673,42 @@ export function LiveMap() {
       setFailed(true);
       return;
     }
+
+    // Swap the basemap live when the app theme toggles (light ⇄ dark). Carry our
+    // DATA overlays (aircraft, trails, selection, route, airports, airspaces)
+    // into the new style via transformStyle so they never blink out while the
+    // new basemap loads; world/grid are theme-coloured, so ensureLayers re-adds
+    // those. `carrySwap` tells style.load to skip the airport/airspace refetch
+    // since that data came across with the layers.
+    let carrySwap = false;
+    const isCarried = (id: string) => OURS.has(id) && id !== 'world' && id !== 'grid';
+    const applyBasemap = () => {
+      carrySwap = true;
+      map.setStyle(usingRemote ? remoteStyleFor(currentDark) : baseStyleFor(currentDark), {
+        transformStyle: (prev, next) => {
+          if (!prev) return next;
+          const sources = { ...next.sources };
+          for (const [id, src] of Object.entries(prev.sources)) {
+            if (isCarried(id)) sources[id] = src;
+          }
+          const carried = prev.layers.filter(
+            (l) => 'source' in l && typeof l.source === 'string' && isCarried(l.source),
+          );
+          return { ...next, sources, layers: [...next.layers, ...carried] };
+        },
+      });
+    };
+    const themeObserver = new MutationObserver(() => {
+      const dark = prefersDark();
+      if (dark !== currentDark) {
+        currentDark = dark;
+        applyBasemap();
+      }
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
     map.addControl(new maplibregl.NavigationControl({ showZoom: true }), 'top-right');
     map.addControl(
       new maplibregl.AttributionControl({
@@ -1329,25 +1393,26 @@ export function LiveMap() {
       try {
         const geo = await fetch(WORLD_GEOJSON_URL).then((r) => r.json());
         if (map.getSource('world')) return;
+        const c = currentDark ? WORLD_COLORS.dark : WORLD_COLORS.light;
         map.addSource('grid', { type: 'geojson', data: graticule(10) });
         map.addLayer({
           id: 'grid',
           type: 'line',
           source: 'grid',
-          paint: { 'line-color': '#141d30', 'line-width': 0.5 },
+          paint: { 'line-color': c.grid, 'line-width': 0.5 },
         });
         map.addSource('world', { type: 'geojson', data: geo });
         map.addLayer({
           id: 'world-fill',
           type: 'fill',
           source: 'world',
-          paint: { 'fill-color': '#131c2b', 'fill-opacity': 0.9 },
+          paint: { 'fill-color': c.fill, 'fill-opacity': 0.9 },
         });
         map.addLayer({
           id: 'world-line',
           type: 'line',
           source: 'world',
-          paint: { 'line-color': '#31405a', 'line-width': 0.7 },
+          paint: { 'line-color': c.line, 'line-width': 0.7 },
         });
       } catch {
         /* geography best-effort */
@@ -1645,8 +1710,14 @@ export function LiveMap() {
     map.on('style.load', () => {
       void ensureLayers().then(() => {
         setAirportVisibility();
-        scheduleAirportLoad();
         setAirspaceVisibility();
+        // Theme-swap reload: overlays + their data were carried across, so just
+        // re-apply layers/visibility — don't reconnect the feed or refetch.
+        if (carrySwap) {
+          carrySwap = false;
+          return;
+        }
+        scheduleAirportLoad();
         scheduleAirspaceLoad();
         startFeed();
       });
@@ -1698,7 +1769,7 @@ export function LiveMap() {
       if (usingRemote && !remoteTileOk) {
         console.warn('remote basemap unavailable — using bundled offline map');
         usingRemote = false;
-        map.setStyle(DARK_STYLE);
+        map.setStyle(baseStyleFor(currentDark));
       }
     }, 4500);
 
@@ -1731,6 +1802,7 @@ export function LiveMap() {
       viewportLiveAbort?.abort();
       cancelAnimationFrame(raf);
       ro.disconnect();
+      themeObserver.disconnect();
       unsub();
       offStatus();
       unregisterFocus();

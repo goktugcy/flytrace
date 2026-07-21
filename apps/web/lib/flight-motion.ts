@@ -43,6 +43,19 @@ export function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
 }
 
+/** Course over ground (degrees clockwise from north) from point a → b. */
+export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const dLambda = toRad(lon2 - lon1);
+  const y = Math.sin(dLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+  return (Math.atan2(y, x) * 180) / Math.PI;
+}
+
+// Below this movement the derived course is noise, so we keep the last heading.
+const MIN_COURSE_NM = 0.02; // ~37 m
+
 export function projectFlightSample(
   f: FlightSample,
   nowMs: number,
@@ -71,7 +84,13 @@ export function stepRenderedFlight(
   config: FlightMotionConfig = DEFAULT_FLIGHT_MOTION_CONFIG,
 ): RenderedFlight {
   const [targetLat, targetLon] = projectFlightSample(f, nowMs, config);
-  const targetHdg = f.heading ?? prev?.hdg ?? 0;
+  // Prefer the reported ADS-B track; when it's missing, orient the icon along
+  // the aircraft's actual course over ground (derived from movement) instead of
+  // defaulting to due north — falling back to the last heading when stationary.
+  let targetHdg = f.heading ?? prev?.hdg ?? 0;
+  if (f.heading == null && prev && distanceNm(prev.lat, prev.lon, f.lat, f.lon) > MIN_COURSE_NM) {
+    targetHdg = bearingDeg(prev.lat, prev.lon, f.lat, f.lon);
+  }
 
   if (!prev) return { lat: targetLat, lon: targetLon, hdg: targetHdg };
   if (distanceNm(prev.lat, prev.lon, targetLat, targetLon) > config.snapDistanceNm) {

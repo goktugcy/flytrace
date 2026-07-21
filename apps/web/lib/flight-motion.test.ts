@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_FLIGHT_MOTION_CONFIG,
   angleDelta,
+  bearingDeg,
   distanceNm,
   projectFlightSample,
   stepRenderedFlight,
@@ -90,6 +91,32 @@ describe('flight motion helpers', () => {
     expect(next.lat).toBeCloseTo(41.05, 6);
     expect(next.lon).toBeCloseTo(29.05, 6);
     expect(next.hdg).toBeCloseTo(360, 6);
+  });
+
+  test('derives the icon heading from movement when ADS-B track is missing', () => {
+    // No heading reported, but the aircraft has clearly moved east → course ≈ 90°.
+    const f = sample({ heading: null, lat: 41, lon: 29.05 });
+    const next = stepRenderedFlight({ lat: 41, lon: 29, hdg: 0 }, f, BASE_MS, {
+      ...DEFAULT_FLIGHT_MOTION_CONFIG,
+      lerp: 1,
+      deadReckonLiveMs: 0,
+    });
+    expect(next.hdg).toBeCloseTo(90, 0);
+  });
+
+  test('keeps the last heading when track is missing and the aircraft is stationary', () => {
+    const f = sample({ heading: null, lat: 41, lon: 29 });
+    const next = stepRenderedFlight({ lat: 41, lon: 29, hdg: 215 }, f, BASE_MS, {
+      ...DEFAULT_FLIGHT_MOTION_CONFIG,
+      lerp: 1,
+      deadReckonLiveMs: 0,
+    });
+    expect(next.hdg).toBe(215);
+  });
+
+  test('bearingDeg computes course over ground', () => {
+    expect(bearingDeg(41, 29, 41, 30)).toBeCloseTo(90, 0); // due east
+    expect(bearingDeg(41, 29, 42, 29)).toBeCloseTo(0, 6); // due north
   });
 
   test('snaps instead of animating implausibly large corrections', () => {
