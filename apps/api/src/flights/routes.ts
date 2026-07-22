@@ -1,6 +1,7 @@
 import {
   type FlightRow,
   type SearchResultRow,
+  createCatalogReadRepo,
   createCatalogRepo,
   createFlightReadRepo,
   createFlightRepo,
@@ -15,6 +16,7 @@ import { requireUser } from '../auth/routes.ts';
 import type { AppContext } from '../context.ts';
 import { type Bbox, inBbox } from '../ws/channels.ts';
 import { createHotState } from './hot-state.ts';
+import { FlightRouteResolver } from './route-resolver.ts';
 
 const PLANESPOTTERS_UA = 'FlyTrace/1.0 (+https://flytrace.app; live flight tracker)';
 const PHOTO_TTL_MS = 6 * 60 * 60 * 1000; // 6h — tail photos rarely change
@@ -33,21 +35,6 @@ type AircraftPhoto = {
 const photoCache = new Map<string, { photo: AircraftPhoto; exp: number }>();
 
 const ADSBDB_UA = 'FlyTrace/1.0 (+https://flytrace.app; live flight tracker)';
-const ROUTE_TTL_MS = 6 * 60 * 60 * 1000; // 6h — routes are static per callsign
-
-interface AdsbdbAirport {
-  iata_code?: string;
-  name?: string;
-  municipality?: string;
-  latitude?: number;
-  longitude?: number;
-}
-interface FlightRoute {
-  airline: string | null;
-  origin: { iata: string; name: string; city: string | null; lat: number; lon: number };
-  destination: { iata: string; name: string; city: string | null; lat: number; lon: number };
-}
-const routeCache = new Map<string, { route: FlightRoute | null; exp: number }>();
 
 // adsb.lol callsign lookup — keyless. Used as a search fallback so a flight
 // that isn't in our DB yet is still located from the live feed.
@@ -92,18 +79,27 @@ interface ViewportLiveLookup {
 const viewportLiveCache = new Map<string, { exp: number; value: ViewportLiveLookup }>();
 const liveByIcaoCache = new Map<string, { exp: number; value: LiveFlight }>();
 
-function toEndpoint(a: AdsbdbAirport): FlightRoute['origin'] | null {
-  if (typeof a.latitude !== 'number' || typeof a.longitude !== 'number') return null;
-  return {
-    iata: a.iata_code ?? '',
-    name: a.name ?? '',
-    city: a.municipality ?? null,
-    lat: a.latitude,
-    lon: a.longitude,
-  };
-}
-
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD');
+const routeObservationSchema = z
+  .object({
+    flightId: z.string().min(1).max(80).optional(),
+    icao24: z
+      .string()
+      .regex(/^[0-9a-fA-F]{6}$/)
+      .optional(),
+    date: dateSchema.optional(),
+    lat: z.coerce.number().min(-90).max(90).optional(),
+    lon: z.coerce.number().min(-180).max(180).optional(),
+    headingDeg: z.coerce.number().min(0).max(360).optional(),
+    onGround: z
+      .enum(['true', 'false'])
+      .transform((value) => value === 'true')
+      .optional(),
+    ts: z.string().datetime().optional(),
+  })
+  .refine((value) => (value.lat == null) === (value.lon == null), {
+    message: 'lat and lon must be supplied together',
+  });
 const bboxSchema = z.string().transform((v, ctx) => {
   const parts = v.split(',').map(Number);
   if (parts.length !== 4 || parts.some(Number.isNaN)) {
@@ -159,6 +155,8 @@ const liveTrackSeedSchema = z.object({
           .string()
           .regex(/^[0-9a-fA-F]{6}$/)
           .optional(),
+        callsign: z.string().trim().min(2).max(12).nullable().optional(),
+        ts: z.string().datetime().optional(),
       }),
     )
     .max(250),
@@ -202,8 +200,10 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
   const read = createFlightReadRepo(ctx.db);
   const write = createFlightRepo(ctx.db);
   const catalog = createCatalogRepo(ctx.db);
+  const catalogRead = createCatalogReadRepo(ctx.db);
   const statusRead = createFlightStatusRepo(ctx.db);
   const hot = createHotState(ctx.redis, ctx.redisPrefix);
+  const routeResolver = new FlightRouteResolver(ctx, read, catalog, catalogRead);
 
   const app = new Hono<AppEnv>();
   const ok = (c: Context<AppEnv>, data: unknown, cached = false) =>
@@ -240,40 +240,29 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { photo });
   });
 
-  // Flight route (origin/destination airports) by callsign, via adsbdb —
-  // keyless, cached; the ADS-B feed itself carries no route.
+  // Resolve the scheduled leg from persisted/provider data, with ADSBDB only as
+  // a geometry-validated fallback. ADS-B telemetry itself carries no route.
   app.get('/flights/route/:callsign', async (c) => {
     const cs = (c.req.param('callsign') ?? '').trim().toUpperCase();
     if (!/^[A-Z0-9]{3,8}$/.test(cs)) throw new AppError('BAD_REQUEST', 'invalid callsign');
-    const cached = routeCache.get(cs);
-    if (cached && cached.exp > Date.now()) return ok(c, { route: cached.route }, true);
-    let route: FlightRoute | null = null;
-    try {
-      const res = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cs)}`, {
-        headers: { accept: 'application/json', 'user-agent': ADSBDB_UA },
-        signal: AbortSignal.timeout(6000),
+    const parsed = routeObservationSchema.safeParse({
+      flightId: c.req.query('flightId'),
+      icao24: c.req.query('icao24'),
+      date: c.req.query('date'),
+      lat: c.req.query('lat'),
+      lon: c.req.query('lon'),
+      headingDeg: c.req.query('headingDeg'),
+      onGround: c.req.query('onGround'),
+      ts: c.req.query('ts'),
+    });
+    if (!parsed.success)
+      throw new AppError('BAD_REQUEST', 'invalid route observation', {
+        details: parsed.error.issues,
       });
-      if (res.ok) {
-        const fr = (
-          (await res.json()) as {
-            response?: {
-              flightroute?: {
-                origin?: AdsbdbAirport;
-                destination?: AdsbdbAirport;
-                airline?: { name?: string };
-              };
-            };
-          }
-        ).response?.flightroute;
-        const origin = fr?.origin ? toEndpoint(fr.origin) : null;
-        const destination = fr?.destination ? toEndpoint(fr.destination) : null;
-        if (origin && destination)
-          route = { airline: fr?.airline?.name ?? null, origin, destination };
-      }
-    } catch {
-      /* no route — degrade gracefully */
-    }
-    routeCache.set(cs, { route, exp: Date.now() + ROUTE_TTL_MS });
+    const route = await routeResolver.resolve(cs, {
+      ...parsed.data,
+      date: parsed.data.date ?? ctx.clock.nowIso().slice(0, 10),
+    });
     return ok(c, { route });
   });
 
@@ -349,19 +338,24 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
           ),
       ),
     ];
-    const icao24s = [
-      ...new Set(
-        parsed.data.flights
-          .flatMap((f) => [f.icao24, f.flightId.startsWith('adsb:') ? f.flightId.slice(5) : null])
-          .filter((hex): hex is string => typeof hex === 'string' && /^[0-9a-fA-F]{6}$/.test(hex))
-          .map((hex) => hex.toLowerCase()),
-      ),
-    ];
-    if (flightIds.length === 0 && icao24s.length === 0) return ok(c, { tracks: [] }, true);
+    const transientRequests = parsed.data.flights.flatMap((flight) => {
+      const hex = flight.flightId.startsWith('adsb:') ? flight.flightId.slice(5) : flight.icao24;
+      if (!hex || !/^[0-9a-fA-F]{6}$/.test(hex)) return [];
+      return [
+        {
+          requestKey: flight.flightId,
+          icao24: hex.toLowerCase(),
+          callsign: flight.callsign?.trim().toUpperCase() || null,
+          observedAt: flight.ts ?? ctx.clock.nowIso(),
+        },
+      ];
+    });
+    if (flightIds.length === 0 && transientRequests.length === 0)
+      return ok(c, { tracks: [] }, true);
 
     const since = new Date(ctx.clock.now() - parsed.data.sinceMinutes * 60_000);
     const flightIdCsv = flightIds.join(',');
-    const icao24Csv = icao24s.join(',');
+    const transientJson = JSON.stringify(transientRequests);
     const rows = (await ctx.db.execute(sql`
       with candidate_flights as (
         select f.id as flight_id,
@@ -372,17 +366,26 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
 
         union
 
-        select latest.flight_id, latest.request_key, latest.transient_flight_id
-        from (
-          select distinct on (lower(fp.icao24::text))
-                 fp.flight_id,
-                 ('adsb:' || lower(fp.icao24::text)) as request_key,
-                 ('adsb:' || lower(fp.icao24::text)) as transient_flight_id
+        select latest.flight_id,
+               request."requestKey" as request_key,
+               request."requestKey" as transient_flight_id
+        from jsonb_to_recordset(${transientJson}::jsonb) as request(
+          "requestKey" text,
+          icao24 text,
+          callsign text,
+          "observedAt" timestamptz
+        )
+        join lateral (
+          select fp.flight_id
           from flight_positions fp
-          where lower(fp.icao24::text) = any(string_to_array(nullif(${icao24Csv}, ''), ',')::text[])
-            and fp.ts >= ${since.toISOString()}::timestamptz
-          order by lower(fp.icao24::text), fp.ts desc
-        ) latest
+          join flights f on f.id = fp.flight_id
+          where lower(fp.icao24::text) = request.icao24
+            and (request.callsign is null or upper(f.callsign) = request.callsign)
+            and fp.ts >= request."observedAt" - interval '30 minutes'
+            and fp.ts <= request."observedAt" + interval '2 minutes'
+          order by fp.ts desc
+          limit 1
+        ) latest on true
       ),
       ranked as (
         select c.request_key as "requestKey",
@@ -595,10 +598,17 @@ export function createFlightsRoutes(ctx: AppContext): Hono<AppEnv> {
     const limit = Math.min(Number(c.req.query('limit') ?? 5000) || 5000, 10_000);
     if (flightId.startsWith('adsb:')) {
       const icao24 = flightId.slice('adsb:'.length).trim().toLowerCase();
-      const since = new Date(ctx.clock.now() - 24 * 60 * 60 * 1000);
-      const recent = /^[0-9a-f]{6}$/.test(icao24)
-        ? await read.getRecentFlightByIcao24(icao24, since)
-        : null;
+      const callsign = (c.req.query('callsign') ?? '').trim().toUpperCase();
+      const atMs = Date.parse(c.req.query('at') ?? '');
+      const recent =
+        /^[0-9a-f]{6}$/.test(icao24) && /^[A-Z0-9]{2,12}$/.test(callsign) && Number.isFinite(atMs)
+          ? await read.getRecentFlightByIdentity(
+              icao24,
+              callsign,
+              new Date(atMs - 30 * 60_000),
+              new Date(atMs + 2 * 60_000),
+            )
+          : null;
       if (!recent) return ok(c, { flightId, points: [], count: 0 }, true);
       const points = await read.getTrack(recent.id, limit);
       return ok(c, {

@@ -76,6 +76,9 @@ email verification, password reset. (Shapes owned by Better Auth; see [15](./15-
 | GET | `/api/v1/flights/:callsign/:date/track` | position track (downsampled by default) |
 | GET | `/api/v1/flights/:callsign/:date/events` | derived + provider events (timeline) |
 | GET | `/api/v1/flights/live?bbox=&airline=&alt=` | live flights in a viewport (map bootstrap) |
+| GET | `/api/v1/flights/live/viewport?bbox=` | ADS-B-backed global viewport snapshot |
+| POST | `/api/v1/flights/live/tracks` | seed live-flight trails from persisted positions; transient aircraft require matching ICAO24, callsign, and a position within 30 minutes of the live sample |
+| GET | `/api/v1/flights/route/:callsign?flightId=&icao24=&date=&lat=&lon=&headingDeg=&onGround=&ts=` | origin/destination from persisted data or AeroDataBox; ADSBDB fallback is checked against live geometry and direction |
 
 ### Public — airports
 | GET | `/api/v1/airports/:iata` | airport detail (runways, stats, geo) |
@@ -88,6 +91,18 @@ email verification, password reset. (Shapes owned by Better Auth; see [15](./15-
 
 ### Public — stats (landing page)
 | GET | `/api/v1/stats/live` | live counters (flights now, events today, notifs sent) |
+
+### Public — weather
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/weather/point?lat=&lon=&alt=` | current surface weather plus modelled turbulence potential near an aircraft |
+| GET | `/api/v1/weather/viewport?bbox=&zoom=` | sparse significant-weather GeoJSON for the live map |
+
+Weather is proxied from Open-Meteo and cached for 10 minutes. `viewport` uses a bounded grid
+(12–28 points depending on zoom), returns only meaningful rain, snow, fog, wind or convective
+events, and never blocks the live aircraft feed. Turbulence is an explicitly labelled estimate
+derived from CAPE, pressure-level wind shear, vertical velocity and flight-level wind; it is not
+radar, PIREP or an operational turbulence product.
 
 ### User (authenticated)
 | GET/POST | `/api/v1/watchlist` | list / create watch (flight or matcher + events + channels) |

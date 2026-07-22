@@ -113,3 +113,86 @@ export const liveStatsSchema = z.object({
   eventsToday: z.number(),
 });
 export type LiveStats = z.infer<typeof liveStatsSchema>;
+
+export const weatherSeveritySchema = z.enum(['none', 'low', 'moderate', 'high', 'severe']);
+export type WeatherSeverity = z.infer<typeof weatherSeveritySchema>;
+
+export const weatherKindSchema = z.enum(['clear', 'rain', 'storm', 'wind', 'snow', 'fog']);
+export type WeatherKind = z.infer<typeof weatherKindSchema>;
+
+export const weatherPointSchema = z.object({
+  lat: z.number(),
+  lon: z.number(),
+  observedAt: z.string(),
+  model: z.literal('open-meteo'),
+  condition: z.object({
+    code: z.number(),
+    label: z.string(),
+    kind: weatherKindSchema,
+    severity: weatherSeveritySchema,
+  }),
+  temperatureC: z.number().nullable(),
+  precipitationMm: z.number().nullable(),
+  rainMm: z.number().nullable(),
+  showersMm: z.number().nullable(),
+  snowfallCm: z.number().nullable(),
+  cloudCoverPct: z.number().nullable(),
+  visibilityM: z.number().nullable(),
+  wind: z.object({
+    speedKt: z.number().nullable(),
+    directionDeg: z.number().nullable(),
+    gustKt: z.number().nullable(),
+  }),
+  convection: z.object({
+    capeJkg: z.number().nullable(),
+  }),
+  altitude: z
+    .object({
+      requestedFt: z.number(),
+      pressureLevelHpa: z.number(),
+      windSpeedKt: z.number().nullable(),
+      windDirectionDeg: z.number().nullable(),
+      verticalVelocityMs: z.number().nullable(),
+      windShearKt: z.number().nullable(),
+    })
+    .nullable(),
+  turbulence: z.object({
+    estimated: z.literal(true),
+    level: weatherSeveritySchema,
+    score: z.number().min(0).max(100),
+    reasons: z.array(z.string()),
+  }),
+});
+export type WeatherPoint = z.infer<typeof weatherPointSchema>;
+
+export const weatherMapFeatureCollectionSchema = z.object({
+  type: z.literal('FeatureCollection'),
+  features: z.array(
+    z.object({
+      type: z.literal('Feature'),
+      id: z.string(),
+      geometry: z.object({
+        type: z.literal('Point'),
+        coordinates: z.tuple([z.number(), z.number()]),
+      }),
+      properties: z.object({
+        id: z.string(),
+        kind: weatherKindSchema,
+        severity: weatherSeveritySchema,
+        label: z.string(),
+        code: z.number(),
+        observedAt: z.string(),
+        temperatureC: z.number().nullable(),
+        precipitationMm: z.number().nullable(),
+        windKt: z.number().nullable(),
+        gustKt: z.number().nullable(),
+        capeJkg: z.number().nullable(),
+      }),
+    }),
+  ),
+  count: z.number().int().nonnegative(),
+  sampleCount: z.number().int().nonnegative(),
+  generatedAt: z.string(),
+  model: z.literal('open-meteo'),
+});
+export type WeatherMapFeatureCollection = z.infer<typeof weatherMapFeatureCollectionSchema>;

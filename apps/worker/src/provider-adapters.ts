@@ -52,6 +52,7 @@ export class FetchHttpClient implements HttpClient {
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`http ${res.status}`);
+      if (res.status === 204) return null;
       return await res.json();
     } finally {
       clearTimeout(timeout);

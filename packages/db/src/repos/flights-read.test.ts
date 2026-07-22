@@ -66,6 +66,22 @@ describeDb('flight read repository (postgres integration)', () => {
         new Date('2026-07-19T20:01:00.000Z'),
       );
       expect(tooNew).toBeNull();
+
+      const sameLeg = await read.getRecentFlightByIdentity(
+        'ABC123',
+        `TST${flightId.slice(0, 6).toUpperCase()}`,
+        new Date('2026-07-19T19:55:00.000Z'),
+        new Date('2026-07-19T20:05:00.000Z'),
+      );
+      expect(sameLeg?.id).toBe(flightId);
+
+      const wrongCallsign = await read.getRecentFlightByIdentity(
+        'abc123',
+        'TSTOTHER',
+        new Date('2026-07-19T19:55:00.000Z'),
+        new Date('2026-07-19T20:05:00.000Z'),
+      );
+      expect(wrongCallsign).toBeNull();
     } finally {
       await db.execute(sql`delete from flights where id = ${flightId}`);
     }

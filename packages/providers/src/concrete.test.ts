@@ -188,6 +188,20 @@ describe('normalizeAeroDataBox', () => {
     expect(n?.actualArrival).toBe('2026-07-19T21:58:00Z');
     expect(n?.registration).toBe('TC-SOZ');
   });
+
+  test('rejects an unrelated result returned for a callsign lookup', () => {
+    const n = normalizeAeroDataBox(
+      raw,
+      {
+        by: 'flightNumber',
+        flightNumber: 'XQ999',
+        date: '2026-07-19',
+        callsign: 'SXS9ZZ',
+      },
+      FETCHED,
+    );
+    expect(n).toBeNull();
+  });
 });
 
 // ── Contract: registration list + through-the-base fetch/normalize ──

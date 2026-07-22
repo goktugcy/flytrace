@@ -197,6 +197,9 @@ function chooseFlight(raw: AeroDataBoxRaw, q: FlightStatusQuery): AeroDataBoxRaw
     ? raw.find((flight) => compactFlightNumber(flight.number) === flightNumber)
     : null;
   if (exactNumber) return exactNumber;
+  // A callsign search can return stale legs for the same airframe. Never attach
+  // the first unrelated result to the currently tracked callsign.
+  if (callsign) return null;
   return raw.find((flight) => flight.codeshareStatus === 'IsOperator') ?? raw[0] ?? null;
 }
 

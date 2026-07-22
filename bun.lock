@@ -17,6 +17,7 @@
         "@flytrace/airspace": "workspace:*",
         "@flytrace/db": "workspace:*",
         "@flytrace/notifications": "workspace:*",
+        "@flytrace/providers": "workspace:*",
         "@flytrace/shared": "workspace:*",
         "bullmq": "^5.34.0",
         "hono": "^4.6.14",

@@ -15,7 +15,7 @@ import {
   createLogger,
   fixedClock,
 } from '@flytrace/shared';
-import { ProviderFetchService, diffStatus } from './provider-fetch.ts';
+import { type ProviderFetchDeps, ProviderFetchService, diffStatus } from './provider-fetch.ts';
 
 const clock = fixedClock(1_700_000_000_000);
 const FLIGHT = '00000000-0000-7000-8000-000000000001';
@@ -81,6 +81,7 @@ async function makeService(
     deriveStatus?: (id: string) => Promise<'active' | 'landed' | null>;
     build?: Parameters<typeof fixtureProviderFactory>[0]['build'];
     catalog?: CatalogRepo;
+    validateStatus?: ProviderFetchDeps['validateStatus'];
   } = {},
 ) {
   const emitted: EventEnvelope[] = [];
@@ -114,6 +115,7 @@ async function makeService(
       logs.push({ providerKey: e.providerKey, success: e.success });
     },
     ...(opts.deriveStatus ? { deriveStatus: opts.deriveStatus } : {}),
+    ...(opts.validateStatus ? { validateStatus: opts.validateStatus } : {}),
   });
   return { service, emitted, enriched, logs };
 }
@@ -187,6 +189,20 @@ describe('ProviderFetchService', () => {
     await service.process(job);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toEqual({ providerKey: 'fixture', success: true });
+  });
+
+  test('rejects provider data that conflicts with the latest telemetry', async () => {
+    const repo = new FakeStatusRepo();
+    const { service, enriched, logs } = await makeService(repo, {
+      validateStatus: async () => false,
+      deriveStatus: async () => 'active',
+    });
+    await service.process(job);
+
+    expect(repo.upserts).toHaveLength(1);
+    expect(repo.upserts[0]?.providerKey).toBe('derived');
+    expect(enriched).toHaveLength(0);
+    expect(logs[0]).toEqual({ providerKey: 'fixture', success: false });
   });
 
   test('enriches the flight with resolved catalog FKs', async () => {

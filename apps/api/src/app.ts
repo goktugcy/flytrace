@@ -37,6 +37,7 @@ import {
   sha256TokenHasher,
 } from './security/session/refresh-tokens.ts';
 import { createUserRoutes } from './user/routes.ts';
+import { createWeatherRoutes } from './weather/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -291,6 +292,9 @@ export function createApp(ctx: AppContext) {
 
   // ── Airspace lookup (Phase 3 §1: EnteredAirspace) ──
   app.route('/api/v1', createAirspaceRoutes(ctx));
+
+  // ── Current weather and modelled aviation risk (Open-Meteo) ──
+  app.route('/api/v1', createWeatherRoutes());
 
   // ── Security: MFA, devices, refresh/session revoke ──
   app.route(

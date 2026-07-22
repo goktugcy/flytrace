@@ -77,6 +77,8 @@ export interface ProviderFetchDeps {
   logProvider?: (entry: ProviderLogEntry) => Promise<void>;
   /** Position-derived status fallback when no provider result is available. */
   deriveStatus?: (flightId: string) => Promise<ProviderStatusFields['status'] | null>;
+  /** Reject a provider leg that conflicts with the aircraft's latest telemetry. */
+  validateStatus?: (flightId: string, status: NormalizedFlightStatus) => Promise<boolean>;
 }
 
 function optDate(iso: string | undefined): Date | undefined {
@@ -104,6 +106,18 @@ export class ProviderFetchService {
         callsign: job.callsign ?? null,
         icao24: job.icao24 ?? null,
       });
+      let plausible = result !== null;
+      if (result && this.deps.validateStatus) {
+        try {
+          plausible = await this.deps.validateStatus(job.flightId, result.status);
+        } catch (err) {
+          this.deps.logger.warn('provider status validation failed open', {
+            flightId: job.flightId,
+            err: String(err),
+          });
+          plausible = true;
+        }
+      }
       await this.log({
         providerKey: provider.key,
         operation: 'getFlightStatus',
@@ -114,10 +128,15 @@ export class ProviderFetchService {
           icao24: job.icao24 ?? null,
         },
         latencyMs: this.deps.clock.now() - startedAt,
-        success: result !== null,
-        error: result === null ? 'no result (miss/rate-limit/circuit)' : null,
+        success: plausible,
+        error:
+          result === null
+            ? 'no result (miss/rate-limit/circuit)'
+            : plausible
+              ? null
+              : 'route conflicts with latest telemetry',
       });
-      if (result) {
+      if (result && plausible) {
         await this.commit(job.flightId, provider.key, toFields(result.status), result.status);
         await this.enrich(job, result.status);
         return;

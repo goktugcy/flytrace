@@ -2,16 +2,18 @@
 
 import { apiBase } from '@/lib/api';
 
-import type { FlightDetail, LiveFlight } from '@flytrace/shared';
+import type { FlightDetail, LiveFlight, WeatherMapFeatureCollection } from '@flytrace/shared';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { SearchBox } from '@/components/SearchBox';
 import { ErrorState } from '@/components/ui/states';
+import { contiguousTrailToAnchor } from '@/lib/flight-trail';
 import { useT } from '@/lib/i18n';
 import { saveLiveFlightDetail } from '@/lib/live-detail-cache';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
 import {
+  CloudSun,
   ExternalLink,
   Layers,
   LocateFixed,
@@ -312,6 +314,7 @@ const AIRSPACE_MIN_ZOOM = 5.2;
 const AIRSPACE_TYPES_QUERY = 'CTR,TMA,CTA,RESTRICTED,DANGER,PROHIBITED';
 const EMPTY_FEATURES: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 const AIRPORT_POLL_MS = 12_000;
+const WEATHER_POLL_MS = 5 * 60_000;
 const VIEWPORT_LIVE_MIN_ZOOM = 3;
 const VIEWPORT_LIVE_POLL_MS = 5_000;
 const FLIGHT_FRAME_IDLE_MS = 100;
@@ -378,6 +381,36 @@ const AIRPORT_COLOR: maplibregl.ExpressionSpecification = [
   '#cbd5e1',
 ];
 
+const WEATHER_COLOR: maplibregl.ExpressionSpecification = [
+  'match',
+  ['get', 'severity'],
+  'severe',
+  '#ef4444',
+  'high',
+  '#f97316',
+  'moderate',
+  '#fbbf24',
+  'low',
+  '#38bdf8',
+  '#94a3b8',
+];
+
+const WEATHER_GLYPH: maplibregl.ExpressionSpecification = [
+  'match',
+  ['get', 'kind'],
+  'storm',
+  '⚡',
+  'rain',
+  '●',
+  'wind',
+  '≋',
+  'snow',
+  '✦',
+  'fog',
+  '≡',
+  '•',
+];
+
 interface RouteAirport {
   iata: string;
   name: string;
@@ -389,6 +422,8 @@ interface RouteInfo {
   airline: string | null;
   origin: RouteAirport;
   destination: RouteAirport;
+  source: 'database' | 'aerodatabox' | 'adsbdb';
+  confidence: number;
 }
 
 interface AirportPhoto {
@@ -508,6 +543,33 @@ function wrapLng(lng: number): number {
   return ((((lng + 180) % 360) + 360) % 360) - 180;
 }
 
+function weatherPopupNode(properties: Record<string, unknown>): HTMLElement {
+  const root = document.createElement('div');
+  root.className = 'flt-tip weather-tip';
+  const title = document.createElement('b');
+  title.textContent = String(properties.label ?? 'Weather');
+  root.append(title);
+
+  const measurements = document.createElement('span');
+  const parts = [
+    numericLabel(properties.precipitationMm, 'mm precipitation'),
+    numericLabel(properties.gustKt, 'kt gust'),
+    numericLabel(properties.capeJkg, 'J/kg CAPE'),
+  ].filter(Boolean);
+  measurements.textContent = parts.length > 0 ? parts.join(' · ') : 'Current model sample';
+  root.append(measurements);
+
+  const source = document.createElement('span');
+  source.textContent = `Open-Meteo · ${String(properties.severity ?? 'none')} risk`;
+  root.append(source);
+  return root;
+}
+
+function numericLabel(value: unknown, suffix: string): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return `${Math.round(value * 10) / 10} ${suffix}`;
+}
+
 function liveFlightToSnapshot(f: LiveFlight) {
   return {
     flightId: f.flightId,
@@ -533,13 +595,6 @@ function liveFlightToSnapshot(f: LiveFlight) {
     lastAcceptedAt: f.receivedAt,
     lastTs: f.ts,
   };
-}
-
-function parseTrackTimeMs(raw: string): number | null {
-  const withT = raw.includes('T') ? raw : raw.replace(' ', 'T');
-  const normalized = withT.replace(/([+-]\d{2})$/, '$1:00');
-  const ms = Date.parse(normalized);
-  return Number.isFinite(ms) ? ms : null;
 }
 
 function liveDetailFromSelection(sel: SelInfo): FlightDetail {
@@ -611,6 +666,11 @@ export function LiveMap() {
   const [airspaceStatus, setAirspaceStatus] = useState<
     'idle' | 'loading' | 'ready' | 'zoom' | 'error'
   >('idle');
+  const [weatherEnabled, setWeatherEnabled] = useState(true);
+  const [weatherCount, setWeatherCount] = useState(0);
+  const [weatherStatus, setWeatherStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
   const [selectedAirspaces, setSelectedAirspaces] = useState<AirspaceSummary[]>([]);
   const [selectedAirspaceStatus, setSelectedAirspaceStatus] = useState<
     'idle' | 'loading' | 'ready' | 'error'
@@ -624,6 +684,8 @@ export function LiveMap() {
   const airportDetailSeqRef = useRef(0);
   const airspaceEnabledRef = useRef(false);
   const applyAirspaceRef = useRef<() => void>(() => {});
+  const weatherEnabledRef = useRef(true);
+  const applyWeatherRef = useRef<() => void>(() => {});
   const selectedAirspaceRef = useRef<SelInfo | null>(null);
   const t = useT();
 
@@ -648,6 +710,12 @@ export function LiveMap() {
     airportsEnabledRef.current = next;
     setAirportsEnabled(next);
     applyAirportsRef.current();
+  };
+  const toggleWeather = () => {
+    const next = !weatherEnabledRef.current;
+    weatherEnabledRef.current = next;
+    setWeatherEnabled(next);
+    applyWeatherRef.current();
   };
 
   useEffect(() => {
@@ -712,7 +780,7 @@ export function LiveMap() {
     map.addControl(new maplibregl.NavigationControl({ showZoom: true }), 'top-right');
     map.addControl(
       new maplibregl.AttributionControl({
-        customAttribution: 'Positions © OpenSky Network · © MapLibre',
+        customAttribution: 'Positions © OpenSky Network · Weather © Open-Meteo · © MapLibre',
       }),
     );
 
@@ -738,6 +806,7 @@ export function LiveMap() {
       'route-ends',
       'airports',
       'airspaces',
+      'weather',
     ]);
     let selectedId: string | null = null;
     let pulse = 0;
@@ -746,6 +815,13 @@ export function LiveMap() {
     let airportInterval: ReturnType<typeof setInterval> | null = null;
     let airspaceSeq = 0;
     let airspaceTimer: ReturnType<typeof setTimeout> | null = null;
+    let weatherSeq = 0;
+    let weatherTimer: ReturnType<typeof setTimeout> | null = null;
+    let weatherInterval: ReturnType<typeof setInterval> | null = null;
+    let weatherAbort: AbortController | null = null;
+    let weatherPopup: maplibregl.Popup | null = null;
+    let weatherPulse = 0;
+    let weatherPulseLastRender = 0;
     let viewportLiveSeq = 0;
     let viewportLiveTimer: ReturnType<typeof setTimeout> | null = null;
     let viewportLiveInterval: ReturnType<typeof setInterval> | null = null;
@@ -891,6 +967,8 @@ export function LiveMap() {
             flights: candidates.map((f) => ({
               flightId: f.flightId,
               icao24: f.flightId.startsWith('adsb:') ? f.icao24 : undefined,
+              callsign: f.callsign,
+              ts: f.ts,
             })),
             limitPerFlight: LIVE_TRAIL_MAX_POINTS,
             sinceMinutes: 12 * 60,
@@ -903,42 +981,10 @@ export function LiveMap() {
         const nowMs = Date.now();
         for (const track of tracks) {
           const live = client.store.get(track.flightId);
-          const points = track.points
-            .filter((p) => p.lat != null && p.lon != null)
-            .map((p) => ({
-              coord: [p.lon as number, p.lat as number] as [number, number],
-              tsMs: parseTrackTimeMs(p.ts),
-            }))
-            .filter((p) => p.tsMs != null) as { coord: [number, number]; tsMs: number }[];
-          if (points.length < 2) continue;
+          if (!live) continue;
+          const coords = contiguousTrailToAnchor(track.points, live);
+          if (coords.length < 2) continue;
 
-          const coords: [number, number][] = [];
-          let contiguous = true;
-          const appendCoord = (coord: [number, number]) => {
-            const last = coords[coords.length - 1];
-            if (!last) {
-              coords.push(coord);
-              return;
-            }
-            const d = Math.abs(coord[0] - last[0]) + Math.abs(coord[1] - last[1]);
-            if (d > LIVE_TRAIL_RESET_DEG) {
-              contiguous = false;
-              return;
-            }
-            if (d > LIVE_TRAIL_MIN_DEG) coords.push(coord);
-          };
-
-          for (const point of points) appendCoord(point.coord);
-
-          const existing = liveTrails.get(track.flightId);
-          if (contiguous && existing?.coords.length) {
-            for (const coord of existing.coords) appendCoord(coord);
-          } else if (contiguous && live) {
-            appendCoord([live.lon, live.lat]);
-          }
-          if (!contiguous || coords.length < 2) continue;
-
-          const lastPoint = points[points.length - 1];
           const trimmed =
             coords.length > LIVE_TRAIL_MAX_POINTS
               ? coords.slice(coords.length - LIVE_TRAIL_MAX_POINTS)
@@ -946,9 +992,9 @@ export function LiveMap() {
           liveTrails.set(track.flightId, {
             coords: trimmed,
             last: trimmed[trimmed.length - 1] ?? null,
-            lastTsMs: live?.tsMs ?? lastPoint.tsMs,
+            lastTsMs: live.tsMs,
             lastSeenMs: nowMs,
-            quality: live?.qualityState ?? 'live',
+            quality: live.qualityState,
           });
           liveTrailsDirty = true;
         }
@@ -1021,6 +1067,27 @@ export function LiveMap() {
         pulse += 0.05;
         map.setPaintProperty('sel-ring', 'circle-radius', 16 + Math.sin(pulse) * 4);
         map.setPaintProperty('sel-ring', 'circle-opacity', 0.18 + (Math.sin(pulse) + 1) * 0.06);
+      }
+      if (
+        weatherEnabledRef.current &&
+        nowMs - weatherPulseLastRender >= 140 &&
+        map.getLayer('weather-glow')
+      ) {
+        weatherPulse += 0.22;
+        const wave = (Math.sin(weatherPulse) + 1) / 2;
+        map.setPaintProperty('weather-glow', 'circle-radius', [
+          'case',
+          ['==', ['get', 'kind'], 'storm'],
+          14 + wave * 7,
+          11,
+        ]);
+        map.setPaintProperty('weather-glow', 'circle-opacity', [
+          'case',
+          ['==', ['get', 'kind'], 'storm'],
+          0.1 + (1 - wave) * 0.18,
+          0.1,
+        ]);
+        weatherPulseLastRender = nowMs;
       }
       flightFrameLastRender = nowMs;
       raf = requestAnimationFrame(tick);
@@ -1131,6 +1198,66 @@ export function LiveMap() {
       scheduleAirportLoad();
     };
 
+    const setWeatherMapData = (data: GeoJSON.FeatureCollection) => {
+      const src = map.getSource('weather') as maplibregl.GeoJSONSource | undefined;
+      if (src) src.setData(data);
+    };
+
+    const setWeatherVisibility = () => {
+      const visibility = weatherEnabledRef.current ? 'visible' : 'none';
+      for (const layer of ['weather-glow', 'weather-core', 'weather-symbol', 'weather-label']) {
+        if (map.getLayer(layer)) map.setLayoutProperty(layer, 'visibility', visibility);
+      }
+    };
+
+    const loadWeather = async () => {
+      const seq = ++weatherSeq;
+      weatherAbort?.abort();
+      if (!weatherEnabledRef.current) {
+        setWeatherMapData(EMPTY_FEATURES);
+        setWeatherCount(0);
+        setWeatherStatus('idle');
+        return;
+      }
+      const controller = new AbortController();
+      weatherAbort = controller;
+      try {
+        setWeatherStatus('loading');
+        const bbox = viewportBbox(map);
+        if (!bbox) return;
+        const params = new URLSearchParams({
+          bbox: bbox.map((value) => value.toFixed(4)).join(','),
+          zoom: map.getZoom().toFixed(2),
+        });
+        const response = await fetch(`${API_BASE}/api/v1/weather/viewport?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`weather ${response.status}`);
+        const data = ((await response.json()) as { data: WeatherMapFeatureCollection }).data;
+        if (seq !== weatherSeq) return;
+        setWeatherMapData(data as GeoJSON.FeatureCollection);
+        setWeatherCount(data.count);
+        setWeatherStatus('ready');
+      } catch (error) {
+        if (seq !== weatherSeq || (error as Error).name === 'AbortError') return;
+        setWeatherMapData(EMPTY_FEATURES);
+        setWeatherCount(0);
+        setWeatherStatus('error');
+      } finally {
+        if (weatherAbort === controller) weatherAbort = null;
+      }
+    };
+
+    const scheduleWeatherLoad = (delayMs = 650) => {
+      if (weatherTimer) clearTimeout(weatherTimer);
+      weatherTimer = setTimeout(() => void loadWeather(), delayMs);
+    };
+
+    applyWeatherRef.current = () => {
+      setWeatherVisibility();
+      scheduleWeatherLoad(0);
+    };
+
     const setAirspaceMapData = (data: GeoJSON.FeatureCollection) => {
       const src = map.getSource('airspaces') as maplibregl.GeoJSONSource | undefined;
       if (src) src.setData(data);
@@ -1197,25 +1324,35 @@ export function LiveMap() {
       scheduleAirspaceLoad();
     };
 
-    const loadTrail = async (flightId: string) => {
+    const loadTrail = async (flight: FlightSample) => {
       // Seed the buffer with whatever history the DB has; tick() extends it live.
       // Fall back to the marker's current position so a brand-new flight (no DB
       // history yet) still starts a trail instead of showing nothing.
       try {
-        const res = await fetch(`${API_BASE}/api/v1/flights/id/${flightId}/track?limit=2000`);
+        const params = new URLSearchParams({ limit: '2000' });
+        if (flight.flightId.startsWith('adsb:')) {
+          if (flight.callsign) params.set('callsign', flight.callsign);
+          params.set('at', flight.ts);
+        }
+        const res = await fetch(
+          `${API_BASE}/api/v1/flights/id/${encodeURIComponent(flight.flightId)}/track?${params}`,
+        );
         const points = res.ok
-          ? ((await res.json()) as { data: { points: { lat: number; lon: number }[] } }).data.points
+          ? (
+              (await res.json()) as {
+                data: { points: { ts: string; lat: number | null; lon: number | null }[] };
+              }
+            ).data.points
           : [];
-        if (selectedId !== flightId) return; // selection changed while fetching
-        trailCoords = points
-          .filter((p) => p.lat != null && p.lon != null)
-          .map((p) => [p.lon, p.lat] as [number, number]);
+        if (selectedId !== flight.flightId) return;
+        const live = client.store.get(flight.flightId) ?? flight;
+        trailCoords = contiguousTrailToAnchor(points, live);
       } catch {
-        if (selectedId !== flightId) return;
+        if (selectedId !== flight.flightId) return;
         trailCoords = [];
       }
       if (trailCoords.length === 0) {
-        const r = rendered.get(flightId);
+        const r = rendered.get(flight.flightId);
         if (r) trailCoords = [[r.lon, r.lat]];
       }
       trailLast = trailCoords.length ? (trailCoords[trailCoords.length - 1] ?? null) : null;
@@ -1257,12 +1394,24 @@ export function LiveMap() {
       });
     };
 
-    const loadRoute = async (callsign: string) => {
+    const loadRoute = async (flight: FlightSample) => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/flights/route/${encodeURIComponent(callsign)}`);
+        const params = new URLSearchParams({
+          flightId: flight.flightId,
+          icao24: flight.icao24,
+          date: flight.ts.slice(0, 10),
+          lat: String(flight.lat),
+          lon: String(flight.lon),
+          onGround: String(flight.onGround),
+          ts: flight.ts,
+        });
+        if (flight.heading != null) params.set('headingDeg', String(flight.heading));
+        const res = await fetch(
+          `${API_BASE}/api/v1/flights/route/${encodeURIComponent(flight.callsign ?? flight.icao24)}?${params}`,
+        );
         if (!res.ok) return;
         const r = ((await res.json()) as { data: { route: RouteInfo | null } }).data.route;
-        if (selectedId === null) return; // deselected while fetching
+        if (selectedId !== flight.flightId) return;
         setRoute(r);
         setRouteData(r);
       } catch {
@@ -1278,13 +1427,13 @@ export function LiveMap() {
         airportDetailSeqRef.current += 1;
         setSelAirport(null);
         setSelectedAirportStatus('idle');
-        void loadTrail(id);
         const s = client.store.get(id);
+        if (s) void loadTrail(s);
         setSel(s ? toSel(s) : null);
         if (s) void seedLiveTrailHistory([s]);
         setRoute(null);
         setRouteData(null);
-        if (s?.callsign) void loadRoute(s.callsign);
+        if (s?.callsign) void loadRoute(s);
       } else {
         clearTrail();
         setRouteData(null);
@@ -1472,6 +1621,85 @@ export function LiveMap() {
             'text-halo-color': '#050912',
             'text-halo-width': 1.2,
             'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 0.86],
+          },
+        });
+      }
+
+      if (!map.getSource('weather')) {
+        const visibility = weatherEnabledRef.current ? 'visible' : 'none';
+        map.addSource('weather', { type: 'geojson', data: EMPTY_FEATURES });
+        map.addLayer({
+          id: 'weather-glow',
+          type: 'circle',
+          source: 'weather',
+          layout: { visibility },
+          paint: {
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'storm'], 18, 11],
+            'circle-color': WEATHER_COLOR,
+            'circle-blur': 0.75,
+            'circle-opacity': 0.18,
+          },
+        });
+        map.addLayer({
+          id: 'weather-core',
+          type: 'circle',
+          source: 'weather',
+          layout: { visibility },
+          paint: {
+            'circle-radius': [
+              'match',
+              ['get', 'severity'],
+              'severe',
+              12,
+              'high',
+              11,
+              'moderate',
+              10,
+              8,
+            ],
+            'circle-color': WEATHER_COLOR,
+            'circle-opacity': 0.9,
+            'circle-stroke-color': '#f8fafc',
+            'circle-stroke-width': 1.2,
+            'circle-stroke-opacity': 0.8,
+          },
+        });
+        map.addLayer({
+          id: 'weather-symbol',
+          type: 'symbol',
+          source: 'weather',
+          layout: {
+            visibility,
+            'text-field': WEATHER_GLYPH,
+            'text-size': 13,
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+          },
+          paint: {
+            'text-color': '#07111f',
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 0.25,
+          },
+        });
+        map.addLayer({
+          id: 'weather-label',
+          type: 'symbol',
+          source: 'weather',
+          minzoom: 4.5,
+          layout: {
+            visibility,
+            'text-field': ['get', 'label'],
+            'text-size': 10,
+            'text-offset': [0, 1.65],
+            'text-anchor': 'top',
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+            'text-padding': 5,
+          },
+          paint: {
+            'text-color': '#f8fafc',
+            'text-halo-color': '#07111f',
+            'text-halo-width': 1.2,
           },
         });
       }
@@ -1703,6 +1931,7 @@ export function LiveMap() {
       started = true;
       void client.connect().then(sendViewport);
       airportInterval = setInterval(scheduleAirportLoad, AIRPORT_POLL_MS);
+      weatherInterval = setInterval(scheduleWeatherLoad, WEATHER_POLL_MS);
       viewportLiveInterval = setInterval(scheduleViewportLive, VIEWPORT_LIVE_POLL_MS);
       raf = requestAnimationFrame(tick);
     };
@@ -1711,6 +1940,7 @@ export function LiveMap() {
       void ensureLayers().then(() => {
         setAirportVisibility();
         setAirspaceVisibility();
+        setWeatherVisibility();
         // Theme-swap reload: overlays + their data were carried across, so just
         // re-apply layers/visibility — don't reconnect the feed or refetch.
         if (carrySwap) {
@@ -1719,6 +1949,7 @@ export function LiveMap() {
         }
         scheduleAirportLoad();
         scheduleAirspaceLoad();
+        scheduleWeatherLoad(0);
         startFeed();
       });
     });
@@ -1733,9 +1964,27 @@ export function LiveMap() {
       const id = e.features?.[0]?.properties?.id as string | undefined;
       if (id) void selectAirport(id);
     });
+    map.on('click', 'weather-core', (e) => {
+      if (map.queryRenderedFeatures(e.point, { layers: ['flights'] }).length > 0) return;
+      const feature = e.features?.[0];
+      if (!feature?.properties) return;
+      weatherPopup?.remove();
+      weatherPopup = new maplibregl.Popup({
+        className: 'flt-popup',
+        closeButton: false,
+        offset: 16,
+      })
+        .setLngLat(e.lngLat)
+        .setDOMContent(weatherPopupNode(feature.properties))
+        .addTo(map);
+    });
     map.on('click', (e) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: ['flights', 'airports'] });
+      const hits = map.queryRenderedFeatures(e.point, {
+        layers: ['flights', 'airports', 'weather-core'],
+      });
       if (hits.length === 0) {
+        weatherPopup?.remove();
+        weatherPopup = null;
         airportDetailSeqRef.current += 1;
         select(null);
         setSelAirport(null);
@@ -1752,6 +2001,12 @@ export function LiveMap() {
       map.getCanvas().style.cursor = 'pointer';
     });
     map.on('mouseleave', 'airports', () => {
+      map.getCanvas().style.cursor = '';
+    });
+    map.on('mouseenter', 'weather-core', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'weather-core', () => {
       map.getCanvas().style.cursor = '';
     });
 
@@ -1781,6 +2036,7 @@ export function LiveMap() {
       scheduleViewportLive(0);
       scheduleAirportLoad();
       scheduleAirspaceLoad();
+      scheduleWeatherLoad();
     });
     const unsub = client.store.subscribe(() => {
       setCount(client.store.size);
@@ -1797,6 +2053,10 @@ export function LiveMap() {
       if (airportTimer) clearTimeout(airportTimer);
       if (airportInterval) clearInterval(airportInterval);
       if (airspaceTimer) clearTimeout(airspaceTimer);
+      if (weatherTimer) clearTimeout(weatherTimer);
+      if (weatherInterval) clearInterval(weatherInterval);
+      weatherAbort?.abort();
+      weatherPopup?.remove();
       if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
       if (viewportLiveInterval) clearInterval(viewportLiveInterval);
       viewportLiveAbort?.abort();
@@ -1904,7 +2164,7 @@ export function LiveMap() {
           container, which would neutralise `absolute inset-0` and collapse it. */}
       <div ref={containerRef} className="size-full" />
 
-      <div className="absolute left-3 top-3 z-10 flex flex-col gap-2 sm:left-4 sm:top-4">
+      <div className="absolute left-3 right-3 top-3 z-10 flex flex-col gap-2 sm:left-4 sm:right-auto sm:top-4">
         <div className="flex items-start gap-2">
           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-card/85 px-3 text-sm font-medium shadow-soft-md backdrop-blur-md">
             <span className="relative flex size-2">
@@ -1945,50 +2205,75 @@ export function LiveMap() {
             placeholder={t('map.filter.airline')}
             className="h-8 w-40 rounded-md border border-border bg-card/85 px-2.5 text-xs shadow-soft-md backdrop-blur-md outline-none placeholder:text-muted-foreground focus-visible:border-ring"
           />
-          <button
-            type="button"
-            onClick={toggleAirports}
-            aria-pressed={airportsEnabled}
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
-              airportsEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <TowerControl className="size-3.5" />
-            {t('map.airports')}
-            {airportsEnabled && (
-              <span className="tabular-nums text-muted-foreground">
-                {airportStatus === 'loading'
-                  ? '...'
-                  : airportStatus === 'error'
-                    ? t('map.airports.error')
-                    : airportCount.toLocaleString()}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={toggleAirspace}
-            aria-pressed={airspaceEnabled}
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
-              airspaceEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Layers className="size-3.5" />
-            {t('map.airspace')}
-            {airspaceEnabled && (
-              <span className="tabular-nums text-muted-foreground">
-                {airspaceStatus === 'loading'
-                  ? '...'
-                  : airspaceStatus === 'zoom'
-                    ? t('map.airspace.zoom')
-                    : airspaceStatus === 'error'
-                      ? t('map.airspace.error')
-                      : airspaceCount.toLocaleString()}
-              </span>
-            )}
-          </button>
+          <div className="flex basis-full flex-wrap items-center gap-2 sm:basis-auto">
+            <button
+              type="button"
+              onClick={toggleAirports}
+              aria-pressed={airportsEnabled}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
+                airportsEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <TowerControl className="size-3.5" />
+              {t('map.airports')}
+              {airportsEnabled && (
+                <span className="tabular-nums text-muted-foreground">
+                  {airportStatus === 'loading'
+                    ? '...'
+                    : airportStatus === 'error'
+                      ? t('map.airports.error')
+                      : airportCount.toLocaleString()}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={toggleWeather}
+              aria-pressed={weatherEnabled}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
+                weatherEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <CloudSun
+                className={cn('size-3.5', weatherStatus === 'loading' && 'animate-pulse')}
+              />
+              {t('map.weather')}
+              {weatherEnabled && (
+                <span className="tabular-nums text-muted-foreground">
+                  {weatherStatus === 'loading'
+                    ? '...'
+                    : weatherStatus === 'error'
+                      ? t('map.weather.error')
+                      : weatherCount.toLocaleString()}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={toggleAirspace}
+              aria-pressed={airspaceEnabled}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card/85 px-2.5 text-xs font-medium shadow-soft-md backdrop-blur-md transition-colors',
+                airspaceEnabled ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Layers className="size-3.5" />
+              {t('map.airspace')}
+              {airspaceEnabled && (
+                <span className="tabular-nums text-muted-foreground">
+                  {airspaceStatus === 'loading'
+                    ? '...'
+                    : airspaceStatus === 'zoom'
+                      ? t('map.airspace.zoom')
+                      : airspaceStatus === 'error'
+                        ? t('map.airspace.error')
+                        : airspaceCount.toLocaleString()}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 

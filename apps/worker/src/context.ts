@@ -1,5 +1,6 @@
 import {
   type Database,
+  createCatalogReadRepo,
   createCatalogRepo,
   createFlightReadRepo,
   createFlightRepo,
@@ -20,6 +21,7 @@ import {
   busChannels,
   createLogger,
   redisKeyPrefix,
+  routeMatchesPosition,
   streamKeys,
 } from '@flytrace/shared';
 import type { Queue } from 'bullmq';
@@ -186,6 +188,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
 
   const systemRepo = createSystemRepo(db);
   const flightRead = createFlightReadRepo(db);
+  const catalogRead = createCatalogReadRepo(db);
   const providerFetch = new ProviderFetchService({
     registry,
     statusRepo: createFlightStatusRepo(db),
@@ -200,6 +203,32 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
       const pos = await flightRead.getLatestPosition(flightId);
       if (!pos) return null;
       return pos.onGround ? 'landed' : 'active';
+    },
+    validateStatus: async (flightId, status) => {
+      const [position, origin, destination] = await Promise.all([
+        flightRead.getLatestPosition(flightId),
+        catalogRead.getAirportByCode(status.origin),
+        catalogRead.getAirportByCode(status.destination),
+      ]);
+      if (!position || position.lat == null || position.lon == null) return true;
+      if (!origin || origin.lat == null || origin.lon == null) return true;
+      if (!destination || destination.lat == null || destination.lon == null) return true;
+
+      if (!position.onGround && status.status === 'landed') {
+        const arrival = status.actualArrival ?? status.scheduledArrival;
+        const ageMs = arrival ? Date.parse(position.ts) - Date.parse(arrival) : Number.NaN;
+        if (Number.isFinite(ageMs) && ageMs > 90 * 60_000) return false;
+      }
+      return routeMatchesPosition(
+        { lat: origin.lat, lon: origin.lon },
+        { lat: destination.lat, lon: destination.lon },
+        {
+          lat: position.lat,
+          lon: position.lon,
+          headingDeg: position.headingDeg,
+          onGround: position.onGround,
+        },
+      );
     },
   });
 

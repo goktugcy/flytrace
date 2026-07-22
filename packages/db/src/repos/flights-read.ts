@@ -54,6 +54,20 @@ export interface EventRow {
   payload: unknown;
 }
 
+export interface FlightRouteRow {
+  airline: string | null;
+  originIata: string | null;
+  originName: string;
+  originCity: string | null;
+  originLat: number;
+  originLon: number;
+  destinationIata: string | null;
+  destinationName: string;
+  destinationCity: string | null;
+  destinationLat: number;
+  destinationLon: number;
+}
+
 function createReadRepo(db: Database) {
   return {
     async getFlight(callsign: string, date: string): Promise<FlightRow | null> {
@@ -95,6 +109,29 @@ function createReadRepo(db: Database) {
       return rows[0] ?? null;
     },
 
+    async getRecentFlightByIdentity(
+      icao24: string,
+      callsign: string,
+      from: Date,
+      to: Date,
+    ): Promise<FlightRow | null> {
+      const hex = icao24.trim().toLowerCase();
+      const normalizedCallsign = callsign.trim().toUpperCase();
+      const rows = (await db.execute(sql`
+        select f.id, f.callsign, f.flight_number as "flightNumber", f.status,
+               to_char(f.flight_date, 'YYYY-MM-DD') as "flightDate",
+               f.source, f.last_seen_at as "lastSeenAt", f.created_at as "createdAt"
+        from flights f
+        join flight_positions fp on fp.flight_id = f.id
+        where fp.icao24 = ${hex}
+          and upper(f.callsign) = ${normalizedCallsign}
+          and fp.ts between ${from.toISOString()}::timestamptz and ${to.toISOString()}::timestamptz
+        order by fp.ts desc
+        limit 1
+      `)) as unknown as FlightRow[];
+      return rows[0] ?? null;
+    },
+
     async getLatestPosition(flightId: string): Promise<PositionRow | null> {
       const rows = (await db.execute(sql`
         select ts, icao24,
@@ -124,6 +161,30 @@ function createReadRepo(db: Database) {
         order by ts asc
         limit ${limit}
       `)) as unknown as PositionRow[];
+    },
+
+    async getRoute(flightId: string): Promise<FlightRouteRow | null> {
+      const rows = (await db.execute(sql`
+        select al.name as airline,
+               origin.iata as "originIata", origin.name as "originName",
+               origin.city as "originCity",
+               ST_Y(origin.location::geometry) as "originLat",
+               ST_X(origin.location::geometry) as "originLon",
+               destination.iata as "destinationIata",
+               destination.name as "destinationName",
+               destination.city as "destinationCity",
+               ST_Y(destination.location::geometry) as "destinationLat",
+               ST_X(destination.location::geometry) as "destinationLon"
+        from flights f
+        join airports origin on origin.id = f.origin_airport_id
+        join airports destination on destination.id = f.destination_airport_id
+        left join airlines al on al.id = f.airline_id
+        where f.id = ${flightId}
+          and origin.location is not null
+          and destination.location is not null
+        limit 1
+      `)) as unknown as FlightRouteRow[];
+      return rows[0] ?? null;
     },
 
     async getEvents(flightId: string): Promise<EventRow[]> {

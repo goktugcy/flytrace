@@ -119,6 +119,72 @@ describe('flight read routes', () => {
     }
   });
 
+  test('GET /flights/route validates a fallback route against live telemetry', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: Parameters<typeof fetch>[0]) => {
+      const southbound = String(url).includes('TST101');
+      return new Response(
+        JSON.stringify({
+          response: {
+            flightroute: {
+              airline: { name: 'Test Air' },
+              origin: southbound
+                ? {
+                    iata_code: 'IST',
+                    name: 'Istanbul',
+                    municipality: 'Istanbul',
+                    latitude: 41.2753,
+                    longitude: 28.7519,
+                  }
+                : {
+                    iata_code: 'AYT',
+                    name: 'Antalya',
+                    municipality: 'Antalya',
+                    latitude: 36.8987,
+                    longitude: 30.8005,
+                  },
+              destination: southbound
+                ? {
+                    iata_code: 'AYT',
+                    name: 'Antalya',
+                    municipality: 'Antalya',
+                    latitude: 36.8987,
+                    longitude: 30.8005,
+                  }
+                : {
+                    iata_code: 'IST',
+                    name: 'Istanbul',
+                    municipality: 'Istanbul',
+                    latitude: 41.2753,
+                    longitude: 28.7519,
+                  },
+            },
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const query = 'date=2026-07-22&lat=39.2&lon=29.7&headingDeg=160&onGround=false';
+      const accepted = await createApp(fakeCtx(new FakeRedis())).request(
+        `/api/v1/flights/route/TST101?${query}`,
+      );
+      const acceptedBody = (await accepted.json()) as {
+        data: { route: { source: string; origin: { iata: string } } | null };
+      };
+      expect(acceptedBody.data.route?.source).toBe('adsbdb');
+      expect(acceptedBody.data.route?.origin.iata).toBe('IST');
+
+      const rejected = await createApp(fakeCtx(new FakeRedis())).request(
+        `/api/v1/flights/route/TST102?${query}`,
+      );
+      expect(((await rejected.json()) as { data: { route: unknown } }).data.route).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('POST /flights/live/tracks returns empty when no DB history exists', async () => {
     const res = await createApp(fakeCtx(new FakeRedis())).request('/api/v1/flights/live/tracks', {
       method: 'POST',

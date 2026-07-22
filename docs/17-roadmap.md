@@ -76,8 +76,8 @@ push notification. This is the make-or-break slice.
 **Goal:** more coverage, hardened performance, production-grade ops.
 - More providers (**Lufthansa, British Airways**) + provider fallback to position-derived status
   proven under outage; provider priority/conflict handling.
-- Geofences/airspace events (`EnteredAirspace`), `AircraftChanged`, weather integration (replace
-  placeholders) if a compliant source is chosen.
+- Geofences/airspace events (`EnteredAirspace`), `AircraftChanged`; Open-Meteo weather integration
+  now provides cached map hazards and modelled flight-level turbulence potential.
 - Realtime scale: sharded position channels, WS multi-node load-tested (k6), backpressure/
   sampling tuning; Redis split (queues vs cache/state); Postgres read replica + PgBouncer;
   Timescale continuous aggregates for history.

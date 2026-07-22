@@ -13,6 +13,7 @@ import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, Info, RadioTower } f
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
+import { FlightWeatherPanel } from './FlightWeatherPanel';
 
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
@@ -388,6 +389,8 @@ export function FlightView({ flightId }: { flightId: string }) {
         </Card>
 
         <OperationsPanel snapshot={detail.statusSnapshot ?? null} />
+
+        <FlightWeatherPanel position={live} />
 
         <Card className="lg:col-span-2">
           <CardHeader>
