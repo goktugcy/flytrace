@@ -1,6 +1,7 @@
 'use client';
 
 import { apiBase } from '@/lib/api';
+import { useT } from '@/lib/i18n';
 
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -35,16 +36,16 @@ interface Weather {
 }
 
 /** WMO weather-code → short label + icon (Open-Meteo `weather_code`). */
-function wmo(code: number, isDay: boolean): { label: string; Icon: LucideIcon } {
-  if (code === 0) return { label: 'Clear', Icon: isDay ? Sun : Moon };
-  if (code <= 3) return { label: 'Partly cloudy', Icon: Cloud };
-  if (code <= 48) return { label: 'Fog', Icon: CloudFog };
-  if (code <= 57) return { label: 'Drizzle', Icon: CloudDrizzle };
-  if (code <= 67) return { label: 'Rain', Icon: CloudRain };
-  if (code <= 77) return { label: 'Snow', Icon: CloudSnow };
-  if (code <= 82) return { label: 'Showers', Icon: CloudRain };
-  if (code <= 86) return { label: 'Snow showers', Icon: CloudSnow };
-  return { label: 'Thunderstorm', Icon: CloudLightning };
+function wmo(code: number, isDay: boolean): { labelKey: string; Icon: LucideIcon } {
+  if (code === 0) return { labelKey: 'weather.condition.clear', Icon: isDay ? Sun : Moon };
+  if (code <= 3) return { labelKey: 'weather.condition.partlyCloudy', Icon: Cloud };
+  if (code <= 48) return { labelKey: 'weather.condition.fog', Icon: CloudFog };
+  if (code <= 57) return { labelKey: 'weather.condition.drizzle', Icon: CloudDrizzle };
+  if (code <= 67) return { labelKey: 'weather.condition.rain', Icon: CloudRain };
+  if (code <= 77) return { labelKey: 'weather.condition.snow', Icon: CloudSnow };
+  if (code <= 82) return { labelKey: 'weather.condition.showers', Icon: CloudRain };
+  if (code <= 86) return { labelKey: 'weather.condition.snowShowers', Icon: CloudSnow };
+  return { labelKey: 'weather.condition.thunderstorm', Icon: CloudLightning };
 }
 
 interface Airport {
@@ -191,14 +192,15 @@ export function AirportView({ iata }: { iata: string }) {
 }
 
 function WeatherBadge({ weather }: { weather: Weather }) {
-  const { label, Icon } = wmo(weather.code, weather.isDay);
+  const t = useT();
+  const { labelKey, Icon } = wmo(weather.code, weather.isDay);
   return (
     <span className="ml-auto inline-flex items-center gap-2 rounded-md border border-border bg-card/60 px-2.5 py-1 text-sm">
       <Icon className="size-4 text-accent-bright" />
       {weather.tempC != null && (
         <span className="font-medium tabular-nums">{Math.round(weather.tempC)}°C</span>
       )}
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground">{t(labelKey)}</span>
       {weather.windKt != null && (
         <span className="inline-flex items-center gap-1 text-muted-foreground">
           <Wind className="size-3.5" />

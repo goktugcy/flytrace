@@ -12,6 +12,7 @@ import { useT } from '@/lib/i18n';
 import { saveLiveFlightDetail } from '@/lib/live-detail-cache';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
+import { translateWeatherCondition, translateWeatherSeverity } from '@/lib/weather-i18n';
 import {
   CloudSun,
   ExternalLink,
@@ -686,24 +687,30 @@ function wrapLng(lng: number): number {
   return ((((lng + 180) % 360) + 360) % 360) - 180;
 }
 
-function weatherPopupNode(properties: Record<string, unknown>): HTMLElement {
+function weatherPopupNode(
+  properties: Record<string, unknown>,
+  t: ReturnType<typeof useT>,
+): HTMLElement {
   const root = document.createElement('div');
   root.className = 'flt-tip weather-tip';
   const title = document.createElement('b');
-  title.textContent = String(properties.label ?? 'Weather');
+  title.textContent = translateWeatherCondition(t, properties);
   root.append(title);
 
   const measurements = document.createElement('span');
   const parts = [
-    numericLabel(properties.precipitationMm, 'mm precipitation'),
-    numericLabel(properties.gustKt, 'kt gust'),
-    numericLabel(properties.capeJkg, 'J/kg CAPE'),
+    numericLabel(properties.precipitationMm, t('weather.popup.precipitationSuffix')),
+    numericLabel(properties.gustKt, t('weather.popup.gustSuffix')),
+    numericLabel(properties.capeJkg, t('weather.popup.capeSuffix')),
   ].filter(Boolean);
-  measurements.textContent = parts.length > 0 ? parts.join(' · ') : 'Current model sample';
+  measurements.textContent =
+    parts.length > 0 ? parts.join(' · ') : t('weather.popup.currentSample');
   root.append(measurements);
 
   const source = document.createElement('span');
-  source.textContent = `Open-Meteo · ${String(properties.severity ?? 'none')} risk`;
+  source.textContent = t('weather.popup.risk', {
+    severity: translateWeatherSeverity(t, properties.severity),
+  });
   root.append(source);
   return root;
 }
@@ -849,6 +856,9 @@ export function LiveMap() {
   const applyWeatherRef = useRef<() => void>(() => {});
   const selectedAirspaceRef = useRef<SelInfo | null>(null);
   const t = useT();
+  const tRef = useRef(t);
+  const weatherLocaleTRef = useRef(t);
+  tRef.current = t;
 
   const changeBand = (b: Band) => {
     setBand(b);
@@ -981,6 +991,8 @@ export function LiveMap() {
     let weatherInterval: ReturnType<typeof setInterval> | null = null;
     let weatherAbort: AbortController | null = null;
     let weatherPopup: maplibregl.Popup | null = null;
+    let weatherPopupProperties: Record<string, unknown> | null = null;
+    let currentWeatherData: GeoJSON.FeatureCollection = EMPTY_FEATURES;
     let ambientAudio: HTMLAudioElement | null = null;
     let ambientAudioKey: string | null = null;
     let ambientAudioVersion = 0;
@@ -1395,9 +1407,24 @@ export function LiveMap() {
       scheduleAirportLoad();
     };
 
-    const setWeatherMapData = (data: GeoJSON.FeatureCollection) => {
+    const renderWeatherMapData = (data: GeoJSON.FeatureCollection) => {
       const src = map.getSource('weather') as maplibregl.GeoJSONSource | undefined;
-      if (src) src.setData(data);
+      if (!src) return;
+      src.setData({
+        ...data,
+        features: data.features.map((feature) => ({
+          ...feature,
+          properties: {
+            ...feature.properties,
+            label: translateWeatherCondition(tRef.current, feature.properties ?? {}),
+          },
+        })),
+      });
+    };
+
+    const setWeatherMapData = (data: GeoJSON.FeatureCollection) => {
+      currentWeatherData = data;
+      renderWeatherMapData(data);
     };
 
     const setWeatherVisibility = () => {
@@ -1452,6 +1479,10 @@ export function LiveMap() {
 
     applyWeatherRef.current = () => {
       if (!weatherEnabledRef.current && ambientAudioKey?.startsWith('weather:')) stopAmbientAudio();
+      renderWeatherMapData(currentWeatherData);
+      if (weatherPopup && weatherPopupProperties) {
+        weatherPopup.setDOMContent(weatherPopupNode(weatherPopupProperties, tRef.current));
+      }
       setWeatherVisibility();
       scheduleWeatherLoad(0);
     };
@@ -2178,6 +2209,7 @@ export function LiveMap() {
       const feature = e.features?.[0];
       if (!feature?.properties) return;
       toggleWeatherAudio(feature.properties);
+      weatherPopupProperties = feature.properties;
       weatherPopup?.remove();
       weatherPopup = new maplibregl.Popup({
         className: 'flt-popup',
@@ -2185,7 +2217,7 @@ export function LiveMap() {
         offset: 16,
       })
         .setLngLat(e.lngLat)
-        .setDOMContent(weatherPopupNode(feature.properties))
+        .setDOMContent(weatherPopupNode(feature.properties, tRef.current))
         .addTo(map);
     });
     map.on('click', (e) => {
@@ -2196,6 +2228,7 @@ export function LiveMap() {
         stopAmbientAudio();
         weatherPopup?.remove();
         weatherPopup = null;
+        weatherPopupProperties = null;
         airportDetailSeqRef.current += 1;
         select(null);
         setSelAirport(null);
@@ -2283,6 +2316,12 @@ export function LiveMap() {
       map.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (weatherLocaleTRef.current === t) return;
+    weatherLocaleTRef.current = t;
+    applyWeatherRef.current();
+  }, [t]);
 
   // Aircraft photo for the selected flight (proxied via our API — Planespotters
   // requires a contact User-Agent the browser can't set).

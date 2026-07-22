@@ -4,7 +4,13 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/states';
 import { apiBase } from '@/lib/api';
+import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import {
+  translateTurbulenceReason,
+  translateWeatherCondition,
+  translateWeatherSeverity,
+} from '@/lib/weather-i18n';
 import type { WeatherPoint, WeatherSeverity } from '@flytrace/shared';
 import {
   AlertTriangle,
@@ -31,6 +37,7 @@ interface FlightPosition {
 }
 
 export function FlightWeatherPanel({ position }: { position: FlightPosition | null }) {
+  const t = useT();
   const [weather, setWeather] = useState<WeatherPoint | null>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const weatherKey =
@@ -81,12 +88,12 @@ export function FlightWeatherPanel({ position }: { position: FlightPosition | nu
               weather?.condition.kind === 'storm' && 'animate-pulse text-warning',
             )}
           />
-          Weather near aircraft
+          {t('weather.nearAircraft')}
         </CardTitle>
         {weather && (
           <div className="flex items-center gap-2">
             <Badge variant={severityBadge(weather.condition.severity)}>
-              {weather.condition.label}
+              {translateWeatherCondition(t, weather.condition)}
             </Badge>
             <span className="hidden text-xs text-muted-foreground sm:inline">Open-Meteo</span>
           </div>
@@ -95,50 +102,48 @@ export function FlightWeatherPanel({ position }: { position: FlightPosition | nu
       <CardContent>
         {state === 'loading' && !weather && (
           <div className="flex items-center gap-2 py-5 text-sm text-muted-foreground">
-            <Spinner /> Loading local weather model…
+            <Spinner /> {t('weather.loading')}
           </div>
         )}
         {state === 'error' && (
           <div className="flex items-center gap-2 py-5 text-sm text-muted-foreground">
-            <AlertTriangle className="size-4" /> Weather data is temporarily unavailable.
+            <AlertTriangle className="size-4" /> {t('weather.unavailable')}
           </div>
         )}
         {state === 'idle' && (
-          <div className="py-5 text-sm text-muted-foreground">
-            Waiting for an aircraft position…
-          </div>
+          <div className="py-5 text-sm text-muted-foreground">{t('weather.waitingPosition')}</div>
         )}
         {weather && (
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               <WeatherMetric
                 icon={Thermometer}
-                label="Temperature"
+                label={t('weather.temperature')}
                 value={weather.temperatureC != null ? `${Math.round(weather.temperatureC)}°C` : '—'}
               />
               <WeatherMetric
                 icon={CloudRain}
-                label="Precipitation"
+                label={t('weather.precipitation')}
                 value={formatAmount(weather.precipitationMm, 'mm')}
               />
               <WeatherMetric
                 icon={Wind}
-                label="Surface wind"
+                label={t('weather.surfaceWind')}
                 value={formatAmount(weather.wind.speedKt, 'kt')}
               />
               <WeatherMetric
                 icon={Navigation}
-                label="Wind gust"
+                label={t('weather.windGust')}
                 value={formatAmount(weather.wind.gustKt, 'kt')}
               />
               <WeatherMetric
                 icon={Eye}
-                label="Visibility"
+                label={t('weather.visibility')}
                 value={formatVisibility(weather.visibilityM)}
               />
               <WeatherMetric
                 icon={CloudLightning}
-                label="CAPE"
+                label={t('weather.cape')}
                 value={formatAmount(weather.convection.capeJkg, 'J/kg')}
               />
             </div>
@@ -146,37 +151,37 @@ export function FlightWeatherPanel({ position }: { position: FlightPosition | nu
             <div className={cn('rounded-md border p-4', riskClasses(weather.turbulence.level))}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 font-medium">
-                  <Gauge className="size-4" /> Estimated turbulence potential
+                  <Gauge className="size-4" /> {t('weather.turbulence.estimated')}
                 </div>
                 <Badge variant={severityBadge(weather.turbulence.level)} className="capitalize">
-                  {weather.turbulence.level} · {weather.turbulence.score}/100
+                  {translateWeatherSeverity(t, weather.turbulence.level)} ·{' '}
+                  {weather.turbulence.score}/100
                 </Badge>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <SmallField
-                  label="Flight-level wind"
+                  label={t('weather.flightLevelWind')}
                   value={formatAmount(weather.altitude?.windSpeedKt ?? null, 'kt')}
                 />
                 <SmallField
-                  label="Modelled wind shear"
+                  label={t('weather.modelledWindShear')}
                   value={formatAmount(weather.altitude?.windShearKt ?? null, 'kt')}
                 />
                 <SmallField
-                  label="Pressure level"
+                  label={t('weather.pressureLevel')}
                   value={weather.altitude ? `${weather.altitude.pressureLevelHpa} hPa` : '—'}
                 />
               </div>
               {weather.turbulence.reasons.length > 0 && (
                 <p className="mt-3 text-xs text-muted-foreground">
-                  {weather.turbulence.reasons.join(' · ')}
+                  {weather.turbulence.reasons
+                    .map((reason) => translateTurbulenceReason(t, reason))
+                    .join(' · ')}
                 </p>
               )}
               <div className="mt-3 flex gap-2 border-t border-current/10 pt-3 text-xs text-muted-foreground">
                 <Info className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  Model estimate from convection, vertical motion and nearby pressure-level wind
-                  shear. It is not radar, PIREP or an operational turbulence report.
-                </span>
+                <span>{t('weather.turbulence.disclaimer')}</span>
               </div>
             </div>
           </div>
