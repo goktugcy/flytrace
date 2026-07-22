@@ -236,6 +236,149 @@ function makeAirportImage(size = 64): ImageData {
   return ctx.getImageData(0, 0, size, size);
 }
 
+type WeatherIconKind = 'storm' | 'rain' | 'wind' | 'snow' | 'fog' | 'generic';
+
+/** Font-independent weather symbols rendered as SDF icons by MapLibre. */
+function makeWeatherImage(kind: WeatherIconKind, size = 64): ImageData {
+  const { ctx, s } = blankCtx(size);
+  if (!ctx) return new ImageData(size, size);
+  const path = (points: [number, number][], close = false) => {
+    const first = points[0];
+    if (!first) return;
+    ctx.beginPath();
+    ctx.moveTo(first[0] * s, first[1] * s);
+    for (const [x, y] of points.slice(1)) ctx.lineTo(x * s, y * s);
+    if (close) ctx.closePath();
+  };
+  const stroke = (points: [number, number][], width = 6) => {
+    path(points);
+    ctx.lineWidth = width * s;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  };
+  const dot = (x: number, y: number, radius: number) => {
+    ctx.beginPath();
+    ctx.arc(x * s, y * s, radius * s, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  if (kind === 'storm') {
+    path(
+      [
+        [37, 5],
+        [16, 35],
+        [29, 35],
+        [23, 59],
+        [49, 27],
+        [35, 27],
+      ],
+      true,
+    );
+    ctx.fill();
+  } else if (kind === 'rain') {
+    dot(24, 27, 12);
+    dot(38, 23, 15);
+    ctx.fillRect(16 * s, 25 * s, 37 * s, 13 * s);
+    stroke(
+      [
+        [20, 45],
+        [17, 54],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [33, 45],
+        [30, 54],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [46, 45],
+        [43, 54],
+      ],
+      5,
+    );
+  } else if (kind === 'wind') {
+    stroke(
+      [
+        [9, 20],
+        [38, 20],
+        [47, 14],
+        [54, 20],
+        [48, 27],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [9, 33],
+        [48, 33],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [9, 46],
+        [34, 46],
+        [41, 51],
+      ],
+      5,
+    );
+  } else if (kind === 'snow') {
+    stroke(
+      [
+        [32, 8],
+        [32, 56],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [11, 20],
+        [53, 44],
+      ],
+      5,
+    );
+    stroke(
+      [
+        [53, 20],
+        [11, 44],
+      ],
+      5,
+    );
+    dot(32, 32, 5);
+  } else if (kind === 'fog') {
+    stroke(
+      [
+        [10, 20],
+        [54, 20],
+      ],
+      6,
+    );
+    stroke(
+      [
+        [15, 32],
+        [49, 32],
+      ],
+      6,
+    );
+    stroke(
+      [
+        [10, 44],
+        [54, 44],
+      ],
+      6,
+    );
+  } else {
+    dot(32, 32, 16);
+  }
+
+  return ctx.getImageData(0, 0, size, size);
+}
+
 const CAT_SIZE: Record<string, number> = { light: 0.72, jet: 1.0, heavy: 1.35, helo: 0.9 };
 
 /** Faint lat/lon graticule for depth. */
@@ -395,20 +538,20 @@ const WEATHER_COLOR: maplibregl.ExpressionSpecification = [
   '#94a3b8',
 ];
 
-const WEATHER_GLYPH: maplibregl.ExpressionSpecification = [
+const WEATHER_ICON: maplibregl.ExpressionSpecification = [
   'match',
   ['get', 'kind'],
   'storm',
-  '⚡',
+  'weather-storm',
   'rain',
-  '●',
+  'weather-rain',
   'wind',
-  '≋',
+  'weather-wind',
   'snow',
-  '✦',
+  'weather-snow',
   'fog',
-  '≡',
-  '•',
+  'weather-fog',
+  'weather-generic',
 ];
 
 interface RouteAirport {
@@ -1580,6 +1723,12 @@ export function LiveMap() {
       if (!map.hasImage('airport')) {
         map.addImage('airport', makeAirportImage(64), { sdf: true, pixelRatio: 2 });
       }
+      for (const kind of ['storm', 'rain', 'wind', 'snow', 'fog', 'generic'] as const) {
+        const imageId = `weather-${kind}`;
+        if (!map.hasImage(imageId)) {
+          map.addImage(imageId, makeWeatherImage(kind, 64), { sdf: true, pixelRatio: 2 });
+        }
+      }
 
       if (!map.getSource('airspaces')) {
         map.addSource('airspaces', { type: 'geojson', data: EMPTY_FEATURES });
@@ -1634,10 +1783,10 @@ export function LiveMap() {
           source: 'weather',
           layout: { visibility },
           paint: {
-            'circle-radius': ['case', ['==', ['get', 'kind'], 'storm'], 18, 11],
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'storm'], 24, 18],
             'circle-color': WEATHER_COLOR,
-            'circle-blur': 0.75,
-            'circle-opacity': 0.18,
+            'circle-blur': 0.7,
+            'circle-opacity': 0.32,
           },
         });
         map.addLayer({
@@ -1650,18 +1799,18 @@ export function LiveMap() {
               'match',
               ['get', 'severity'],
               'severe',
-              12,
+              15,
               'high',
-              11,
+              14,
               'moderate',
-              10,
-              8,
+              13,
+              12,
             ],
             'circle-color': WEATHER_COLOR,
-            'circle-opacity': 0.9,
+            'circle-opacity': 0.96,
             'circle-stroke-color': '#f8fafc',
-            'circle-stroke-width': 1.2,
-            'circle-stroke-opacity': 0.8,
+            'circle-stroke-width': 1.5,
+            'circle-stroke-opacity': 0.92,
           },
         });
         map.addLayer({
@@ -1670,15 +1819,14 @@ export function LiveMap() {
           source: 'weather',
           layout: {
             visibility,
-            'text-field': WEATHER_GLYPH,
-            'text-size': 13,
-            'text-allow-overlap': true,
-            'text-ignore-placement': true,
+            'icon-image': WEATHER_ICON,
+            'icon-size': ['interpolate', ['linear'], ['zoom'], 2, 0.48, 7, 0.6, 11, 0.68],
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
           },
           paint: {
-            'text-color': '#07111f',
-            'text-halo-color': '#ffffff',
-            'text-halo-width': 0.25,
+            'icon-color': '#07111f',
+            'icon-opacity': 1,
           },
         });
         map.addLayer({
