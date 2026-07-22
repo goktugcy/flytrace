@@ -720,6 +720,12 @@ function weatherSoundPath(properties: Record<string, unknown>): string | null {
     : '/audio/weather/thunder.wav';
 }
 
+function aircraftSoundPath(category: unknown): string {
+  if (category === 'helo') return '/audio/aircraft/helicopter.wav';
+  if (category === 'light') return '/audio/aircraft/traine-plane.wav';
+  return '/audio/aircraft/plane.wav';
+}
+
 function numericLabel(value: unknown, suffix: string): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return `${Math.round(value * 10) / 10} ${suffix}`;
@@ -975,9 +981,9 @@ export function LiveMap() {
     let weatherInterval: ReturnType<typeof setInterval> | null = null;
     let weatherAbort: AbortController | null = null;
     let weatherPopup: maplibregl.Popup | null = null;
-    let weatherAudio: HTMLAudioElement | null = null;
-    let weatherAudioKey: string | null = null;
-    let weatherAudioVersion = 0;
+    let ambientAudio: HTMLAudioElement | null = null;
+    let ambientAudioKey: string | null = null;
+    let ambientAudioVersion = 0;
     let weatherPulse = 0;
     let weatherPulseLastRender = 0;
     let viewportLiveSeq = 0;
@@ -991,34 +997,37 @@ export function LiveMap() {
     let flightFrameLastRender = 0;
     let flightMaintenanceLastRun = 0;
 
-    const stopWeatherAudio = () => {
-      weatherAudioVersion += 1;
-      if (weatherAudio) {
-        weatherAudio.pause();
+    const stopAmbientAudio = () => {
+      ambientAudioVersion += 1;
+      if (ambientAudio) {
+        ambientAudio.pause();
       }
-      weatherAudio = null;
-      weatherAudioKey = null;
+      ambientAudio = null;
+      ambientAudioKey = null;
     };
 
-    const toggleWeatherAudio = (properties: Record<string, unknown>) => {
-      const path = weatherSoundPath(properties);
-      const key = String(properties.id ?? `${properties.kind}:${properties.observedAt}`);
-      if (!path || (weatherAudioKey === key && weatherAudio && !weatherAudio.paused)) {
-        stopWeatherAudio();
+    const toggleAmbientAudio = (key: string, path: string | null) => {
+      if (!path || (ambientAudioKey === key && ambientAudio && !ambientAudio.paused)) {
+        stopAmbientAudio();
         return;
       }
 
-      stopWeatherAudio();
-      const version = weatherAudioVersion;
+      stopAmbientAudio();
+      const version = ambientAudioVersion;
       const audio = new Audio(path);
       audio.loop = true;
       audio.preload = 'auto';
       audio.volume = 0.45;
-      weatherAudio = audio;
-      weatherAudioKey = key;
+      ambientAudio = audio;
+      ambientAudioKey = key;
       void audio.play().catch(() => {
-        if (weatherAudioVersion === version && weatherAudio === audio) stopWeatherAudio();
+        if (ambientAudioVersion === version && ambientAudio === audio) stopAmbientAudio();
       });
+    };
+
+    const toggleWeatherAudio = (properties: Record<string, unknown>) => {
+      const id = String(properties.id ?? `${properties.kind}:${properties.observedAt}`);
+      toggleAmbientAudio(`weather:${id}`, weatherSoundPath(properties));
     };
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
@@ -1442,7 +1451,7 @@ export function LiveMap() {
     };
 
     applyWeatherRef.current = () => {
-      if (!weatherEnabledRef.current) stopWeatherAudio();
+      if (!weatherEnabledRef.current && ambientAudioKey?.startsWith('weather:')) stopAmbientAudio();
       setWeatherVisibility();
       scheduleWeatherLoad(0);
     };
@@ -1624,6 +1633,7 @@ export function LiveMap() {
         setRouteData(null);
         if (s?.callsign) void loadRoute(s);
       } else {
+        stopAmbientAudio();
         clearTrail();
         setRouteData(null);
         setSel(null);
@@ -1633,6 +1643,7 @@ export function LiveMap() {
     selectRef.current = select;
 
     const selectAirport = async (id: string) => {
+      stopAmbientAudio();
       const seq = ++airportDetailSeqRef.current;
       selectedId = null;
       liveTrailsDirty = true;
@@ -2150,8 +2161,12 @@ export function LiveMap() {
 
     // Interaction handlers — attached once; bound by layer id they survive setStyle.
     map.on('click', 'flights', (e) => {
-      const id = e.features?.[0]?.properties?.flightId as string | undefined;
-      if (id) select(id);
+      const properties = e.features?.[0]?.properties;
+      const id = properties?.flightId as string | undefined;
+      if (id && properties) {
+        toggleAmbientAudio(`aircraft:${id}`, aircraftSoundPath(properties.cat));
+        select(id);
+      }
     });
     map.on('click', 'airports', (e) => {
       if (map.queryRenderedFeatures(e.point, { layers: ['flights'] }).length > 0) return;
@@ -2178,7 +2193,7 @@ export function LiveMap() {
         layers: ['flights', 'airports', 'weather-core'],
       });
       if (hits.length === 0) {
-        stopWeatherAudio();
+        stopAmbientAudio();
         weatherPopup?.remove();
         weatherPopup = null;
         airportDetailSeqRef.current += 1;
@@ -2252,7 +2267,7 @@ export function LiveMap() {
       if (weatherTimer) clearTimeout(weatherTimer);
       if (weatherInterval) clearInterval(weatherInterval);
       weatherAbort?.abort();
-      stopWeatherAudio();
+      stopAmbientAudio();
       weatherPopup?.remove();
       if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
       if (viewportLiveInterval) clearInterval(viewportLiveInterval);
