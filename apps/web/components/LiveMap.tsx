@@ -708,6 +708,18 @@ function weatherPopupNode(properties: Record<string, unknown>): HTMLElement {
   return root;
 }
 
+function weatherSoundPath(properties: Record<string, unknown>): string | null {
+  const kind = String(properties.kind ?? '');
+  if (kind === 'rain') return '/audio/weather/rain.wav';
+  if (kind === 'wind') return '/audio/weather/wind.wav';
+  if (kind !== 'storm') return null;
+
+  const precipitation = properties.precipitationMm;
+  return typeof precipitation === 'number' && precipitation > 0.05
+    ? '/audio/weather/rain-thunderstorm.wav'
+    : '/audio/weather/thunder.wav';
+}
+
 function numericLabel(value: unknown, suffix: string): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return `${Math.round(value * 10) / 10} ${suffix}`;
@@ -963,6 +975,9 @@ export function LiveMap() {
     let weatherInterval: ReturnType<typeof setInterval> | null = null;
     let weatherAbort: AbortController | null = null;
     let weatherPopup: maplibregl.Popup | null = null;
+    let weatherAudio: HTMLAudioElement | null = null;
+    let weatherAudioKey: string | null = null;
+    let weatherAudioVersion = 0;
     let weatherPulse = 0;
     let weatherPulseLastRender = 0;
     let viewportLiveSeq = 0;
@@ -975,6 +990,36 @@ export function LiveMap() {
     let liveTrailsLastRender = 0;
     let flightFrameLastRender = 0;
     let flightMaintenanceLastRun = 0;
+
+    const stopWeatherAudio = () => {
+      weatherAudioVersion += 1;
+      if (weatherAudio) {
+        weatherAudio.pause();
+      }
+      weatherAudio = null;
+      weatherAudioKey = null;
+    };
+
+    const toggleWeatherAudio = (properties: Record<string, unknown>) => {
+      const path = weatherSoundPath(properties);
+      const key = String(properties.id ?? `${properties.kind}:${properties.observedAt}`);
+      if (!path || (weatherAudioKey === key && weatherAudio && !weatherAudio.paused)) {
+        stopWeatherAudio();
+        return;
+      }
+
+      stopWeatherAudio();
+      const version = weatherAudioVersion;
+      const audio = new Audio(path);
+      audio.loop = true;
+      audio.preload = 'auto';
+      audio.volume = 0.45;
+      weatherAudio = audio;
+      weatherAudioKey = key;
+      void audio.play().catch(() => {
+        if (weatherAudioVersion === version && weatherAudio === audio) stopWeatherAudio();
+      });
+    };
 
     const featureCollection = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
@@ -1397,6 +1442,7 @@ export function LiveMap() {
     };
 
     applyWeatherRef.current = () => {
+      if (!weatherEnabledRef.current) stopWeatherAudio();
       setWeatherVisibility();
       scheduleWeatherLoad(0);
     };
@@ -2116,6 +2162,7 @@ export function LiveMap() {
       if (map.queryRenderedFeatures(e.point, { layers: ['flights'] }).length > 0) return;
       const feature = e.features?.[0];
       if (!feature?.properties) return;
+      toggleWeatherAudio(feature.properties);
       weatherPopup?.remove();
       weatherPopup = new maplibregl.Popup({
         className: 'flt-popup',
@@ -2131,6 +2178,7 @@ export function LiveMap() {
         layers: ['flights', 'airports', 'weather-core'],
       });
       if (hits.length === 0) {
+        stopWeatherAudio();
         weatherPopup?.remove();
         weatherPopup = null;
         airportDetailSeqRef.current += 1;
@@ -2204,6 +2252,7 @@ export function LiveMap() {
       if (weatherTimer) clearTimeout(weatherTimer);
       if (weatherInterval) clearInterval(weatherInterval);
       weatherAbort?.abort();
+      stopWeatherAudio();
       weatherPopup?.remove();
       if (viewportLiveTimer) clearTimeout(viewportLiveTimer);
       if (viewportLiveInterval) clearInterval(viewportLiveInterval);
