@@ -196,3 +196,25 @@ export const weatherMapFeatureCollectionSchema = z.object({
   model: z.literal('open-meteo'),
 });
 export type WeatherMapFeatureCollection = z.infer<typeof weatherMapFeatureCollectionSchema>;
+
+/**
+ * A regular lon/lat grid of weather values for the Windy-style overlay (wind
+ * color field + animated particles). Values are row-major, length cols*rows;
+ * cell (r,c) is at index r*cols + c. `u`/`v` are wind components in knots
+ * (u = eastward, v = northward). Compact parallel arrays keep it cheap to ship
+ * and interpolate on the client.
+ */
+export const weatherFieldSchema = z.object({
+  bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]), // [w,s,e,n]
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  generatedAt: z.string(),
+  model: z.literal('open-meteo'),
+  u: z.array(z.number()),
+  v: z.array(z.number()),
+  speedKt: z.array(z.number()),
+  tempC: z.array(z.number()),
+  precipMm: z.array(z.number()),
+  cloudPct: z.array(z.number()),
+});
+export type WeatherField = z.infer<typeof weatherFieldSchema>;

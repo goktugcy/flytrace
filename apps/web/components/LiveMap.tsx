@@ -12,15 +12,20 @@ import { useT } from '@/lib/i18n';
 import { saveLiveFlightDetail } from '@/lib/live-detail-cache';
 import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
+import { WeatherFieldController, type WeatherMetric } from '@/lib/weather-field';
 import { translateWeatherCondition, translateWeatherSeverity } from '@/lib/weather-i18n';
 import {
+  Cloud,
+  CloudRain,
   CloudSun,
   ExternalLink,
   Layers,
   LocateFixed,
   Plane,
   RadioTower,
+  Thermometer,
   TowerControl,
+  Wind,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -814,6 +819,20 @@ export function LiveMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selectRef = useRef<(id: string | null) => void>(() => {});
   const locateRef = useRef<() => void>(() => {});
+  const weatherFieldRef = useRef<WeatherFieldController | null>(null);
+  const [wxMetric, setWxMetric] = useState<WeatherMetric | 'off'>('off');
+
+  const changeWx = (m: WeatherMetric | 'off') => {
+    setWxMetric(m);
+    const c = weatherFieldRef.current;
+    if (!c) return;
+    if (m === 'off') {
+      c.setEnabled(false);
+    } else {
+      c.setEnabled(true);
+      c.setMetric(m);
+    }
+  };
   const [count, setCount] = useState(0);
   const [failed, setFailed] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<RealtimeStatus>('disconnected');
@@ -955,7 +974,19 @@ export function LiveMap() {
       }),
     );
 
-    const resize = () => map.resize();
+    // Windy-style weather overlay (colour field below aircraft + wind particles).
+    const weatherField = new WeatherFieldController({
+      map,
+      container: containerRef.current,
+      apiBase: API_BASE,
+      beforeLayerId: 'flights',
+    });
+    weatherFieldRef.current = weatherField;
+
+    const resize = () => {
+      map.resize();
+      weatherField.onResize();
+    };
     requestAnimationFrame(resize);
     const ro = new ResizeObserver(resize);
     ro.observe(containerRef.current);
@@ -2277,6 +2308,7 @@ export function LiveMap() {
     });
     map.on('moveend', () => {
       sendViewport();
+      weatherField.refetch();
       scheduleViewportLive(0);
       scheduleAirportLoad();
       scheduleAirspaceLoad();
@@ -2308,6 +2340,8 @@ export function LiveMap() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       themeObserver.disconnect();
+      weatherField.destroy();
+      weatherFieldRef.current = null;
       unsub();
       offStatus();
       unregisterFocus();
@@ -2501,6 +2535,34 @@ export function LiveMap() {
                 </span>
               )}
             </button>
+            {/* Windy-style weather field: colour overlay + wind particles */}
+            <div className="flex items-center rounded-md border border-border bg-card/85 p-0.5 shadow-soft-md backdrop-blur-md">
+              {(
+                [
+                  ['wind', Wind],
+                  ['temp', Thermometer],
+                  ['rain', CloudRain],
+                  ['cloud', Cloud],
+                ] as const
+              ).map(([m, Icon]) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => changeWx(wxMetric === m ? 'off' : m)}
+                  aria-pressed={wxMetric === m}
+                  title={t(`map.wx.${m}`)}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-xs font-medium transition-colors',
+                    wxMetric === m
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  <span className="hidden lg:inline">{t(`map.wx.${m}`)}</span>
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={toggleAirspace}

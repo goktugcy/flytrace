@@ -1,4 +1,5 @@
 import {
+  type WeatherField,
   type WeatherKind,
   type WeatherMapFeatureCollection,
   type WeatherPoint,
@@ -54,7 +55,7 @@ interface CacheEntry<T> {
 export class WeatherService {
   private readonly cache = new Map<
     string,
-    CacheEntry<WeatherPoint | WeatherMapFeatureCollection>
+    CacheEntry<WeatherPoint | WeatherMapFeatureCollection | WeatherField>
   >();
 
   constructor(
@@ -172,9 +173,90 @@ export class WeatherService {
     return hit.data as T;
   }
 
-  private writeCache<T extends WeatherPoint | WeatherMapFeatureCollection>(key: string, data: T) {
+  private writeCache<T extends WeatherPoint | WeatherMapFeatureCollection | WeatherField>(
+    key: string,
+    data: T,
+  ) {
     this.cache.set(key, { data, expiresAt: this.now() + CACHE_TTL_MS });
   }
+
+  /**
+   * A dense lon/lat wind+scalar grid for the Windy-style overlay. One batched
+   * Open-Meteo request per viewport; cached like the other reads. Grid size is
+   * clamped so a single request stays bounded regardless of client input.
+   */
+  async field(
+    bbox: readonly [number, number, number, number],
+    cols: number,
+    rows: number,
+  ): Promise<WeatherField> {
+    const [w, s, e, n] = bbox;
+    const c = Math.max(4, Math.min(24, Math.round(cols)));
+    const r = Math.max(4, Math.min(18, Math.round(rows)));
+    const key = `field:${w.toFixed(2)},${s.toFixed(2)},${e.toFixed(2)},${n.toFixed(2)}:${c}x${r}`;
+    const hit = this.readCache<WeatherField>(key);
+    if (hit) return hit;
+
+    const lats: number[] = [];
+    const lons: number[] = [];
+    for (let ri = 0; ri < r; ri += 1) {
+      const lat = r === 1 ? (s + n) / 2 : s + ((n - s) * ri) / (r - 1);
+      for (let ci = 0; ci < c; ci += 1) {
+        lats.push(Math.max(-85, Math.min(85, lat)));
+        lons.push(c === 1 ? (w + e) / 2 : w + ((e - w) * ci) / (c - 1));
+      }
+    }
+
+    const payload = await this.request(lats, lons, [
+      'wind_speed_10m',
+      'wind_direction_10m',
+      'temperature_2m',
+      'precipitation',
+      'cloud_cover',
+    ]);
+    const records = Array.isArray(payload) ? payload : [payload];
+    const total = c * r;
+    const u = new Array<number>(total).fill(0);
+    const v = new Array<number>(total).fill(0);
+    const speedKt = new Array<number>(total).fill(0);
+    const tempC = new Array<number>(total).fill(0);
+    const precipMm = new Array<number>(total).fill(0);
+    const cloudPct = new Array<number>(total).fill(0);
+    for (let i = 0; i < total; i += 1) {
+      const current = records[i]?.current;
+      if (!current) continue;
+      const speed = numeric(current, 'wind_speed_10m');
+      const rad = (numeric(current, 'wind_direction_10m') * Math.PI) / 180;
+      // Wind direction is where it comes FROM; the velocity points the other way.
+      u[i] = -speed * Math.sin(rad);
+      v[i] = -speed * Math.cos(rad);
+      speedKt[i] = speed;
+      tempC[i] = numeric(current, 'temperature_2m');
+      precipMm[i] = numeric(current, 'precipitation');
+      cloudPct[i] = numeric(current, 'cloud_cover');
+    }
+
+    const data: WeatherField = {
+      bbox: [w, s, e, n],
+      cols: c,
+      rows: r,
+      generatedAt: new Date(this.now()).toISOString(),
+      model: 'open-meteo',
+      u,
+      v,
+      speedKt,
+      tempC,
+      precipMm,
+      cloudPct,
+    };
+    this.writeCache(key, data);
+    return data;
+  }
+}
+
+function numeric(current: CurrentValues, key: string): number {
+  const val = Number(current[key]);
+  return Number.isFinite(val) ? val : 0;
 }
 
 function weatherPointFromCurrent(

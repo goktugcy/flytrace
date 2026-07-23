@@ -73,5 +73,32 @@ export function createWeatherRoutes(service = new WeatherService()): Hono<AppEnv
     return ok(c, await service.viewport(bbox.data, zoom.data));
   });
 
+  // Dense wind + scalar grid for the Windy-style overlay (color field + particles).
+  app.get('/weather/field', async (c) => {
+    const bbox = bboxSchema.safeParse(c.req.query('bbox'));
+    const cols = z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(24)
+      .safeParse(c.req.query('cols') ?? 16);
+    const rows = z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(18)
+      .safeParse(c.req.query('rows') ?? 12);
+    if (!bbox.success || !cols.success || !rows.success) {
+      throw new AppError('BAD_REQUEST', 'invalid weather field request', {
+        details: [
+          ...(!bbox.success ? bbox.error.issues : []),
+          ...(!cols.success ? cols.error.issues : []),
+          ...(!rows.success ? rows.error.issues : []),
+        ],
+      });
+    }
+    return ok(c, await service.field(bbox.data, cols.data, rows.data));
+  });
+
   return app;
 }
