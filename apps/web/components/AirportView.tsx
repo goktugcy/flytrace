@@ -157,6 +157,13 @@ export function AirportView({ iata }: { iata: string }) {
             </h1>
             <span className="text-muted-foreground">{data.airport.name}</span>
             {weather && <WeatherBadge weather={weather} />}
+            <Link
+              href={`/airport/${data.airport.icao}`}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <TowerControl className="size-4" />
+              Ground view
+            </Link>
           </header>
           <p className="mt-1 text-sm text-muted-foreground">
             {[data.airport.city, data.airport.country].filter(Boolean).join(', ')}

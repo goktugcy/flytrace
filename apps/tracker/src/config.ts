@@ -108,6 +108,18 @@ const trackerSchema = z.object({
   TRACKER_USE_FIXTURE: configSchemas.boolish.default('false'),
   /** Community ADS-B feed (readsb/tar1090 JSON). */
   ADSB_API_URL: z.string().default('https://api.adsb.lol/v2'),
+  /**
+   * Query path shape: 'lol' → /lat/../lon/../dist/.. (adsb.lol, adsb.fi);
+   * 'point' → /point/{lat}/{lon}/{radius} (airplanes.live). Match it to ADSB_API_URL.
+   */
+  ADSB_QUERY_STYLE: z.enum(['lol', 'point']).default('lol'),
+  /**
+   * Optional multiple ADS-B feeds, combined in composite mode for wider receiver
+   * coverage (community aggregators share many feeders, so the union is only
+   * modestly larger). Format: "url|style,url|style" (style = lol | point). When
+   * unset, the single ADSB_API_URL/ADSB_QUERY_STYLE is used.
+   */
+  ADSB_FEEDS: z.string().optional(),
   /** ADS-B query centre + radius (nm). Türkiye-centric defaults; adsb.lol caps at 250. */
   ADSB_CENTER_LAT: z.coerce.number().default(39.0),
   ADSB_CENTER_LON: z.coerce.number().default(35.0),
@@ -118,6 +130,12 @@ const trackerSchema = z.object({
    * the real aircraft less (the client also dead-reckons between updates).
    */
   ADSB_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  // Airport ground-ops engine (Phase 3; off by default, additive). Reads
+  // airport geometry from Postgres once at boot; requires DATABASE_URL when on.
+  AIRPORT_GROUND_ENABLED: configSchemas.boolish.default('false'),
+  DATABASE_URL: z.string().url().optional(),
+  AIRPORT_GROUND_MAX_KM: z.coerce.number().positive().default(8),
+  AIRPORT_GROUND_ALT_FT: z.coerce.number().int().positive().default(10_000),
   /**
    * Prometheus scrape server for the tracker's process-local metrics registry.
    * The tracker is a poll loop with no HTTP surface otherwise; this exposes

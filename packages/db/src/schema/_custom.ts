@@ -14,6 +14,22 @@ export const geographyPoint = customType<{
   },
 });
 
+/**
+ * Generic PostGIS geometry (SRID 4326) for lines/polygons/points — airport
+ * runways, taxiways, aprons, gates, etc. Read as GeoJSON/WKT via ST_* in
+ * queries; written with ST_GeomFromEWKT. Kept separate from the geography
+ * point type used for single locations.
+ */
+export const geometry = customType<{
+  data: string;
+  driverData: string;
+  config: { srid: number };
+}>({
+  dataType(config) {
+    return `geometry(Geometry,${config?.srid ?? 4326})`;
+  },
+});
+
 /** Case-insensitive text (requires the `citext` extension). */
 export const citext = customType<{ data: string; driverData: string }>({
   dataType() {

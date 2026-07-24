@@ -1,5 +1,6 @@
-import type { FlightRepo, PositionInput } from '@flytrace/db';
+import type { AirportGroundEventRepo, FlightRepo, PositionInput } from '@flytrace/db';
 import {
+  type AirportStateChangedPayload,
   type EventEnvelope,
   type Logger,
   type PositionPayload,
@@ -38,6 +39,8 @@ export class Persister {
     private readonly repo: FlightRepo,
     private readonly logger: Logger,
     private readonly options: PersisterOptions = { maxPositionBatch: 500 },
+    /** Optional airport ground-ops timeline sink (Phase 4; no-op when absent). */
+    private readonly groundEvents?: AirportGroundEventRepo,
   ) {}
 
   async handle(env: EventEnvelope): Promise<void> {
@@ -53,9 +56,31 @@ export class Persister {
         await this.flush(); // land positions before finalizing the leg
         await this.onEnded(env);
         break;
+      case 'AirportStateChanged':
+        await this.onAirportState(env);
+        break;
       default:
         await this.onDerivedEvent(env);
     }
+  }
+
+  /** Project a ground-movement transition into the airport timeline table. */
+  private async onAirportState(env: EventEnvelope): Promise<void> {
+    if (!this.groundEvents) return;
+    const p = env.payload as AirportStateChangedPayload;
+    await this.groundEvents.insert({
+      flightId: p.flightId,
+      icao24: p.icao24,
+      airportId: p.airportId,
+      state: p.state,
+      previousState: p.previousState,
+      gateRef: p.gateRef,
+      runwayRef: p.runwayRef,
+      lat: p.lat,
+      lon: p.lon,
+      occurredAt: p.at,
+      dedupeKey: env.dedupeKey,
+    });
   }
 
   /** Flush buffered positions. Called after each stream batch and before end. */

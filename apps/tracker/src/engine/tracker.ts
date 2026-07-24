@@ -1,10 +1,12 @@
 import {
+  type AirportStateChangedPayload,
   type Clock,
   type DomainEventInput,
   type EventBus,
   type Logger,
   makeEnvelope,
 } from '@flytrace/shared';
+import type { AirportGroundService } from '../airport/airport-ground-service.ts';
 import {
   appendTransitionHistory,
   detectStep,
@@ -50,6 +52,8 @@ export interface TrackerDeps {
   logger: Logger;
   options: TrackerOptions;
   metrics?: TrackerMetrics;
+  /** Optional airport ground-ops engine (feature-flagged; off = untouched). */
+  airportGround?: AirportGroundService;
 }
 
 /**
@@ -166,6 +170,7 @@ export class Tracker {
       if (events.some((event) => event.type === 'FlightRecovered')) {
         this.deps.metrics?.recoveredFlights.inc();
       }
+      await this.emitAirportGround(next, flightId, obsMs);
     }
   }
 
@@ -225,6 +230,52 @@ export class Tracker {
     await this.emitAll(
       [flightLifecycleEvent(lifecycleEventType(nextQuality), next, at, ageMs)],
       state.flightId,
+    );
+  }
+
+  /** Run the airport ground engine for one accepted state and publish on change. */
+  private async emitAirportGround(
+    next: FlightState,
+    flightId: string,
+    obsMs: number,
+  ): Promise<void> {
+    const svc = this.deps.airportGround;
+    if (!svc) return;
+    const result = svc.process(next.icao24, {
+      lat: next.lat,
+      lon: next.lon,
+      altFt: next.altFt,
+      gsKt: next.gsKt,
+      verticalRateFpm: next.vrateFpm,
+      headingDeg: next.headingDeg,
+      onGround: !next.airborne,
+      tsMs: obsMs,
+    });
+    if (!result?.changed) return;
+    const payload: AirportStateChangedPayload = {
+      flightId,
+      icao24: next.icao24,
+      airportId: result.airportId,
+      airportIcao: result.airportIcao,
+      state: result.state,
+      previousState: result.previousState,
+      gateRef: result.gateRef,
+      runwayRef: result.runwayRef,
+      lat: next.lat,
+      lon: next.lon,
+      at: next.lastTs,
+    };
+    await this.emitAll(
+      [
+        {
+          type: 'AirportStateChanged',
+          occurredAt: next.lastTs,
+          dedupeKey: `${flightId}:airport:${result.state}:${obsMs}`,
+          partitionKey: flightId,
+          payload,
+        },
+      ],
+      flightId,
     );
   }
 

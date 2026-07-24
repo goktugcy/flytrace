@@ -15,6 +15,14 @@ export interface OpenSkySourceOptions {
   clientId?: string | undefined;
   clientSecret?: string | undefined;
   clock?: Clock | undefined;
+  /**
+   * Minimum gap between real network fetches. When the composite polls faster
+   * than this (e.g. every 5 s to keep the adsb feed fresh), OpenSky serves its
+   * last snapshot instead of re-hitting the credit-limited /states/all. 0 = every call.
+   */
+  minFetchIntervalMs?: number;
+  /** Abort a fetch that takes longer than this (global /states/all can stall). */
+  fetchTimeoutMs?: number;
   /** Injectable fetch for testing; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -29,8 +37,14 @@ export class OpenSkyPositionSource implements PositionSource {
   readonly name = 'opensky';
   readonly timeMode = 'wall';
   private token: { value: string; expiresAt: number } | null = null;
+  private lastFetchMs = 0;
+  private lastPositions: Position[] = [];
 
   constructor(private readonly opts: OpenSkySourceOptions) {}
+
+  private get timeoutMs(): number {
+    return this.opts.fetchTimeoutMs ?? 30_000;
+  }
 
   private get fetch(): typeof fetch {
     return this.opts.fetchImpl ?? fetch;
@@ -54,6 +68,7 @@ export class OpenSkyPositionSource implements PositionSource {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body,
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`opensky token failed: ${res.status}`);
     const json = (await res.json()) as { access_token: string; expires_in: number };
@@ -62,6 +77,15 @@ export class OpenSkyPositionSource implements PositionSource {
   }
 
   async poll(): Promise<Position[]> {
+    // Throttle real fetches to OpenSky's own cadence. The composite polls this
+    // on the fast (adsb) tick, but /states/all is credit-limited, so between
+    // real fetches we replay the last snapshot (the client dead-reckons it).
+    const nowMs = (this.opts.clock ?? systemClock).now();
+    const minInterval = this.opts.minFetchIntervalMs ?? 0;
+    if (minInterval > 0 && this.lastFetchMs > 0 && nowMs - this.lastFetchMs < minInterval) {
+      return this.lastPositions;
+    }
+
     const { lamin, lomin, lamax, lomax } = this.opts.bbox;
     const url = new URL(STATES_URL);
     url.searchParams.set('lamin', String(lamin));
@@ -73,9 +97,16 @@ export class OpenSkyPositionSource implements PositionSource {
     const token = await this.accessToken();
     if (token) headers.authorization = `Bearer ${token}`;
 
-    const res = await this.fetch(url, { headers });
+    const res = await this.fetch(url, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
     if (!res.ok) throw new Error(`opensky states failed: ${res.status}`);
     const receivedAtMs = (this.opts.clock ?? systemClock).now();
-    return withSourceMetadata(normalizeStatesResponse(await res.json()), this.name, receivedAtMs);
+    const positions = withSourceMetadata(
+      normalizeStatesResponse(await res.json()),
+      this.name,
+      receivedAtMs,
+    );
+    this.lastFetchMs = nowMs;
+    this.lastPositions = positions;
+    return positions;
   }
 }

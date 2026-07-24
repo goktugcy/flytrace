@@ -13,6 +13,8 @@ export * from './repos/catalog.ts';
 export * from './repos/catalog-read.ts';
 export * from './repos/system.ts';
 export * from './repos/user.ts';
+export * from './repos/airport-ground-read.ts';
+export * from './repos/airport-ground-events.ts';
 export * from './repos/security.ts';
 export * from './repos/airspace-import.ts';
 export * from './repos/airspace-read.ts';

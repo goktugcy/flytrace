@@ -21,6 +21,7 @@ export const EVENT_TYPES = [
   'DescentDetected',
   'EnteredAirspace',
   'AircraftChanged',
+  'AirportStateChanged',
   'ProviderUpdated',
   'GateChanged',
   'DelayDetected',
@@ -208,6 +209,40 @@ export const providerUpdatedPayloadSchema = z.object({
   fetchedAt: z.string().datetime(),
 });
 export type ProviderUpdatedPayload = z.infer<typeof providerUpdatedPayloadSchema>;
+
+/** AirportStateChanged — an aircraft's ground/movement phase changed at an airport. */
+export const airportGroundStates = [
+  'AT_GATE',
+  'PUSHBACK',
+  'TAXI_OUT',
+  'HOLD_SHORT',
+  'LINE_UP',
+  'TAKEOFF_ROLL',
+  'AIRBORNE',
+  'CLIMB',
+  'CRUISE',
+  'DESCENT',
+  'APPROACH',
+  'LANDING',
+  'TAXI_IN',
+  'ARRIVED_GATE',
+  'PARKED_REMOTE',
+  'UNKNOWN',
+] as const;
+export const airportStateChangedPayloadSchema = z.object({
+  flightId: z.string(),
+  icao24: z.string(),
+  airportId: z.string(),
+  airportIcao: z.string(),
+  state: z.enum(airportGroundStates),
+  previousState: z.enum(airportGroundStates),
+  gateRef: z.string().nullable(),
+  runwayRef: z.string().nullable(),
+  lat: z.number(),
+  lon: z.number(),
+  at: z.string(),
+});
+export type AirportStateChangedPayload = z.infer<typeof airportStateChangedPayloadSchema>;
 
 /** AircraftChanged — the tail serving a flight number changed vs history (docs/07). */
 export const aircraftChangedPayloadSchema = z.object({

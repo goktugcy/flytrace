@@ -183,4 +183,66 @@ describe('Persister', () => {
     for (let i = 0; i < 3; i += 1) await p.handle(position(`2023-11-14T22:2${i}:00.000Z`, 41 + i));
     expect(repo.positions).toHaveLength(3); // flushed at threshold, no explicit flush()
   });
+
+  test('projects AirportStateChanged into the ground timeline (idempotent sink)', async () => {
+    const inserts: { state: string; dedupeKey: string; airportId: string }[] = [];
+    const groundEvents = {
+      insert: async (e: { state: string; dedupeKey: string; airportId: string }) => {
+        inserts.push(e);
+      },
+    } as unknown as import('@flytrace/db').AirportGroundEventRepo;
+    const p = new Persister(new FakeRepo(), logger, { maxPositionBatch: 500 }, groundEvents);
+    await p.handle(
+      env({
+        type: 'AirportStateChanged',
+        occurredAt: '2023-11-14T22:13:20.000Z',
+        dedupeKey: `${F}:airport:PUSHBACK:1`,
+        partitionKey: F,
+        payload: {
+          flightId: F,
+          icao24: '4bb1a2',
+          airportId: 'ap-1',
+          airportIcao: 'LTFM',
+          state: 'PUSHBACK',
+          previousState: 'AT_GATE',
+          gateRef: 'A1',
+          runwayRef: null,
+          lat: 41,
+          lon: 29,
+          at: '2023-11-14T22:13:20.000Z',
+        },
+      }),
+    );
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.state).toBe('PUSHBACK');
+    expect(inserts[0]?.airportId).toBe('ap-1');
+    expect(inserts[0]?.dedupeKey).toBe(`${F}:airport:PUSHBACK:1`);
+  });
+
+  test('AirportStateChanged is a no-op when no ground sink is wired', async () => {
+    const repo = new FakeRepo();
+    const p = new Persister(repo, logger);
+    await p.handle(
+      env({
+        type: 'AirportStateChanged',
+        occurredAt: '2023-11-14T22:13:20.000Z',
+        dedupeKey: `${F}:airport:TAXI_OUT:1`,
+        partitionKey: F,
+        payload: {
+          flightId: F,
+          icao24: '4bb1a2',
+          airportId: 'ap-1',
+          airportIcao: 'LTFM',
+          state: 'TAXI_OUT',
+          previousState: 'PUSHBACK',
+          gateRef: null,
+          runwayRef: null,
+          lat: 41,
+          lon: 29,
+          at: '2023-11-14T22:13:20.000Z',
+        },
+      }),
+    );
+    expect(repo.events).toHaveLength(0); // not written to flight_events either
+  });
 });

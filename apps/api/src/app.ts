@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { createAdminRoutes } from './admin/routes.ts';
+import { createAirportOpsRoutes } from './airport-ops/routes.ts';
 import { createAirspaceRoutes } from './airspace/routes.ts';
 import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
@@ -292,6 +293,9 @@ export function createApp(ctx: AppContext) {
 
   // ── Airspace lookup (Phase 3 §1: EnteredAirspace) ──
   app.route('/api/v1', createAirspaceRoutes(ctx));
+
+  // ── Airport ground operations (Phase 5) ──
+  app.route('/api/v1', createAirportOpsRoutes(ctx));
 
   // ── Current weather and modelled aviation risk (Open-Meteo) ──
   app.route('/api/v1', createWeatherRoutes());

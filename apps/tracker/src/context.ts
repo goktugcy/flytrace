@@ -1,3 +1,5 @@
+import type { AeroFeatureKind, GeoGeometry } from '@flytrace/airport-ops';
+import { createAirportGroundReadRepo, createDb } from '@flytrace/db';
 import {
   type Clock,
   type Logger,
@@ -6,12 +8,16 @@ import {
   systemClock,
 } from '@flytrace/shared';
 import { Redis } from 'ioredis';
+import {
+  type AirportGroundService,
+  createAirportGroundService,
+} from './airport/airport-ground-service.ts';
 import { RedisEventBus } from './bus/redis-bus.ts';
 import type { TrackerConfig, TrackerProviderName } from './config.ts';
 import { DEFAULT_DETECTOR_CONFIG } from './domain/flight-state.ts';
 import { Tracker, type TrackerOptions } from './engine/tracker.ts';
 import { type TrackerMetrics, createTrackerMetrics } from './metrics.ts';
-import { AdsbPositionSource } from './source/adsb-source.ts';
+import { AdsbPositionSource, type AdsbQueryStyle } from './source/adsb-source.ts';
 import { CompositePositionSource } from './source/composite-source.ts';
 import { FixturePositionSource } from './source/fixture-source.ts';
 import { OpenSkyPositionSource } from './source/opensky-source.ts';
@@ -66,6 +72,29 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     lockTtlMs: config.TRACKER_LOCK_TTL_MS,
   };
 
+  // Airport ground engine (opt-in). Loads geometry from Postgres once at boot.
+  let airportGround: AirportGroundService | undefined;
+  let closeAirportDb: (() => Promise<void>) | undefined;
+  if (config.AIRPORT_GROUND_ENABLED && config.DATABASE_URL) {
+    const { db, close } = createDb({ url: config.DATABASE_URL, max: 1 });
+    closeAirportDb = close;
+    const repo = createAirportGroundReadRepo(db);
+    airportGround = await createAirportGroundService({
+      listAirports: () => repo.listAirportsWithGeometry(),
+      loadFeatures: async (id) =>
+        (await repo.byAirportId(id)).map((r) => ({
+          id: r.id,
+          kind: r.kind as AeroFeatureKind,
+          ref: r.ref,
+          name: r.name,
+          geojson: r.geojson as GeoGeometry | null,
+        })),
+      maxKm: config.AIRPORT_GROUND_MAX_KM,
+      groundAltFt: config.AIRPORT_GROUND_ALT_FT,
+      logger,
+    });
+  }
+
   const tracker = new Tracker({
     source,
     store,
@@ -76,6 +105,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     logger,
     options,
     metrics,
+    ...(airportGround ? { airportGround } : {}),
   });
 
   return {
@@ -88,6 +118,7 @@ export async function createContext(config: TrackerConfig): Promise<TrackerConte
     close: async () => {
       await tracker.stop();
       await bus.close();
+      if (closeAirportDb) await closeAirportDb();
       redis.disconnect();
     },
   };
@@ -107,8 +138,13 @@ async function buildSource(
     return new FixturePositionSource(frames);
   }
   if (config.TRACKER_SOURCE === 'composite') {
-    const sources = config.TRACKER_PROVIDERS.map((provider) =>
-      buildLiveSource(provider, config, logger, clock),
+    // 'adsb' expands to one source per configured feed (ADSB_FEEDS); others map
+    // 1:1. The composite dedups by icao24 and keeps the best-scored candidate,
+    // so overlapping feeds never double-plot.
+    const sources = config.TRACKER_PROVIDERS.flatMap((provider) =>
+      provider === 'adsb'
+        ? buildAdsbSources(config, logger, clock)
+        : [buildLiveSource(provider, config, logger, clock)],
     );
     logger.info('using composite position source', { providers: config.TRACKER_PROVIDERS });
     return new CompositePositionSource({
@@ -125,6 +161,53 @@ async function buildSource(
   return buildLiveSource(config.TRACKER_SOURCE, config, logger, clock);
 }
 
+/** Parse ADSB_FEEDS ("url|style,url|style"), falling back to the single feed. */
+function adsbFeeds(config: TrackerConfig): { apiUrl: string; queryStyle: AdsbQueryStyle }[] {
+  const raw = config.ADSB_FEEDS?.trim();
+  if (raw) {
+    const feeds = raw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const [url, style] = entry.split('|').map((s) => s.trim());
+        return {
+          apiUrl: url ?? '',
+          queryStyle: (style === 'point' ? 'point' : 'lol') as AdsbQueryStyle,
+        };
+      })
+      .filter((f) => f.apiUrl.length > 0);
+    if (feeds.length > 0) return feeds;
+  }
+  return [{ apiUrl: config.ADSB_API_URL, queryStyle: config.ADSB_QUERY_STYLE }];
+}
+
+/** One ADS-B source per configured feed (all named 'adsb', so priority/scoring apply uniformly). */
+function buildAdsbSources(
+  config: TrackerConfig,
+  logger: Logger,
+  clock: Clock,
+): AdsbPositionSource[] {
+  const feeds = adsbFeeds(config);
+  logger.info('using adsb position source(s)', {
+    feeds: feeds.map((f) => f.apiUrl),
+    center: [config.ADSB_CENTER_LAT, config.ADSB_CENTER_LON],
+    radiusNm: config.ADSB_RADIUS_NM,
+  });
+  return feeds.map(
+    (f) =>
+      new AdsbPositionSource({
+        apiUrl: f.apiUrl,
+        lat: config.ADSB_CENTER_LAT,
+        lon: config.ADSB_CENTER_LON,
+        radiusNm: config.ADSB_RADIUS_NM,
+        queryStyle: f.queryStyle,
+        logger,
+        clock,
+      }),
+  );
+}
+
 function buildLiveSource(
   provider: TrackerProviderName,
   config: TrackerConfig,
@@ -139,6 +222,10 @@ function buildLiveSource(
       clientId: config.OPENSKY_CLIENT_ID,
       clientSecret: config.OPENSKY_CLIENT_SECRET,
       clock,
+      // In composite mode the engine ticks on the fast (adsb) interval; keep
+      // OpenSky on its own credit-safe cadence and never let it stall the tick.
+      minFetchIntervalMs: config.OPENSKY_POLL_INTERVAL_MS,
+      fetchTimeoutMs: 25_000,
     });
   }
   logger.info('using adsb position source', {
@@ -151,6 +238,7 @@ function buildLiveSource(
     lat: config.ADSB_CENTER_LAT,
     lon: config.ADSB_CENTER_LON,
     radiusNm: config.ADSB_RADIUS_NM,
+    queryStyle: config.ADSB_QUERY_STYLE,
     logger,
     clock,
   });

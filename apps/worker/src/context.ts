@@ -1,5 +1,6 @@
 import {
   type Database,
+  createAirportGroundEventRepo,
   createCatalogReadRepo,
   createCatalogRepo,
   createFlightReadRepo,
@@ -110,9 +111,12 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
   });
 
   // ── Persistence pipeline (stream consumer) ──
-  const persister = new Persister(createFlightRepo(db), logger, {
-    maxPositionBatch: config.WORKER_MAX_POSITION_BATCH,
-  });
+  const persister = new Persister(
+    createFlightRepo(db),
+    logger,
+    { maxPositionBatch: config.WORKER_MAX_POSITION_BATCH },
+    createAirportGroundEventRepo(db),
+  );
   const consumer = new StreamConsumer(
     redis,
     prefix,

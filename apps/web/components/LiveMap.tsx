@@ -874,10 +874,26 @@ export function LiveMap() {
   const weatherEnabledRef = useRef(true);
   const applyWeatherRef = useRef<() => void>(() => {});
   const selectedAirspaceRef = useRef<SelInfo | null>(null);
+  const groundAirportsRef = useRef<{ icao: string; lat: number; lon: number }[]>([]);
+  const [groundIcao, setGroundIcao] = useState<string | null>(null);
   const t = useT();
   const tRef = useRef(t);
   const weatherLocaleTRef = useRef(t);
   tRef.current = t;
+
+  // Airports with imported ground geometry — powers the "ground view" shortcut.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/api/v1/airports`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && Array.isArray(j?.data?.airports)) groundAirportsRef.current = j.data.airports;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const changeBand = (b: Band) => {
     setBand(b);
@@ -2303,6 +2319,25 @@ export function LiveMap() {
       }
     }, 4500);
 
+    // Surface a "ground view" button when zoomed into an airport that has
+    // imported OSM geometry (map center within ~8 km at zoom ≥ 12).
+    const updateGroundShortcut = () => {
+      if (map.getZoom() < 12) {
+        setGroundIcao(null);
+        return;
+      }
+      const c = map.getCenter();
+      const cosLat = Math.cos((c.lat * Math.PI) / 180);
+      let best: { icao: string; d: number } | null = null;
+      for (const a of groundAirportsRef.current) {
+        const dLat = (a.lat - c.lat) * 111;
+        const dLon = (a.lon - c.lng) * 111 * cosLat;
+        const d = Math.hypot(dLat, dLon);
+        if (d < 8 && (!best || d < best.d)) best = { icao: a.icao, d };
+      }
+      setGroundIcao(best ? best.icao : null);
+    };
+
     map.on('move', () => {
       scheduleViewportLive(420);
     });
@@ -2313,6 +2348,7 @@ export function LiveMap() {
       scheduleAirportLoad();
       scheduleAirspaceLoad();
       scheduleWeatherLoad();
+      updateGroundShortcut();
     });
     const unsub = client.store.subscribe(() => {
       setCount(client.store.size);
@@ -2448,6 +2484,16 @@ export function LiveMap() {
       {/* Explicit size-full — maplibre forces `position: relative` on its
           container, which would neutralise `absolute inset-0` and collapse it. */}
       <div ref={containerRef} className="size-full" />
+
+      {groundIcao && (
+        <Link
+          href={`/airport/${groundIcao}`}
+          className="absolute bottom-20 left-1/2 z-20 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card/90 px-4 py-2 text-sm font-medium shadow-soft-lg backdrop-blur-md transition-colors hover:text-foreground sm:bottom-6"
+        >
+          <TowerControl className="size-4 text-accent-foreground" />
+          {t('map.groundView', { icao: groundIcao })}
+        </Link>
+      )}
 
       <div className="absolute left-3 right-3 top-3 z-10 flex flex-col gap-2 sm:left-4 sm:right-auto sm:top-4">
         <div className="flex items-start gap-2">

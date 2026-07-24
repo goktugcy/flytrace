@@ -107,6 +107,18 @@ function createCatalogReadRepo(db: Database) {
       return rows[0] ?? null;
     },
 
+    async getAirportByIcao(icao: string): Promise<AirportDetail | null> {
+      const rows = (await db.execute(sql`
+        select id, iata, icao, name, type, city, country, timezone,
+               elevation_ft as "elevationFt", runways,
+               scheduled_service as "scheduledService",
+               home_url as "homeUrl", wikipedia_url as "wikipediaUrl", keywords,
+               ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
+        from airports where icao = ${icao.toUpperCase()} limit 1
+      `)) as unknown as AirportDetail[];
+      return rows[0] ?? null;
+    },
+
     /** Resolve either an IATA or ICAO code returned by an operations provider. */
     async getAirportByCode(code: string): Promise<AirportDetail | null> {
       const normalized = code.trim().toUpperCase();
