@@ -1055,6 +1055,29 @@ export function LiveMap() {
     let liveTrailsLastRender = 0;
     let flightFrameLastRender = 0;
     let flightMaintenanceLastRun = 0;
+    // Per-flight category + freshness are near-static / slow-changing, so we cache
+    // them and refresh on the maintenance cadence instead of recomputing for every
+    // aircraft on every animation frame (the featureCollection hot path).
+    const flightMeta = new Map<
+      string,
+      { cat: ReturnType<typeof flightCategory>; quality: ReturnType<typeof classifyFlightSample> }
+    >();
+    const flightMetaFor = (f: ReturnType<typeof client.store.list>[number], nowMs: number) => {
+      let m = flightMeta.get(f.flightId);
+      if (!m) {
+        m = { cat: flightCategory(f), quality: classifyFlightSample(f, nowMs) };
+        flightMeta.set(f.flightId, m);
+      }
+      return m;
+    };
+    const refreshFlightMeta = (nowMs: number) => {
+      for (const f of client.store.list()) {
+        flightMeta.set(f.flightId, {
+          cat: flightCategory(f),
+          quality: classifyFlightSample(f, nowMs),
+        });
+      }
+    };
 
     const stopAmbientAudio = () => {
       ambientAudioVersion += 1;
@@ -1093,8 +1116,7 @@ export function LiveMap() {
       type: 'FeatureCollection',
       features: client.store.list().map((f) => {
         const r = rendered.get(f.flightId) ?? { lat: f.lat, lon: f.lon, hdg: f.heading ?? 0 };
-        const cat = flightCategory(f);
-        const quality = classifyFlightSample(f, Date.now());
+        const { cat, quality } = flightMetaFor(f, Date.now());
         return {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
@@ -1282,6 +1304,8 @@ export function LiveMap() {
       if (nowMs - flightMaintenanceLastRun >= FLIGHT_MAINTENANCE_MS) {
         client.store.pruneStale(nowMs, MAP_FLIGHT_LIFECYCLE);
         pruneLiveTrails(nowMs);
+        flightMeta.clear();
+        refreshFlightMeta(nowMs);
         flightMaintenanceLastRun = nowMs;
       }
 

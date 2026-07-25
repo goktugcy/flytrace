@@ -25,7 +25,22 @@ services:
     image: redis:7-alpine
     container_name: flytrace-redis
     restart: unless-stopped
-    command: ['redis-server', '--appendonly', 'yes']
+    # Redis holds only the rebuildable hot state / event stream, so persistence
+    # is off (AOF disabled + no RDB snapshots). This avoids multi-GB dumps and
+    # AOF-corruption crash loops; the tracker repopulates it from live feeds in
+    # seconds. A memory cap with LRU eviction keeps the global feed bounded.
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'no',
+        '--save',
+        '',
+        '--maxmemory',
+        '1gb',
+        '--maxmemory-policy',
+        'allkeys-lru',
+      ]
     ports:
       - '6379:6379'
     volumes:

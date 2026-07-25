@@ -1,13 +1,18 @@
 'use client';
 
+import { ArchitecturePipeline } from '@/components/ArchitecturePipeline';
 import { Hero } from '@/components/Hero';
 import { LiveCounters } from '@/components/LiveCounters';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { apiBase } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { ArrowRight, Bell, ChevronDown, PlaneTakeoff, Radio, Satellite } from 'lucide-react';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+
+const API_BASE = apiBase();
 
 const FEATURES = [
   { icon: Satellite, key: 'f1' },
@@ -19,6 +24,23 @@ const FAQ = ['q1', 'q2', 'q3'];
 
 export default function HomePage() {
   const t = useT();
+  // Auth-aware CTAs: signed-in visitors get a dashboard shortcut instead of the
+  // "create account" prompt. null = still checking (render only the map CTA).
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled) setAuthed(Boolean(d?.data?.user));
+      })
+      .catch(() => {
+        if (!cancelled) setAuthed(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <main className="mx-auto max-w-6xl px-4 sm:px-6">
       {/* Hero */}
@@ -45,15 +67,25 @@ export default function HomePage() {
                 <ArrowRight />
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline">
-              <Link href="/signin">{t('landing.cta.account')}</Link>
-            </Button>
+            {authed === true && (
+              <Button asChild size="lg" variant="outline">
+                <Link href="/dashboard">{t('landing.cta.dashboard')}</Link>
+              </Button>
+            )}
+            {authed === false && (
+              <Button asChild size="lg" variant="outline">
+                <Link href="/signin">{t('landing.cta.account')}</Link>
+              </Button>
+            )}
           </div>
           <LiveCounters />
         </div>
 
         <Hero />
       </section>
+
+      {/* Architecture — how the real pipeline works */}
+      <ArchitecturePipeline />
 
       {/* Features */}
       <section className="py-8">

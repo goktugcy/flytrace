@@ -30,8 +30,26 @@ const en: Record<string, string> = {
     'Real aircraft, moving in real time — with takeoff, landing and descent events derived from the track, and alerts on the channel you choose.',
   'landing.cta.map': 'Open the live map',
   'landing.cta.account': 'Create account',
+  'landing.cta.dashboard': 'Go to dashboard',
   'landing.counters.aircraft': 'Live aircraft',
   'landing.counters.events': 'Events today',
+  'landing.arch.title': 'How it works',
+  'landing.arch.subtitle':
+    'A real-time pipeline built entirely on free and open data — from raw ADS-B to a live map in your browser.',
+  'landing.arch.s1.title': 'Open data sources',
+  'landing.arch.s1.body':
+    'Community ADS-B (airplanes.live, adsb.lol, adsb.fi) plus OpenSky worldwide.',
+  'landing.arch.s2.title': 'Fusion tracker',
+  'landing.arch.s2.body':
+    'Merges every source per aircraft, scores quality and dead-reckons between updates.',
+  'landing.arch.s3.title': 'Real-time core',
+  'landing.arch.s3.body': 'A Redis hot state streams positions to the browser over WebSocket.',
+  'landing.arch.s4.title': 'Geospatial engine',
+  'landing.arch.s4.body':
+    'PostGIS powers airspaces, airports and OpenStreetMap airport ground layouts.',
+  'landing.arch.s5.title': 'Live map',
+  'landing.arch.s5.body':
+    'MapLibre GL renders the world map, airport ground view and derived events.',
   'landing.features.title': 'What you get',
   'landing.f1.title': 'Real-time positions',
   'landing.f1.body':
@@ -204,8 +222,26 @@ const tr: Record<string, string> = {
     'Gerçek uçaklar, gerçek zamanlı — kalkış, iniş ve alçalma olayları izden türetilir ve seçtiğin kanaldan bildirim alırsın.',
   'landing.cta.map': 'Canlı haritayı aç',
   'landing.cta.account': 'Hesap oluştur',
+  'landing.cta.dashboard': 'Panele git',
   'landing.counters.aircraft': 'Canlı uçak',
   'landing.counters.events': 'Bugünkü olaylar',
+  'landing.arch.title': 'Nasıl çalışır',
+  'landing.arch.subtitle':
+    "Tamamen ücretsiz ve açık veriyle kurulmuş gerçek zamanlı bir hat — ham ADS-B'den tarayıcındaki canlı haritaya.",
+  'landing.arch.s1.title': 'Açık veri kaynakları',
+  'landing.arch.s1.body':
+    'Topluluk ADS-B (airplanes.live, adsb.lol, adsb.fi) ve dünya geneli OpenSky.',
+  'landing.arch.s2.title': 'Füzyon izleyici',
+  'landing.arch.s2.body':
+    'Her uçak için kaynakları birleştirir, kaliteyi puanlar ve güncellemeler arasında konum tahmini yapar.',
+  'landing.arch.s3.title': 'Gerçek zamanlı çekirdek',
+  'landing.arch.s3.body': 'Redis sıcak durumu, konumları WebSocket üzerinden tarayıcıya akıtır.',
+  'landing.arch.s4.title': 'Coğrafi motor',
+  'landing.arch.s4.body':
+    'PostGIS; hava sahaları, havalimanları ve OpenStreetMap yer yerleşimini besler.',
+  'landing.arch.s5.title': 'Canlı harita',
+  'landing.arch.s5.body':
+    'MapLibre GL; dünya haritasını, havalimanı yer görünümünü ve türetilen olayları çizer.',
   'landing.features.title': 'Neler sunuyoruz',
   'landing.f1.title': 'Gerçek zamanlı konumlar',
   'landing.f1.body':
