@@ -1,7 +1,7 @@
 'use client';
 
 import { ArchitecturePipeline } from '@/components/ArchitecturePipeline';
-import { Hero } from '@/components/Hero';
+import { HeroFlights } from '@/components/HeroFlights';
 import { LiveCounters } from '@/components/LiveCounters';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -44,8 +44,10 @@ export default function HomePage() {
   return (
     <main className="mx-auto max-w-6xl px-4 sm:px-6">
       {/* Hero */}
-      <section className="grid items-center gap-10 py-16 sm:py-24 lg:grid-cols-2 lg:gap-12">
-        <div>
+      <section className="relative overflow-hidden py-20 sm:py-28">
+        {/* Aircraft drift across the whole hero (transparent, frameless) */}
+        <HeroFlights />
+        <div className="relative z-10 max-w-2xl">
           <Badge variant="accent" className="mb-5">
             <span className="relative flex size-1.5">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent-bright opacity-75" />
@@ -80,8 +82,6 @@ export default function HomePage() {
           </div>
           <LiveCounters />
         </div>
-
-        <Hero />
       </section>
 
       {/* Architecture — how the real pipeline works */}

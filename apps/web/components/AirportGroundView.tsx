@@ -3,6 +3,7 @@
 import { apiBase } from '@/lib/api';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, X } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
@@ -124,26 +125,6 @@ interface OpRow {
   occurredAt: string;
 }
 
-/** Human-readable ground-state labels for the detail card. */
-const STATE_LABEL: Record<string, string> = {
-  AT_GATE: 'At gate',
-  ARRIVED_GATE: 'Arrived at gate',
-  PARKED_REMOTE: 'Parked',
-  PUSHBACK: 'Pushback',
-  TAXI_OUT: 'Taxiing out',
-  TAXI_IN: 'Taxiing in',
-  HOLD_SHORT: 'Holding short',
-  LINE_UP: 'Lining up',
-  TAKEOFF_ROLL: 'Takeoff roll',
-  AIRBORNE: 'Airborne',
-  CLIMB: 'Climbing',
-  CRUISE: 'Cruise',
-  DESCENT: 'Descending',
-  APPROACH: 'On approach',
-  LANDING: 'Landing',
-  UNKNOWN: 'Unknown',
-};
-
 /** Aircraft picked on the map, shown in the detail card. */
 interface SelAircraft {
   callsign: string;
@@ -158,6 +139,8 @@ interface SelAircraft {
 }
 
 export function AirportGroundView({ icao }: { icao: string }) {
+  const t = useT();
+  const stateLabel = (s: string) => t(`airport.state.${s}`);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
   const [name, setName] = useState<string>(icao.toUpperCase());
@@ -448,14 +431,7 @@ export function AirportGroundView({ icao }: { icao: string }) {
   }, [icao]);
 
   const legend = useMemo(
-    () => [
-      ['APPROACH', 'Approach'],
-      ['LANDING', 'Landing'],
-      ['HOLD_SHORT', 'Hold short'],
-      ['LINE_UP', 'Line up'],
-      ['TAKEOFF_ROLL', 'Takeoff'],
-      ['CLIMB', 'Departing'],
-    ],
+    () => ['APPROACH', 'LANDING', 'HOLD_SHORT', 'LINE_UP', 'TAKEOFF_ROLL', 'CLIMB'],
     [],
   );
 
@@ -470,7 +446,9 @@ export function AirportGroundView({ icao }: { icao: string }) {
           </Link>
           <span className="font-semibold">{icao.toUpperCase()}</span>
           <span className="max-w-[40vw] truncate text-sm text-muted-foreground">{name}</span>
-          <span className="ml-2 tabular-nums text-sm text-muted-foreground">{count} arr / dep</span>
+          <span className="ml-2 tabular-nums text-sm text-muted-foreground">
+            {count} {t('airport.arrDep')}
+          </span>
         </div>
         <div className="flex items-center rounded-md border border-border bg-card/85 p-0.5 shadow-soft-md backdrop-blur-md">
           {(Object.keys(FILTERS) as (keyof typeof FILTERS)[]).map((f) => (
@@ -486,7 +464,7 @@ export function AirportGroundView({ icao }: { icao: string }) {
                   : 'text-muted-foreground hover:text-foreground',
               )}
             >
-              {f}
+              {t(`airport.filter.${f.toLowerCase()}`)}
             </button>
           ))}
         </div>
@@ -494,22 +472,19 @@ export function AirportGroundView({ icao }: { icao: string }) {
 
       {/* Legend */}
       <div className="absolute bottom-4 left-3 z-10 hidden flex-col gap-1 rounded-md border border-border bg-card/85 px-3 py-2 text-xs shadow-soft-md backdrop-blur-md sm:flex">
-        {legend.map(([state, label]) => (
+        {legend.map((state) => (
           <div key={state} className="flex items-center gap-2">
-            <span
-              className="size-2.5 rounded-full"
-              style={{ background: STATE_COLOR[state as string] }}
-            />
-            <span className="text-muted-foreground">{label}</span>
+            <span className="size-2.5 rounded-full" style={{ background: STATE_COLOR[state] }} />
+            <span className="text-muted-foreground">{stateLabel(state)}</span>
           </div>
         ))}
       </div>
 
       {/* Operations timeline */}
       <div className="absolute inset-x-3 bottom-3 z-10 max-h-40 overflow-y-auto rounded-md border border-border bg-card/90 p-3 text-xs shadow-soft-lg backdrop-blur-md sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-auto sm:w-72">
-        <div className="mb-1 font-semibold">Operations</div>
+        <div className="mb-1 font-semibold">{t('airport.operations')}</div>
         {ops.length === 0 ? (
-          <p className="text-muted-foreground">No recent ground movements.</p>
+          <p className="text-muted-foreground">{t('airport.noOps')}</p>
         ) : (
           <ul className="divide-y divide-border">
             {ops.map((o, i) => (
@@ -552,32 +527,30 @@ export function AirportGroundView({ icao }: { icao: string }) {
               <span className="text-xs uppercase text-muted-foreground">{sel.icao24}</span>
             )}
           </div>
-          <div className="mt-0.5 text-sm text-muted-foreground">
-            {STATE_LABEL[sel.state] ?? sel.state}
-          </div>
+          <div className="mt-0.5 text-sm text-muted-foreground">{stateLabel(sel.state)}</div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
             <div>
-              <div className="text-xs text-muted-foreground">Alt</div>
+              <div className="text-xs text-muted-foreground">{t('airport.metric.alt')}</div>
               <div className="tabular-nums">
                 {sel.altitudeFt >= 0 ? `${sel.altitudeFt.toLocaleString()} ft` : '—'}
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground">Speed</div>
+              <div className="text-xs text-muted-foreground">{t('airport.metric.speed')}</div>
               <div className="tabular-nums">
                 {sel.speedKt >= 0 ? `${Math.round(sel.speedKt)} kt` : '—'}
               </div>
             </div>
             <div>
-              <div className="text-xs text-muted-foreground">Heading</div>
+              <div className="text-xs text-muted-foreground">{t('airport.metric.heading')}</div>
               <div className="tabular-nums">{Math.round(sel.heading)}°</div>
             </div>
           </div>
           {(sel.runwayRef || sel.gateRef) && (
             <div className="mt-2 text-sm text-muted-foreground">
-              {sel.runwayRef ? `Runway ${sel.runwayRef}` : ''}
+              {sel.runwayRef ? `${t('airport.runway')} ${sel.runwayRef}` : ''}
               {sel.runwayRef && sel.gateRef ? ' · ' : ''}
-              {sel.gateRef ? `Gate ${sel.gateRef}` : ''}
+              {sel.gateRef ? `${t('airport.gate')} ${sel.gateRef}` : ''}
             </div>
           )}
           {sel.flightId && (
@@ -585,7 +558,7 @@ export function AirportGroundView({ icao }: { icao: string }) {
               href={`/flights/id/${sel.flightId}`}
               className="mt-3 inline-block text-sm font-medium text-accent-foreground hover:underline"
             >
-              Full details →
+              {t('airport.fullDetails')} →
             </Link>
           )}
         </div>
@@ -593,20 +566,22 @@ export function AirportGroundView({ icao }: { icao: string }) {
 
       {status === 'ready' && emptyGeo && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/90 px-4 py-3 text-center text-sm text-muted-foreground shadow-soft-lg backdrop-blur-md">
-          No ground geometry imported for {icao.toUpperCase()} yet.
+          {t('airport.noGeometry', { icao: icao.toUpperCase() })}
           <br />
-          Run <code className="text-foreground">airport-geo:import</code> for this airport.
+          {t('airport.noGeometryHint')}
         </div>
       )}
 
       {status === 'missing' && (
         <div className="absolute inset-0 grid place-items-center bg-background/70">
-          <p className="text-muted-foreground">Airport {icao.toUpperCase()} not found.</p>
+          <p className="text-muted-foreground">
+            {t('airport.notFound', { icao: icao.toUpperCase() })}
+          </p>
         </div>
       )}
       {status === 'error' && (
         <div className="absolute inset-0 grid place-items-center bg-background/70">
-          <p className="text-muted-foreground">Could not load airport data.</p>
+          <p className="text-muted-foreground">{t('airport.loadError')}</p>
         </div>
       )}
     </div>

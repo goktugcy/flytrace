@@ -6,6 +6,7 @@ import { type CatalogFlight, CatalogFlightList } from '@/components/CatalogFligh
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { ArrowLeft, Plane } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -32,6 +33,7 @@ interface Stats {
 }
 
 export function AircraftView({ registration }: { registration: string }) {
+  const t = useT();
   const [aircraft, setAircraft] = useState<Aircraft | null>(null);
   const [flights, setFlights] = useState<CatalogFlight[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -69,7 +71,7 @@ export function AircraftView({ registration }: { registration: string }) {
         className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-4" />
-        Live map
+        {t('airport.liveMap')}
       </Link>
 
       {state === 'loading' && <AircraftSkeleton />}
@@ -77,8 +79,8 @@ export function AircraftView({ registration }: { registration: string }) {
       {state === 'missing' && (
         <EmptyState
           icon={Plane}
-          title={`${registration.toUpperCase()} not found`}
-          description="We don’t have this tail number in the catalog yet."
+          title={t('airport.notFoundTitle', { code: registration.toUpperCase() })}
+          description={t('aircraft.notInCatalog')}
         />
       )}
 
@@ -91,7 +93,7 @@ export function AircraftView({ registration }: { registration: string }) {
               {aircraft.registration ?? aircraft.icao24}
             </h1>
             <span className="text-muted-foreground">
-              {aircraft.typeName ?? aircraft.typeIcao ?? 'Unknown type'}
+              {aircraft.typeName ?? aircraft.typeIcao ?? t('aircraft.unknownType')}
             </span>
           </header>
           {aircraft.airlineName && (
@@ -101,18 +103,18 @@ export function AircraftView({ registration }: { registration: string }) {
           <div className="mt-6 grid gap-6 sm:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Details</CardTitle>
+                <CardTitle className="text-base">{t('aircraft.details')}</CardTitle>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-x-6 gap-y-5">
-                <Metric label="ICAO24" value={aircraft.icao24} />
-                <Metric label="Type" value={aircraft.typeIcao ?? '—'} />
-                <Metric label="Manufacturer" value={aircraft.manufacturer ?? '—'} />
+                <Metric label={t('aircraft.icao24')} value={aircraft.icao24} />
+                <Metric label={t('aircraft.type')} value={aircraft.typeIcao ?? '—'} />
+                <Metric label={t('aircraft.manufacturer')} value={aircraft.manufacturer ?? '—'} />
                 <Metric
-                  label="Built"
+                  label={t('aircraft.built')}
                   value={aircraft.builtYear != null ? String(aircraft.builtYear) : '—'}
                 />
                 <Metric
-                  label="Seats"
+                  label={t('aircraft.seats')}
                   value={aircraft.seats != null ? String(aircraft.seats) : '—'}
                 />
               </CardContent>
@@ -121,14 +123,23 @@ export function AircraftView({ registration }: { registration: string }) {
             {stats && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Utilization</CardTitle>
+                  <CardTitle className="text-base">{t('aircraft.utilization')}</CardTitle>
                 </CardHeader>
                 <CardContent className="grid grid-cols-2 gap-x-6 gap-y-5">
-                  <Metric label="Total legs" value={stats.totalFlights.toLocaleString()} />
-                  <Metric label="Active now" value={stats.activeFlights.toLocaleString()} />
-                  <Metric label="Distinct routes" value={stats.distinctRoutes.toLocaleString()} />
                   <Metric
-                    label="Last seen"
+                    label={t('aircraft.totalLegs')}
+                    value={stats.totalFlights.toLocaleString()}
+                  />
+                  <Metric
+                    label={t('airport.activeNow')}
+                    value={stats.activeFlights.toLocaleString()}
+                  />
+                  <Metric
+                    label={t('aircraft.distinctRoutes')}
+                    value={stats.distinctRoutes.toLocaleString()}
+                  />
+                  <Metric
+                    label={t('aircraft.lastSeen')}
                     value={stats.lastSeenAt ? new Date(stats.lastSeenAt).toLocaleDateString() : '—'}
                   />
                 </CardContent>
@@ -138,7 +149,9 @@ export function AircraftView({ registration }: { registration: string }) {
 
           <Card className="mt-6">
             <CardHeader>
-              <CardTitle className="text-base">Recent flights ({flights.length})</CardTitle>
+              <CardTitle className="text-base">
+                {t('aircraft.recentFlights')} ({flights.length})
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <CatalogFlightList flights={flights} />

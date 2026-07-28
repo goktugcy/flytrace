@@ -5,6 +5,7 @@ import { apiBase } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -12,6 +13,7 @@ import { useEffect, useState } from 'react';
 const API_BASE = apiBase();
 
 export function VerifyEmail({ token }: { token: string }) {
+  const t = useT();
   const [state, setState] = useState<'working' | 'ok' | 'fail'>('working');
 
   useEffect(() => {
@@ -33,7 +35,7 @@ export function VerifyEmail({ token }: { token: string }) {
           {state === 'working' && (
             <>
               <Spinner className="size-6 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Verifying your email…</p>
+              <p className="text-sm text-muted-foreground">{t('verify.verifying')}</p>
             </>
           )}
 
@@ -43,13 +45,11 @@ export function VerifyEmail({ token }: { token: string }) {
                 <CheckCircle2 className="size-6" />
               </div>
               <div className="space-y-1">
-                <h1 className="text-lg font-semibold">Email verified</h1>
-                <p className="text-sm text-muted-foreground">
-                  You’ll now receive flight alerts by email.
-                </p>
+                <h1 className="text-lg font-semibold">{t('verify.verified')}</h1>
+                <p className="text-sm text-muted-foreground">{t('verify.okBody')}</p>
               </div>
               <Button asChild size="sm">
-                <Link href="/dashboard">Go to dashboard</Link>
+                <Link href="/dashboard">{t('landing.cta.dashboard')}</Link>
               </Button>
             </>
           )}
@@ -60,11 +60,11 @@ export function VerifyEmail({ token }: { token: string }) {
                 <XCircle className="size-6" />
               </div>
               <div className="space-y-1">
-                <h1 className="text-lg font-semibold">Verification failed</h1>
-                <p className="text-sm text-muted-foreground">This link is invalid or expired.</p>
+                <h1 className="text-lg font-semibold">{t('verify.failed')}</h1>
+                <p className="text-sm text-muted-foreground">{t('verify.invalid')}</p>
               </div>
               <Button asChild size="sm" variant="outline">
-                <Link href="/settings/notifications">Try again</Link>
+                <Link href="/settings/notifications">{t('common.retry')}</Link>
               </Button>
             </>
           )}

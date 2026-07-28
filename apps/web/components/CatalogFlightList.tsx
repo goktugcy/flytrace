@@ -1,6 +1,7 @@
 'use client';
 
 import { Badge } from '@/components/ui/badge';
+import { useT } from '@/lib/i18n';
 import { PlaneLanding, PlaneTakeoff } from 'lucide-react';
 import Link from 'next/link';
 
@@ -15,8 +16,9 @@ export interface CatalogFlight {
 
 /** Shared compact flight list used by the airport & aircraft pages. */
 export function CatalogFlightList({ flights }: { flights: CatalogFlight[] }) {
+  const t = useT();
   if (flights.length === 0)
-    return <p className="py-2 text-sm text-muted-foreground">No recent flights.</p>;
+    return <p className="py-2 text-sm text-muted-foreground">{t('catalog.noRecentFlights')}</p>;
 
   return (
     <ul className="divide-y divide-border">

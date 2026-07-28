@@ -88,6 +88,7 @@ interface AirportData {
 }
 
 export function AirportView({ iata }: { iata: string }) {
+  const t = useT();
   const [data, setData] = useState<AirportData | null>(null);
   const [state, setState] = useState<'loading' | 'missing' | 'ready' | 'error'>('loading');
   const [weather, setWeather] = useState<Weather | null>(null);
@@ -134,7 +135,7 @@ export function AirportView({ iata }: { iata: string }) {
         className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-4" />
-        Live map
+        {t('airport.liveMap')}
       </Link>
 
       {state === 'loading' && <AirportSkeleton />}
@@ -142,8 +143,8 @@ export function AirportView({ iata }: { iata: string }) {
       {state === 'missing' && (
         <EmptyState
           icon={TowerControl}
-          title={`${iata.toUpperCase()} not found`}
-          description="We don’t have this airport in the catalog yet."
+          title={t('airport.notFoundTitle', { code: iata.toUpperCase() })}
+          description={t('airport.notInCatalog')}
         />
       )}
 
@@ -162,7 +163,7 @@ export function AirportView({ iata }: { iata: string }) {
               className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               <TowerControl className="size-4" />
-              Ground view
+              {t('airport.groundView')}
             </Link>
           </header>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -172,25 +173,35 @@ export function AirportView({ iata }: { iata: string }) {
 
           <Card className="mt-6">
             <CardContent className="flex flex-wrap gap-x-10 gap-y-5 p-6">
-              <Metric label="Departures" value={data.stats.departures.toLocaleString()} />
-              <Metric label="Arrivals" value={data.stats.arrivals.toLocaleString()} />
-              <Metric label="Active now" value={data.stats.active.toLocaleString()} accent />
-              <Metric label="ICAO" value={data.airport.icao} />
               <Metric
-                label="Elevation"
+                label={t('airport.departures')}
+                value={data.stats.departures.toLocaleString()}
+              />
+              <Metric label={t('airport.arrivals')} value={data.stats.arrivals.toLocaleString()} />
+              <Metric
+                label={t('airport.activeNow')}
+                value={data.stats.active.toLocaleString()}
+                accent
+              />
+              <Metric label={t('airport.icao')} value={data.airport.icao} />
+              <Metric
+                label={t('airport.elevation')}
                 value={
                   data.airport.elevationFt != null
                     ? `${data.airport.elevationFt.toLocaleString()} ft`
                     : '—'
                 }
               />
-              <Metric label="Runways" value={runwayCount != null ? String(runwayCount) : '—'} />
+              <Metric
+                label={t('airport.runways')}
+                value={runwayCount != null ? String(runwayCount) : '—'}
+              />
             </CardContent>
           </Card>
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
-            <Board title="Departures" dir="departure" rows={data.departures} />
-            <Board title="Arrivals" dir="arrival" rows={data.arrivals} />
+            <Board title={t('airport.departures')} dir="departure" rows={data.departures} />
+            <Board title={t('airport.arrivals')} dir="arrival" rows={data.arrivals} />
           </div>
         </>
       )}
@@ -227,6 +238,7 @@ function Board({
   dir: 'departure' | 'arrival';
   rows: BoardRow[];
 }) {
+  const t = useT();
   const Icon = dir === 'departure' ? PlaneTakeoff : PlaneLanding;
   return (
     <Card>
@@ -241,7 +253,7 @@ function Board({
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <p className="py-2 text-sm text-muted-foreground">No scheduled flights.</p>
+          <p className="py-2 text-sm text-muted-foreground">{t('airport.noScheduled')}</p>
         ) : (
           <ul className="divide-y divide-border">
             {rows.map((r) => (
@@ -258,7 +270,7 @@ function Board({
                 <span className="truncate text-sm text-muted-foreground">
                   {r.counterpartIata ?? '—'}
                   {r.counterpartCity ? ` · ${r.counterpartCity}` : ''}
-                  {r.gate ? ` · Gate ${r.gate}` : ''}
+                  {r.gate ? ` · ${t('airport.gate')} ${r.gate}` : ''}
                 </span>
                 <span className="text-right">
                   <span className="block tabular-nums">{fmtTime(r.estimated ?? r.scheduled)}</span>

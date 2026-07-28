@@ -1,6 +1,7 @@
 'use client';
 
 import { apiBase } from '@/lib/api';
+import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 import { Badge } from '@/components/ui/badge';
@@ -53,6 +54,7 @@ const EVENT_ORDER = [
 type ChannelKey = (typeof CHANNELS)[number];
 type VisibleEventType = (typeof EVENT_ORDER)[number];
 type State = 'loading' | 'unauth' | 'ready' | 'error';
+type Translate = ReturnType<typeof useT>;
 
 interface QuietHours {
   tz: string;
@@ -103,60 +105,39 @@ interface DashboardData {
 }
 
 const EVENT_LABELS: Record<string, string> = {
-  takeoff: 'Takeoff',
-  top_of_climb: 'Cruise reached',
-  top_of_descent: 'Descent started',
-  landing: 'Landing',
-  flight_ended: 'Flight ended',
-  delay: 'Delay',
-  gate_change: 'Gate change',
-  cancelled: 'Cancelled',
-  arrived: 'Arrived',
-  entered_airspace: 'Airspace',
+  takeoff: 'notif.event.takeoff',
+  top_of_climb: 'notif.event.top_of_climb',
+  top_of_descent: 'notif.event.top_of_descent',
+  landing: 'notif.event.landing',
+  flight_ended: 'notif.event.flight_ended',
+  delay: 'notif.event.delay',
+  gate_change: 'notif.event.gate_change',
+  cancelled: 'notif.event.cancelled',
+  arrived: 'notif.event.arrived',
+  entered_airspace: 'notif.event.entered_airspace',
 };
 
 const EVENT_GROUPS: {
   id: string;
-  label: string;
   events: VisibleEventType[];
   critical?: boolean;
 }[] = [
   {
     id: 'phase',
-    label: 'Flight phase',
     events: ['takeoff', 'top_of_climb', 'top_of_descent', 'landing', 'flight_ended'],
   },
   {
     id: 'ops',
-    label: 'Operational',
     events: ['delay', 'gate_change', 'cancelled', 'arrived'],
     critical: true,
   },
-  { id: 'airspace', label: 'Airspace', events: ['entered_airspace'] },
+  { id: 'airspace', events: ['entered_airspace'] },
 ];
 
-const CHANNEL_META: Record<
-  ChannelKey,
-  { title: string; label: string; icon: LucideIcon; description: string }
-> = {
-  webpush: {
-    title: 'Browser push',
-    label: 'Push',
-    icon: Smartphone,
-    description: 'Device-level alerts',
-  },
-  telegram: {
-    title: 'Telegram',
-    label: 'Telegram',
-    icon: MessageCircle,
-    description: 'Instant bot messages',
-  },
-  email: {
-    title: 'Email',
-    label: 'Email',
-    icon: Mail,
-    description: 'Verified inbox delivery',
-  },
+const CHANNEL_META: Record<ChannelKey, { icon: LucideIcon }> = {
+  webpush: { icon: Smartphone },
+  telegram: { icon: MessageCircle },
+  email: { icon: Mail },
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -170,6 +151,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function NotificationSettings() {
+  const t = useT();
   const [state, setState] = useState<State>('loading');
   const [data, setData] = useState<DashboardData | null>(null);
   const [webPushKey, setWebPushKey] = useState<string | null>(null);
@@ -238,7 +220,7 @@ export function NotificationSettings() {
         body: '{}',
       });
       window.open(deepLink, '_blank', 'noopener,noreferrer');
-      setMsg({ text: 'Telegram link created. Finish the link in Telegram.', tone: 'ok' });
+      setMsg({ text: t('notif.msg.telegramLinked'), tone: 'ok' });
       await refreshData();
     });
   }
@@ -246,7 +228,7 @@ export function NotificationSettings() {
   async function connectEmail() {
     const trimmed = email.trim();
     if (!trimmed) {
-      setMsg({ text: 'Enter an email address first.', tone: 'err' });
+      setMsg({ text: t('notif.msg.enterEmail'), tone: 'err' });
       return;
     }
     await runAction('email', async () => {
@@ -257,10 +239,10 @@ export function NotificationSettings() {
       });
       setMsg({
         text: body.token
-          ? `Dev verification token: ${body.token}`
+          ? t('notif.msg.devToken', { token: body.token })
           : body.sent
-            ? 'Verification email sent.'
-            : 'Email channel saved, but the provider is not configured.',
+            ? t('notif.msg.emailSent')
+            : t('notif.msg.emailNoProvider'),
         tone: body.sent || body.token ? 'ok' : 'err',
       });
       setEmail('');
@@ -273,8 +255,8 @@ export function NotificationSettings() {
       const hasDisabledEndpoint = channelGroups.webpush.some(
         (channel) => channel.verified && !channel.enabled,
       );
-      await subscribeWebPush({ forceRenew: hasDisabledEndpoint });
-      setMsg({ text: 'Browser push is connected on this device.', tone: 'ok' });
+      await subscribeWebPush(t, { forceRenew: hasDisabledEndpoint });
+      setMsg({ text: t('notif.msg.pushConnected'), tone: 'ok' });
       await refreshData();
     });
   }
@@ -284,8 +266,8 @@ export function NotificationSettings() {
       const hasReadyEndpoint = channelGroups.webpush.some(
         (channel) => channel.verified && channel.enabled,
       );
-      if (!hasReadyEndpoint) await subscribeWebPush({ forceRenew: true });
-      await showLocalWebPushTest();
+      if (!hasReadyEndpoint) await subscribeWebPush(t, { forceRenew: true });
+      await showLocalWebPushTest(t);
       try {
         const result = await api<{ sent: number; failed: number }>('/channels/webpush/test', {
           method: 'POST',
@@ -293,8 +275,8 @@ export function NotificationSettings() {
         setMsg({
           text:
             result.failed > 0
-              ? `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s); ${result.failed} failed.`
-              : `Chrome accepted the local test. Server push reached ${result.sent} endpoint(s).`,
+              ? t('notif.msg.testWithFailures', { sent: result.sent, failed: result.failed })
+              : t('notif.msg.testOk', { sent: result.sent }),
           tone: result.failed > 0 ? 'err' : 'ok',
         });
       } finally {
@@ -305,7 +287,7 @@ export function NotificationSettings() {
 
   async function savePreferences() {
     if (defaultChannels.length === 0) {
-      setMsg({ text: 'Choose at least one default channel.', tone: 'err' });
+      setMsg({ text: t('notif.msg.chooseChannel'), tone: 'err' });
       return;
     }
     await runAction('preferences', async () => {
@@ -317,7 +299,7 @@ export function NotificationSettings() {
           defaultChannels,
         }),
       });
-      setMsg({ text: 'Notification preferences saved.', tone: 'ok' });
+      setMsg({ text: t('notif.msg.prefsSaved'), tone: 'ok' });
       await refreshData();
     });
   }
@@ -368,7 +350,7 @@ export function NotificationSettings() {
       await action();
     } catch (err) {
       setMsg({
-        text: err instanceof Error ? err.message : 'Action failed.',
+        text: err instanceof Error ? err.message : t('notif.msg.actionFailed'),
         tone: 'err',
       });
     } finally {
@@ -385,13 +367,13 @@ export function NotificationSettings() {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="size-4" />
-            Dashboard
+            {t('nav.dashboard')}
           </Link>
-          <h1 className="mt-5 text-2xl font-semibold tracking-tight">Notifications</h1>
+          <h1 className="mt-5 text-2xl font-semibold tracking-tight">{t('dash.notifications')}</h1>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={load}>
           <RefreshCw />
-          Refresh
+          {t('notif.refresh')}
         </Button>
       </div>
 
@@ -401,11 +383,11 @@ export function NotificationSettings() {
         {state === 'unauth' && (
           <EmptyState
             icon={Bell}
-            title="Sign in to manage notifications"
-            description="Watched flights, channels and alert history live here."
+            title={t('notif.unauth.title')}
+            description={t('notif.unauth.body')}
             action={
               <Button asChild size="sm">
-                <Link href="/signin?next=/settings/notifications">Sign in</Link>
+                <Link href="/signin?next=/settings/notifications">{t('nav.signin')}</Link>
               </Button>
             }
           />
@@ -429,10 +411,22 @@ export function NotificationSettings() {
             )}
 
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Stat icon={Eye} label="Active watches" value={stats.activeWatches} />
-              <Stat icon={ShieldCheck} label="Ready channels" value={stats.readyChannels} />
-              <Stat icon={BellRing} label="Sent alerts" value={stats.sentNotifications} />
-              <Stat icon={AlertTriangle} label="Needs attention" value={stats.needsAttention} />
+              <Stat icon={Eye} label={t('notif.stat.activeWatches')} value={stats.activeWatches} />
+              <Stat
+                icon={ShieldCheck}
+                label={t('notif.stat.readyChannels')}
+                value={stats.readyChannels}
+              />
+              <Stat
+                icon={BellRing}
+                label={t('notif.stat.sentAlerts')}
+                value={stats.sentNotifications}
+              />
+              <Stat
+                icon={AlertTriangle}
+                label={t('notif.stat.needsAttention')}
+                value={stats.needsAttention}
+              />
             </div>
 
             <div className="grid gap-4 lg:grid-cols-3">
@@ -529,6 +523,7 @@ function ChannelPanel({
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   const meta = CHANNEL_META[kind];
   const ready = channels.some((ch) => ch.verified && ch.enabled);
   const pending = channels.some((ch) => !ch.verified);
@@ -543,9 +538,9 @@ function ChannelPanel({
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <Icon className="size-4 text-muted-foreground" />
-              {meta.title}
+              {t(`notif.channel.${kind}.title`)}
             </CardTitle>
-            <CardDescription>{meta.description}</CardDescription>
+            <CardDescription>{t(`notif.channel.${kind}.desc`)}</CardDescription>
           </div>
           <StatusBadge status={ready ? 'ready' : pending ? 'pending' : status} />
         </div>
@@ -556,13 +551,13 @@ function ChannelPanel({
             <Input
               value={email ?? ''}
               onChange={(event) => onEmailChange?.(event.target.value)}
-              placeholder="you@example.com"
+              placeholder={t('notif.channel.emailPlaceholder')}
               type="email"
               className="min-w-0"
             />
             <Button type="button" variant="secondary" onClick={onConnect} disabled={connectBusy}>
               {connectBusy ? <Loader2 className="animate-spin" /> : <Send />}
-              Verify
+              {t('notif.channel.verify')}
             </Button>
           </div>
         ) : (
@@ -580,7 +575,7 @@ function ChannelPanel({
               ) : (
                 <Send />
               )}
-              {ready ? 'Add another endpoint' : 'Connect'}
+              {ready ? t('notif.channel.addEndpoint') : t('notif.channel.connect')}
             </Button>
             {kind === 'webpush' && (
               <Button
@@ -593,17 +588,17 @@ function ChannelPanel({
                   status === 'not_configured' ||
                   status === 'denied'
                 }
-                title="Send a browser push test"
+                title={t('notif.channel.testTitle')}
               >
                 {testBusy ? <Loader2 className="animate-spin" /> : <BellRing />}
-                Test
+                {t('notif.channel.test')}
               </Button>
             )}
           </div>
         )}
 
         {channels.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No endpoint connected.</p>
+          <p className="text-sm text-muted-foreground">{t('notif.channel.noEndpoint')}</p>
         ) : (
           <div className="divide-y divide-border">
             {channels.map((channel) => (
@@ -633,19 +628,21 @@ function ChannelRow({
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{channel.label}</p>
         <p className="text-xs text-muted-foreground">
-          {channel.enabled ? 'Enabled' : 'Disabled'} / {channel.verified ? 'Verified' : 'Pending'}
+          {channel.enabled ? t('notif.channel.enabled') : t('notif.channel.disabled')} /{' '}
+          {channel.verified ? t('notif.channel.verified') : t('notif.status.pending')}
         </p>
       </div>
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        title={channel.enabled ? 'Disable' : 'Enable'}
+        title={channel.enabled ? t('notif.channel.disable') : t('notif.channel.enable')}
         disabled={busy}
         onClick={() => onToggle(channel.id, !channel.enabled)}
       >
@@ -655,7 +652,7 @@ function ChannelRow({
         type="button"
         variant="ghost"
         size="icon"
-        title="Disconnect"
+        title={t('notif.channel.disconnect')}
         disabled={busy}
         onClick={() => onDelete(channel.id)}
       >
@@ -694,28 +691,27 @@ function PreferencesPanel({
   busy: string | null;
   onSave: () => void;
 }) {
+  const t = useT();
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Moon className="size-4 text-muted-foreground" />
-          Preferences
+          {t('notif.pref.title')}
         </CardTitle>
-        <CardDescription>Quiet hours and default delivery channels.</CardDescription>
+        <CardDescription>{t('notif.pref.subtitle')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-secondary/30 p-3">
           <div>
-            <p className="text-sm font-medium">Quiet hours</p>
-            <p className="text-xs text-muted-foreground">
-              Critical alerts still bypass this window.
-            </p>
+            <p className="text-sm font-medium">{t('notif.pref.quietHours')}</p>
+            <p className="text-xs text-muted-foreground">{t('notif.pref.quietHoursHint')}</p>
           </div>
           <button
             type="button"
             role="switch"
             aria-checked={quietEnabled}
-            aria-label="Quiet hours"
+            aria-label={t('notif.pref.quietHours')}
             onClick={() => setQuietEnabled(!quietEnabled)}
             className={cn(
               'inline-flex h-7 w-12 items-center rounded-full border p-0.5 transition-colors',
@@ -734,11 +730,11 @@ function PreferencesPanel({
         {quietEnabled && (
           <div className="grid gap-4 sm:grid-cols-[1fr_auto_auto]">
             <div className="space-y-2">
-              <Label htmlFor="tz">Timezone</Label>
+              <Label htmlFor="tz">{t('notif.pref.timezone')}</Label>
               <Input id="tz" value={tz} onChange={(event) => setTz(event.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="start">From</Label>
+              <Label htmlFor="start">{t('notif.pref.from')}</Label>
               <Input
                 id="start"
                 value={start}
@@ -748,7 +744,7 @@ function PreferencesPanel({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="end">To</Label>
+              <Label htmlFor="end">{t('notif.pref.to')}</Label>
               <Input
                 id="end"
                 value={end}
@@ -761,7 +757,7 @@ function PreferencesPanel({
         )}
 
         <div className="space-y-2">
-          <Label>Default channels</Label>
+          <Label>{t('notif.pref.defaultChannels')}</Label>
           <div className="flex flex-wrap gap-2">
             {CHANNELS.map((channel) => {
               const selected = defaultChannels.includes(channel);
@@ -782,8 +778,10 @@ function PreferencesPanel({
                   )}
                 >
                   {selected ? <CheckCircle2 className="size-4" /> : <Bell className="size-4" />}
-                  {CHANNEL_META[channel].label}
-                  {!connected && <span className="text-xs text-warning">not ready</span>}
+                  {t(`notif.channel.${channel}.label`)}
+                  {!connected && (
+                    <span className="text-xs text-warning">{t('notif.pref.notReady')}</span>
+                  )}
                 </button>
               );
             })}
@@ -792,7 +790,7 @@ function PreferencesPanel({
 
         <Button type="button" onClick={onSave} disabled={busy === 'preferences'}>
           {busy === 'preferences' ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-          Save
+          {t('notif.pref.save')}
         </Button>
       </CardContent>
     </Card>
@@ -815,18 +813,19 @@ function WatchlistPanel({
   ) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Plane className="size-4 text-muted-foreground" />
-          Watched flights
+          {t('notif.watch.title')}
         </CardTitle>
-        <CardDescription>Alert rules currently attached to flights.</CardDescription>
+        <CardDescription>{t('notif.watch.subtitle')}</CardDescription>
       </CardHeader>
       <CardContent>
         {watches.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No watched flights yet.</p>
+          <p className="text-sm text-muted-foreground">{t('notif.watch.empty')}</p>
         ) : (
           <div className="space-y-3">
             {watches.map((watch) => (
@@ -862,6 +861,7 @@ function WatchRow({
   ) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-secondary/20 p-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -873,10 +873,10 @@ function WatchRow({
             {watch.flightId.slice(0, 8)}
           </Link>
         ) : (
-          <span className="text-sm font-medium">Matcher rule</span>
+          <span className="text-sm font-medium">{t('notif.watch.matcherRule')}</span>
         )}
         <Badge variant={watch.active ? 'success' : 'warning'}>
-          {watch.active ? 'Active' : 'Paused'}
+          {watch.active ? t('notif.watch.active') : t('notif.watch.paused')}
         </Badge>
         <span className="text-xs text-muted-foreground">{formatDate(watch.createdAt)}</span>
         <div className="ml-auto flex gap-1">
@@ -884,7 +884,7 @@ function WatchRow({
             type="button"
             variant="ghost"
             size="icon"
-            title={watch.active ? 'Pause' : 'Resume'}
+            title={watch.active ? t('notif.watch.pause') : t('notif.watch.resume')}
             disabled={busy}
             onClick={() => onUpdate(watch.id, { active: !watch.active })}
           >
@@ -894,7 +894,7 @@ function WatchRow({
             type="button"
             variant="ghost"
             size="icon"
-            title="Remove watch"
+            title={t('notif.watch.remove')}
             disabled={busy}
             onClick={() => onDelete(watch.id)}
           >
@@ -905,7 +905,9 @@ function WatchRow({
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase text-muted-foreground">Events</p>
+          <p className="text-xs font-medium uppercase text-muted-foreground">
+            {t('notif.watch.events')}
+          </p>
           <div className="flex flex-wrap gap-2">
             {EVENT_GROUPS.map((group) => {
               const selected = group.events.every((event) => watch.eventTypes.includes(event));
@@ -930,17 +932,21 @@ function WatchRow({
                   ) : (
                     <Clock3 className="size-3.5" />
                   )}
-                  {group.label}
-                  {group.critical && <span className="text-warning">critical</span>}
+                  {t(`notif.eventGroup.${group.id}`)}
+                  {group.critical && (
+                    <span className="text-warning">{t('notif.watch.critical')}</span>
+                  )}
                 </button>
               );
             })}
           </div>
-          <p className="text-xs text-muted-foreground">{formatEvents(watch.eventTypes)}</p>
+          <p className="text-xs text-muted-foreground">{formatEvents(watch.eventTypes, t)}</p>
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase text-muted-foreground">Channels</p>
+          <p className="text-xs font-medium uppercase text-muted-foreground">
+            {t('notif.watch.channels')}
+          </p>
           <div className="flex flex-wrap gap-2">
             {CHANNELS.map((channel) => {
               const selected = watch.channels.includes(channel);
@@ -964,7 +970,7 @@ function WatchRow({
                   )}
                 >
                   {selected ? <CheckCircle2 className="size-3.5" /> : <Bell className="size-3.5" />}
-                  {CHANNEL_META[channel].label}
+                  {t(`notif.channel.${channel}.label`)}
                 </button>
               );
             })}
@@ -976,18 +982,19 @@ function WatchRow({
 }
 
 function HistoryPanel({ notifications }: { notifications: NotificationItem[] }) {
+  const t = useT();
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <BellRing className="size-4 text-muted-foreground" />
-          Recent alerts
+          {t('notif.history.title')}
         </CardTitle>
-        <CardDescription>Latest queued, sent, failed and suppressed notifications.</CardDescription>
+        <CardDescription>{t('notif.history.subtitle')}</CardDescription>
       </CardHeader>
       <CardContent>
         {notifications.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No notifications yet.</p>
+          <p className="text-sm text-muted-foreground">{t('notif.history.empty')}</p>
         ) : (
           <div className="divide-y divide-border">
             {notifications.map((item) => (
@@ -1009,7 +1016,7 @@ function HistoryPanel({ notifications }: { notifications: NotificationItem[] }) 
                       href={`/flights/id/${item.flightId}`}
                       className="text-accent-bright hover:underline"
                     >
-                      Flight
+                      {t('notif.history.flight')}
                     </Link>
                   )}
                 </div>
@@ -1039,7 +1046,8 @@ function StatusBadge({
 }: {
   status: string | NotificationPermission | 'unsupported' | 'not_configured' | 'available';
 }) {
-  const label = statusLabel(status);
+  const t = useT();
+  const label = statusLabel(status, t);
   const variant =
     status === 'ready' || status === 'sent' || status === 'delivered' || status === 'granted'
       ? 'success'
@@ -1146,13 +1154,29 @@ function isChannelKey(value: string): value is ChannelKey {
   return CHANNELS.includes(value as ChannelKey);
 }
 
-function formatEvents(events: string[]): string {
-  return events.map((event) => EVENT_LABELS[event] ?? event.replace(/_/g, ' ')).join(', ');
+function formatEvents(events: string[], t: Translate): string {
+  return events
+    .map((event) => {
+      const key = EVENT_LABELS[event];
+      return key ? t(key) : event.replace(/_/g, ' ');
+    })
+    .join(', ');
 }
 
-function statusLabel(status: string): string {
-  if (status === 'not_configured') return 'not configured';
-  if (status === 'default') return 'ask';
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  ready: 'notif.status.ready',
+  pending: 'notif.status.pending',
+  available: 'notif.status.available',
+  not_configured: 'notif.status.not_configured',
+  default: 'notif.status.ask',
+  granted: 'notif.status.granted',
+  denied: 'notif.status.denied',
+  unsupported: 'notif.status.unsupported',
+};
+
+function statusLabel(status: string, t: Translate): string {
+  const key = STATUS_LABEL_KEYS[status];
+  if (key) return t(key);
   return status.replace(/_/g, ' ');
 }
 
@@ -1180,21 +1204,24 @@ function readPushPermission(): NotificationPermission | 'unsupported' {
   return Notification.permission;
 }
 
-async function subscribeWebPush(options: { forceRenew?: boolean } = {}): Promise<void> {
+async function subscribeWebPush(
+  t: Translate,
+  options: { forceRenew?: boolean } = {},
+): Promise<void> {
   if (
     !('serviceWorker' in navigator) ||
     !('PushManager' in window) ||
     !('Notification' in window)
   ) {
-    throw new Error('Web Push is not supported in this browser.');
+    throw new Error(t('notif.err.pushUnsupported'));
   }
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('Notification permission is blocked.');
+  if (permission !== 'granted') throw new Error(t('notif.err.permissionBlocked'));
 
   const reg = await registerServiceWorker();
 
   const { publicKey } = await api<{ publicKey: string | null }>('/config/webpush');
-  if (!publicKey) throw new Error('Web Push is not configured on the server.');
+  if (!publicKey) throw new Error(t('notif.err.pushNotConfigured'));
 
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
   let existing = await reg.pushManager.getSubscription();
@@ -1217,7 +1244,7 @@ async function subscribeWebPush(options: { forceRenew?: boolean } = {}): Promise
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
 
   if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-    throw new Error('Browser returned an incomplete push subscription.');
+    throw new Error(t('notif.err.incompleteSubscription'));
   }
   await api<{ ok: true }>('/channels/webpush/subscribe', {
     method: 'POST',
@@ -1230,20 +1257,20 @@ async function subscribeWebPush(options: { forceRenew?: boolean } = {}): Promise
   });
 }
 
-async function showLocalWebPushTest(): Promise<void> {
+async function showLocalWebPushTest(t: Translate): Promise<void> {
   if (
     !('serviceWorker' in navigator) ||
     !('PushManager' in window) ||
     !('Notification' in window)
   ) {
-    throw new Error('Web Push is not supported in this browser.');
+    throw new Error(t('notif.err.pushUnsupported'));
   }
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('Notification permission is blocked.');
+  if (permission !== 'granted') throw new Error(t('notif.err.permissionBlocked'));
 
   const reg = await registerServiceWorker();
-  await reg.showNotification('FlyTrace test', {
-    body: 'Chrome can display notifications for this site.',
+  await reg.showNotification(t('notif.test.title'), {
+    body: t('notif.test.body'),
     icon: '/icon.svg',
     badge: '/icon.svg',
     tag: 'flytrace-local-test',

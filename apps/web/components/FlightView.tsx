@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
+import { useT } from '@/lib/i18n';
 import { readLiveFlightDetail } from '@/lib/live-detail-cache';
 import type { FlightDetail } from '@flytrace/shared';
 import { Activity, ArrowLeft, Bell, BellRing, Check, Clock, Info, RadioTower } from 'lucide-react';
@@ -14,6 +15,8 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeClient } from '../lib/realtime-client';
 import { FlightWeatherPanel } from './FlightWeatherPanel';
+
+type Translate = ReturnType<typeof useT>;
 
 const API_BASE = apiBase();
 const WS_BASE = API_BASE.replace(/^http/, 'ws');
@@ -47,30 +50,30 @@ interface AirspaceSummary {
 }
 
 const EVENT_LABEL: Record<string, string> = {
-  TakeoffDetected: 'Takeoff',
-  LandingDetected: 'Landing',
-  ClimbDetected: 'Climb',
-  DescentDetected: 'Descent',
-  FlightEnded: 'Flight ended',
-  ProviderUpdated: 'Provider update',
-  GateChanged: 'Gate change',
-  DelayDetected: 'Delay',
-  FlightCancelled: 'Cancelled',
-  ArrivedAtGate: 'Arrived',
-  takeoff: 'Takeoff',
-  landing: 'Landing',
-  climb: 'Climb',
-  descent: 'Descent',
-  top_of_climb: 'Top of climb',
-  top_of_descent: 'Top of descent',
-  flight_detected: 'Detected',
-  flight_ended: 'Flight ended',
-  gate_change: 'Gate change',
-  delay: 'Delay',
-  cancelled: 'Cancelled',
-  arrived: 'Arrived',
-  entered_airspace: 'Airspace',
-  aircraft_changed: 'Aircraft',
+  TakeoffDetected: 'flight.event.takeoff',
+  LandingDetected: 'flight.event.landing',
+  ClimbDetected: 'flight.event.climb',
+  DescentDetected: 'flight.event.descent',
+  FlightEnded: 'flight.event.flightEnded',
+  ProviderUpdated: 'flight.event.providerUpdate',
+  GateChanged: 'flight.event.gateChange',
+  DelayDetected: 'flight.event.delay',
+  FlightCancelled: 'flight.event.cancelled',
+  ArrivedAtGate: 'flight.event.arrived',
+  takeoff: 'flight.event.takeoff',
+  landing: 'flight.event.landing',
+  climb: 'flight.event.climb',
+  descent: 'flight.event.descent',
+  top_of_climb: 'flight.event.topOfClimb',
+  top_of_descent: 'flight.event.topOfDescent',
+  flight_detected: 'flight.event.detected',
+  flight_ended: 'flight.event.flightEnded',
+  gate_change: 'flight.event.gateChange',
+  delay: 'flight.event.delay',
+  cancelled: 'flight.event.cancelled',
+  arrived: 'flight.event.arrived',
+  entered_airspace: 'flight.event.airspace',
+  aircraft_changed: 'flight.event.aircraft',
 };
 
 function statusVariant(status: string): 'success' | 'warning' | 'destructive' | 'default' {
@@ -81,6 +84,7 @@ function statusVariant(status: string): 'success' | 'warning' | 'destructive' | 
 }
 
 export function FlightView({ flightId }: { flightId: string }) {
+  const t = useT();
   const routeFlightId = decodeFlightId(flightId);
   const [detail, setDetail] = useState<FlightDetail | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -217,17 +221,17 @@ export function FlightView({ flightId }: { flightId: string }) {
   async function onWatch() {
     setWatchState('working');
     try {
-      if (!detail) throw new Error('Flight detail is not ready');
+      if (!detail) throw new Error(t('flight.detailNotReady'));
       const session = await fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' });
       const user = ((await session.json()) as { data: { user: unknown } }).data.user;
       if (!user) {
         window.location.href = `/signin?next=/flights/id/${encodeURIComponent(routeFlightId)}`;
         return;
       }
-      const channels = await preferredWatchChannels();
+      const channels = await preferredWatchChannels(t);
       let watchFlightId = detail.flight.flightId;
       if (watchFlightId.startsWith('adsb:')) {
-        const promoted = await promoteLiveFlightForAlerts(detail);
+        const promoted = await promoteLiveFlightForAlerts(detail, t);
         watchFlightId = promoted.flightId;
         setDetail(promoted.detail);
         setLive(promoted.detail.live);
@@ -251,10 +255,14 @@ export function FlightView({ flightId }: { flightId: string }) {
         throw new Error(body.error?.message ?? body.error?.code ?? `watch ${res.status}`);
       }
       setWatchState('watching');
-      setWatchMsg(`Watching — alerts will use ${channels.map(channelLabel).join(', ')}.`);
+      setWatchMsg(
+        t('flight.watchingMsg', {
+          channels: channels.map((c) => t(channelLabelKey(c))).join(', '),
+        }),
+      );
     } catch (e) {
       setWatchState('error');
-      setWatchMsg(e instanceof Error ? e.message : 'Failed to set up the watch');
+      setWatchMsg(e instanceof Error ? e.message : t('flight.watchError'));
     }
   }
 
@@ -263,11 +271,11 @@ export function FlightView({ flightId }: { flightId: string }) {
       <Container>
         <BackLink />
         <ErrorState
-          title={error === 'Flight not found' ? 'Flight not found' : 'Couldn’t load this flight'}
+          title={error === 'Flight not found' ? t('flight.notFound') : t('flight.loadError')}
           description={
             error === 'Flight not found'
-              ? 'This flight may have landed and rolled off, or the link is wrong.'
-              : 'Please try again in a moment.'
+              ? t('flight.notFoundBody')
+              : t('flight.loadErrorBody')
           }
         />
       </Container>
@@ -305,10 +313,10 @@ export function FlightView({ flightId }: { flightId: string }) {
             {watchState === 'working' && <Spinner />}
             {watchState === 'watching' ? <Check /> : watchState === 'working' ? null : <Bell />}
             {watchState === 'watching'
-              ? 'Watching'
+              ? t('flight.watching')
               : watchState === 'working'
-                ? 'Setting up…'
-                : 'Watch'}
+                ? t('flight.settingUp')
+                : t('flight.watch')}
           </Button>
         </div>
       </header>
@@ -329,7 +337,7 @@ export function FlightView({ flightId }: { flightId: string }) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <BellRing className="size-4 text-muted-foreground" />
-              Live telemetry
+              {t('flight.liveTelemetry')}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -337,22 +345,22 @@ export function FlightView({ flightId }: { flightId: string }) {
               <div className="space-y-5">
                 <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3">
                   <Metric
-                    label="Altitude"
+                    label={t('map.altitude')}
                     value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
                   />
-                  <Metric label="Geo altitude" value={fmtFt(live.geoAltitudeFt ?? null)} />
+                  <Metric label={t('flight.geoAltitude')} value={fmtFt(live.geoAltitudeFt ?? null)} />
                   <Metric
-                    label="Ground speed"
+                    label={t('flight.groundSpeed')}
                     value={
                       live.groundSpeedKt != null ? `${Math.round(live.groundSpeedKt)} kt` : '—'
                     }
                   />
                   <Metric
-                    label="Heading"
+                    label={t('map.heading')}
                     value={live.headingDeg != null ? headingLabel(live.headingDeg) : '—'}
                   />
                   <Metric
-                    label="Vertical"
+                    label={t('flight.vertical')}
                     value={
                       live.verticalRateFpm != null
                         ? `${live.verticalRateFpm.toLocaleString()} fpm`
@@ -360,21 +368,31 @@ export function FlightView({ flightId }: { flightId: string }) {
                     }
                   />
                   <Metric
-                    label="Trend"
-                    value={verticalTrend(live.verticalRateFpm, live.onGround)}
+                    label={t('flight.trend')}
+                    value={
+                      live.onGround
+                        ? t('map.ground')
+                        : live.verticalRateFpm == null
+                          ? '—'
+                          : live.verticalRateFpm > 300
+                            ? t('flight.trend.climbing')
+                            : live.verticalRateFpm < -300
+                              ? t('flight.trend.descending')
+                              : t('flight.trend.level')
+                    }
                   />
-                  <Metric label="Squawk" value={live.squawk ?? '—'} />
-                  <Metric label="Signal age" value={signalAge(live.ts)} />
+                  <Metric label={t('map.squawk')} value={live.squawk ?? '—'} />
+                  <Metric label={t('flight.signalAge')} value={signalAge(live.ts)} />
                   <Metric
-                    label="Position"
+                    label={t('flight.position')}
                     value={
                       live.lat != null && live.lon != null
                         ? `${live.lat.toFixed(4)}, ${live.lon.toFixed(4)}`
                         : '—'
                     }
                   />
-                  <Metric label="On ground" value={live.onGround ? 'Yes' : 'No'} />
-                  <Metric label="Updated" value={timeShort(live.ts)} />
+                  <Metric label={t('flight.onGround')} value={live.onGround ? t('flight.yes') : t('flight.no')} />
+                  <Metric label={t('flight.updated')} value={timeShort(live.ts)} />
                 </div>
                 <SignalPanel live={live} />
                 <AirspacePanel airspaces={airspaces} state={airspaceState} />
@@ -382,7 +400,7 @@ export function FlightView({ flightId }: { flightId: string }) {
             ) : (
               <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
                 <Spinner className="text-muted-foreground" />
-                Waiting for live data…
+                {t('flight.waitingLive')}
               </div>
             )}
           </CardContent>
@@ -396,15 +414,15 @@ export function FlightView({ flightId }: { flightId: string }) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Clock className="size-4 text-muted-foreground" />
-              Timeline
+              {t('flight.timeline')}
             </CardTitle>
           </CardHeader>
           <CardContent>
             {timeline.length === 0 ? (
               <EmptyState
                 icon={Clock}
-                title="No events yet"
-                description="Takeoff, climb, descent and landing will appear here as they’re detected."
+                title={t('flight.noEvents')}
+                description={t('flight.noEventsBody')}
                 className="border-0 py-8"
               />
             ) : (
@@ -414,7 +432,9 @@ export function FlightView({ flightId }: { flightId: string }) {
                     <span className="absolute -left-6 top-1.5 size-2 rounded-full bg-accent-bright ring-4 ring-background" />
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <span className="font-medium">{EVENT_LABEL[e.type] ?? e.type}</span>
+                        <span className="font-medium">
+                          {EVENT_LABEL[e.type] ? t(EVENT_LABEL[e.type]) : e.type}
+                        </span>
                         <TimelineMeta entry={e} />
                       </div>
                       <time className="shrink-0 text-sm text-muted-foreground">
@@ -437,13 +457,14 @@ function Container({ children }: { children: React.ReactNode }) {
 }
 
 function BackLink() {
+  const t = useT();
   return (
     <Link
       href="/map"
       className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="size-4" />
-      Live map
+      {t('airport.liveMap')}
     </Link>
   );
 }
@@ -546,6 +567,7 @@ function eventConfidence(payload: unknown): number | null {
 }
 
 function SignalPanel({ live }: { live: Live }) {
+  const t = useT();
   const quality = live.qualityState ?? derivedQuality(live.ts);
   const source = sourceLabel(
     live.source ?? null,
@@ -556,22 +578,24 @@ function SignalPanel({ live }: { live: Live }) {
     <div className="rounded-md border border-border bg-muted/30 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={qualityVariant(quality)} className="capitalize">
-          {qualityText(quality)}
+          {t(`map.signal.${quality}`)}
         </Badge>
         {source !== '—' && <Badge variant="outline">{source}</Badge>}
         {live.qualityScore != null && (
-          <Badge variant="outline">Quality {formatPercent(live.qualityScore)}</Badge>
+          <Badge variant="outline">{t('flight.quality', { pct: formatPercent(live.qualityScore) })}</Badge>
         )}
         <span className="text-xs text-muted-foreground">
-          Age {live.ageMs != null ? fmtAgeMs(live.ageMs) : signalAge(live.ts)}
+          {t('flight.age', { age: live.ageMs != null ? fmtAgeMs(live.ageMs) : signalAge(live.ts) })}
         </span>
         {live.sourceTimestamp && (
           <span className="text-xs text-muted-foreground">
-            Source {timeShort(live.sourceTimestamp)}
+            {t('flight.sourceTime', { time: timeShort(live.sourceTimestamp) })}
           </span>
         )}
         {live.receivedAt && (
-          <span className="text-xs text-muted-foreground">Rx {timeShort(live.receivedAt)}</span>
+          <span className="text-xs text-muted-foreground">
+            {t('flight.rx', { time: timeShort(live.receivedAt) })}
+          </span>
         )}
       </div>
     </div>
@@ -579,13 +603,14 @@ function SignalPanel({ live }: { live: Live }) {
 }
 
 function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
+  const t = useT();
   const telemetryOnly = snapshot ? isTelemetryOnlySnapshot(snapshot) : false;
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Activity className="size-4 text-muted-foreground" />
-          Operations
+          {t('airport.operations')}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -597,29 +622,29 @@ function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
               </Badge>
               <Badge variant="outline">{snapshot.providerKey}</Badge>
               <span className="text-xs text-muted-foreground">
-                Fetched {dateTimeShort(snapshot.fetchedAt)}
+                {t('flight.fetched', { time: dateTimeShort(snapshot.fetchedAt) })}
               </span>
             </div>
             {telemetryOnly && (
               <div className="flex gap-2 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
                 <Info className="mt-0.5 size-4 shrink-0" />
-                <span>ADS-B telemetry only. Gate, terminal and schedule data are unavailable.</span>
+                <span>{t('flight.telemetryOnly')}</span>
               </div>
             )}
             <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-              <Field label="Gate" value={snapshot.gate ?? '—'} />
-              <Field label="Terminal" value={snapshot.terminal ?? '—'} />
-              <Field label="Baggage" value={snapshot.baggageBelt ?? '—'} />
-              <Field label="Scheduled dep" value={dateTimeShort(snapshot.scheduledDeparture)} />
-              <Field label="Estimated dep" value={dateTimeShort(snapshot.estimatedDeparture)} />
-              <Field label="Actual dep" value={dateTimeShort(snapshot.actualDeparture)} />
-              <Field label="Scheduled arr" value={dateTimeShort(snapshot.scheduledArrival)} />
-              <Field label="Estimated arr" value={dateTimeShort(snapshot.estimatedArrival)} />
-              <Field label="Actual arr" value={dateTimeShort(snapshot.actualArrival)} />
+              <Field label={t('airport.gate')} value={snapshot.gate ?? '—'} />
+              <Field label={t('flight.terminal')} value={snapshot.terminal ?? '—'} />
+              <Field label={t('flight.baggage')} value={snapshot.baggageBelt ?? '—'} />
+              <Field label={t('flight.scheduledDep')} value={dateTimeShort(snapshot.scheduledDeparture)} />
+              <Field label={t('flight.estimatedDep')} value={dateTimeShort(snapshot.estimatedDeparture)} />
+              <Field label={t('flight.actualDep')} value={dateTimeShort(snapshot.actualDeparture)} />
+              <Field label={t('flight.scheduledArr')} value={dateTimeShort(snapshot.scheduledArrival)} />
+              <Field label={t('flight.estimatedArr')} value={dateTimeShort(snapshot.estimatedArrival)} />
+              <Field label={t('flight.actualArr')} value={dateTimeShort(snapshot.actualArrival)} />
             </div>
           </div>
         ) : (
-          <EmptyState icon={Activity} title="No provider status" className="border-0 py-8" />
+          <EmptyState icon={Activity} title={t('flight.noProviderStatus')} className="border-0 py-8" />
         )}
       </CardContent>
     </Card>
@@ -643,9 +668,12 @@ function isTelemetryOnlySnapshot(snapshot: StatusSnapshot): boolean {
 }
 
 function TimelineMeta({ entry }: { entry: TimelineEntry }) {
+  const t = useT();
   const items = [
     entry.source,
-    entry.confidence != null ? `${formatPercent(entry.confidence)} confidence` : null,
+    entry.confidence != null
+      ? t('flight.confidence', { pct: formatPercent(entry.confidence) })
+      : null,
   ].filter(Boolean);
   if (items.length === 0) return null;
   return <div className="mt-0.5 text-xs text-muted-foreground">{items.join(' · ')}</div>;
@@ -709,11 +737,6 @@ function qualityVariant(
   return 'default';
 }
 
-function qualityText(state: NonNullable<Live['qualityState']>): string {
-  if (state === 'signal_lost') return 'Signal lost';
-  return state.replace('_', ' ');
-}
-
 function sourceLabel(
   source: string | null,
   positionSource: string | null,
@@ -755,14 +778,6 @@ function headingLabel(deg: number): string {
   return `${Math.round(deg)}° ${dirs[idx]}`;
 }
 
-function verticalTrend(vr: number | null, onGround: boolean): string {
-  if (onGround) return 'Ground';
-  if (vr == null) return '—';
-  if (vr > 300) return 'Climbing';
-  if (vr < -300) return 'Descending';
-  return 'Level';
-}
-
 function airspaceBand(a: AirspaceSummary): string {
   const lower = a.lowerFt == null || a.lowerFt <= 0 ? 'GND' : `${a.lowerFt.toLocaleString()} ft`;
   const upper = a.upperFt == null ? 'UNL' : `${a.upperFt.toLocaleString()} ft`;
@@ -776,6 +791,7 @@ function AirspacePanel({
   airspaces: AirspaceSummary[];
   state: 'idle' | 'loading' | 'ready' | 'error';
 }) {
+  const t = useT();
   const primary = airspaces[0];
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3">
@@ -783,20 +799,22 @@ function AirspacePanel({
         <RadioTower className="mt-0.5 size-4 shrink-0 text-accent-bright" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium uppercase text-muted-foreground">Airspace</span>
+            <span className="text-xs font-medium uppercase text-muted-foreground">
+              {t('map.airspace')}
+            </span>
             {primary && (
               <span className="text-xs text-muted-foreground">{airspaceBand(primary)}</span>
             )}
           </div>
           <div className="mt-1 truncate font-medium">
             {state === 'loading'
-              ? 'Loading...'
+              ? t('common.loading')
               : state === 'error'
-                ? 'Unavailable'
+                ? t('flight.unavailable')
                 : primary
                   ? primary.name
                   : state === 'ready'
-                    ? 'Outside controlled airspace'
+                    ? t('flight.outsideAirspace')
                     : '—'}
           </div>
           {primary && (
@@ -864,10 +882,11 @@ function FlightSkeleton() {
 
 async function promoteLiveFlightForAlerts(
   detail: FlightDetail,
+  t: Translate,
 ): Promise<{ flightId: string; detail: FlightDetail }> {
   const live = detail.live;
   if (!live?.icao24 || live.lat == null || live.lon == null) {
-    throw new Error('Live flight position is missing.');
+    throw new Error(t('flight.livePositionMissing'));
   }
   const res = await fetch(`${API_BASE}/api/v1/flights/live/promote`, {
     method: 'POST',
@@ -897,7 +916,7 @@ function timelineFromDetail(detail: FlightDetail): TimelineEntry[] {
   }));
 }
 
-async function preferredWatchChannels(): Promise<ChannelKey[]> {
+async function preferredWatchChannels(t: Translate): Promise<ChannelKey[]> {
   const settingsRes = await fetch(`${API_BASE}/api/v1/settings`, { credentials: 'include' });
   const settingsBody = (await settingsRes.json().catch(() => ({}))) as {
     data?: { settings?: { defaultChannels?: unknown } };
@@ -916,13 +935,13 @@ async function preferredWatchChannels(): Promise<ChannelKey[]> {
   );
 
   if (requested.includes('webpush')) {
-    await subscribeWebPush();
+    await subscribeWebPush(t);
     readyChannels.add('webpush');
   }
 
   const selected = requested.filter((channel) => readyChannels.has(channel));
   if (selected.length === 0) {
-    throw new Error('Connect a notification channel in settings first.');
+    throw new Error(t('flight.connectChannel'));
   }
   return selected;
 }
@@ -936,26 +955,26 @@ function isChannelKey(value: string): value is ChannelKey {
   return CHANNEL_KEYS.includes(value as ChannelKey);
 }
 
-function channelLabel(channel: ChannelKey): string {
-  if (channel === 'webpush') return 'Push';
-  if (channel === 'telegram') return 'Telegram';
-  return 'Email';
+function channelLabelKey(channel: ChannelKey): string {
+  if (channel === 'webpush') return 'flight.channel.push';
+  if (channel === 'telegram') return 'flight.channel.telegram';
+  return 'flight.channel.email';
 }
 
 /** Register the service worker + create a Web Push subscription (docs/10 §10.6). */
-async function subscribeWebPush(): Promise<void> {
+async function subscribeWebPush(t: Translate): Promise<void> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    throw new Error('Web Push is not supported in this browser');
+    throw new Error(t('flight.webPushUnsupported'));
   }
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('Notification permission denied');
+  if (permission !== 'granted') throw new Error(t('flight.notifPermissionDenied'));
 
   const reg = await registerServiceWorker();
 
   const keyRes = await fetch(`${API_BASE}/api/v1/config/webpush`);
   const publicKey = ((await keyRes.json()) as { data: { publicKey: string | null } }).data
     .publicKey;
-  if (!publicKey) throw new Error('Web Push is not configured on the server');
+  if (!publicKey) throw new Error(t('flight.webPushNotConfigured'));
 
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
   let existing = await reg.pushManager.getSubscription();
@@ -976,7 +995,7 @@ async function subscribeWebPush(): Promise<void> {
     }));
   const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
   if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-    throw new Error('Browser returned an incomplete push subscription');
+    throw new Error(t('flight.incompletePushSub'));
   }
 
   await fetch(`${API_BASE}/api/v1/channels/webpush/subscribe`, {

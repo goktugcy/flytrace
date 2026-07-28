@@ -1,6 +1,7 @@
 'use client';
 
 import { apiBase } from '@/lib/api';
+import { useT } from '@/lib/i18n';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -117,14 +118,7 @@ interface AirspaceImportProgress {
 
 type State = 'loading' | 'unauth' | 'forbidden' | 'ready' | 'error';
 
-const EMPTY_AIRSPACE_IMPORTS: AirspaceImports = {
-  configured: false,
-  counts: {},
-  jobs: [],
-  error: 'Airspace import status is unavailable.',
-};
-
-function fallbackData(): Omit<AdminData, 'stats'> {
+function fallbackData(airspaceError: string): Omit<AdminData, 'stats'> {
   return {
     queues: [],
     providers: [],
@@ -132,7 +126,12 @@ function fallbackData(): Omit<AdminData, 'stats'> {
     dlq: [],
     logs: [],
     audit: [],
-    airspaceImports: EMPTY_AIRSPACE_IMPORTS,
+    airspaceImports: {
+      configured: false,
+      counts: {},
+      jobs: [],
+      error: airspaceError,
+    },
   };
 }
 
@@ -147,12 +146,17 @@ async function readAdminData<T>(response: Promise<Response>, fallback: T): Promi
   }
 }
 
-async function responseErrorMessage(res: Response): Promise<string> {
+async function responseErrorMessage(
+  res: Response,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): Promise<string> {
   const body = (await res.json().catch(() => null)) as {
     error?: { message?: string };
     message?: string;
   } | null;
-  return body?.error?.message ?? body?.message ?? `Request failed (${res.status})`;
+  return (
+    body?.error?.message ?? body?.message ?? t('admin.requestFailed', { status: res.status })
+  );
 }
 
 function errorMessage(err: unknown): string {
@@ -160,6 +164,7 @@ function errorMessage(err: unknown): string {
 }
 
 export function AdminConsole() {
+  const t = useT();
   const [data, setData] = useState<AdminData | null>(null);
   const [state, setState] = useState<State>('loading');
   const [actionBusy, setActionBusy] = useState(false);
@@ -178,7 +183,7 @@ export function AdminConsole() {
         data?: { stats?: Record<string, number> };
       } | null;
       if (!stats?.data?.stats) return setState('error');
-      const fallback = fallbackData();
+      const fallback = fallbackData(t('admin.airspaceUnavailable'));
       const [queues, providers, flights, dlq, logs, auditRes, airspaceImports] = await Promise.all([
         readAdminData<{ queues: AdminData['queues'] }>(get('queues'), {
           queues: fallback.queues,
@@ -241,7 +246,7 @@ export function AdminConsole() {
         body: JSON.stringify({}),
       });
       if (!res.ok) {
-        setActionError(await responseErrorMessage(res));
+        setActionError(await responseErrorMessage(res, t));
         return;
       }
       await load();
@@ -256,15 +261,13 @@ export function AdminConsole() {
     <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Operational health — queues, providers and audit.
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('admin.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('admin.subtitle')}</p>
         </div>
         {state === 'ready' && (
           <Button variant="outline" size="sm" onClick={() => void load()}>
             <RefreshCw />
-            Refresh
+            {t('admin.refresh')}
           </Button>
         )}
       </div>
@@ -274,11 +277,11 @@ export function AdminConsole() {
         {state === 'unauth' && (
           <EmptyState
             icon={ShieldAlert}
-            title="Sign in required"
-            description="This console is only available to signed-in admins."
+            title={t('admin.signinTitle')}
+            description={t('admin.signinBody')}
             action={
               <Button asChild size="sm">
-                <Link href="/signin?next=/admin">Sign in</Link>
+                <Link href="/signin?next=/admin">{t('nav.signin')}</Link>
               </Button>
             }
           />
@@ -286,8 +289,8 @@ export function AdminConsole() {
         {state === 'forbidden' && (
           <EmptyState
             icon={ShieldAlert}
-            title="Admins only"
-            description="Your account doesn’t have access to the admin console."
+            title={t('admin.forbiddenTitle')}
+            description={t('admin.forbiddenBody')}
           />
         )}
         {state === 'error' && <ErrorState onRetry={load} />}
@@ -318,6 +321,7 @@ function AdminBody({
   actionBusy: boolean;
   actionError: string | null;
 }) {
+  const t = useT();
   return (
     <div className="space-y-6">
       {/* Platform stats */}
@@ -346,7 +350,7 @@ function AdminBody({
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Queues */}
         <Card>
-          <SectionTitle icon={Activity}>Queues</SectionTitle>
+          <SectionTitle icon={Activity}>{t('admin.queues')}</SectionTitle>
           <CardContent>
             {data.queues.map((q) => (
               <div key={q.name} className="flex items-center justify-between gap-3 py-1">
@@ -354,7 +358,12 @@ function AdminBody({
                 <span className="min-w-0 text-right text-sm tabular-nums text-muted-foreground">
                   {q.error
                     ? q.error
-                    : `${q.waiting} waiting · ${q.active} active · ${q.completed} done · ${q.failed} failed`}
+                    : t('admin.queueCounts', {
+                        waiting: q.waiting,
+                        active: q.active,
+                        completed: q.completed,
+                        failed: q.failed,
+                      })}
                 </span>
               </div>
             ))}
@@ -363,17 +372,17 @@ function AdminBody({
 
         {/* Providers */}
         <Card>
-          <SectionTitle icon={Radio}>Providers</SectionTitle>
+          <SectionTitle icon={Radio}>{t('admin.providers')}</SectionTitle>
           <CardContent>
             {data.providers.length === 0 ? (
-              <InlineEmpty>No providers registered.</InlineEmpty>
+              <InlineEmpty>{t('admin.noProviders')}</InlineEmpty>
             ) : (
               <List>
                 {data.providers.map((p) => (
                   <Row key={p.key}>
                     <span className="font-medium">{p.name}</span>
                     <Badge variant={p.enabled ? 'accent' : 'default'}>
-                      {p.enabled ? 'enabled' : 'disabled'}
+                      {p.enabled ? t('admin.enabled') : t('admin.disabled')}
                     </Badge>
                     <Badge
                       variant={
@@ -403,32 +412,32 @@ function AdminBody({
           action={
             data.dlq.length > 0 ? (
               <Button variant="outline" size="sm" onClick={() => retry('dlq/retry-all')}>
-                Retry all
+                {t('admin.retryAll')}
               </Button>
             ) : undefined
           }
         >
-          Dead-letter queue
+          {t('admin.dlq')}
           <Badge variant="outline" className="tabular-nums">
             {data.dlq.length}
           </Badge>
         </SectionTitle>
         <CardContent>
           {data.dlq.length === 0 ? (
-            <InlineEmpty>No failed jobs. 🎉</InlineEmpty>
+            <InlineEmpty>{t('admin.noFailedJobs')}</InlineEmpty>
           ) : (
             <List>
               {data.dlq.map((j) => (
                 <Row key={j.id}>
                   <span className="font-medium">{j.data.flightNumber ?? j.name}</span>
                   <span className="min-w-0 flex-1 truncate text-sm text-destructive">
-                    {j.failedReason ?? 'unknown error'}
+                    {j.failedReason ?? t('admin.unknownError')}
                   </span>
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    {j.attemptsMade} attempts
+                    {t('admin.attempts', { n: j.attemptsMade })}
                   </span>
                   <Button variant="secondary" size="sm" onClick={() => retry(`dlq/${j.id}/retry`)}>
-                    Retry
+                    {t('common.retry')}
                   </Button>
                 </Row>
               ))}
@@ -440,10 +449,10 @@ function AdminBody({
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent flights */}
         <Card>
-          <SectionTitle icon={Plane}>Recent flights</SectionTitle>
+          <SectionTitle icon={Plane}>{t('aircraft.recentFlights')}</SectionTitle>
           <CardContent>
             {data.flights.length === 0 ? (
-              <InlineEmpty>No flights yet.</InlineEmpty>
+              <InlineEmpty>{t('admin.noFlights')}</InlineEmpty>
             ) : (
               <List>
                 {data.flights.slice(0, 12).map((f) => (
@@ -467,10 +476,10 @@ function AdminBody({
 
         {/* Provider logs */}
         <Card>
-          <SectionTitle icon={Activity}>Provider logs</SectionTitle>
+          <SectionTitle icon={Activity}>{t('admin.providerLogs')}</SectionTitle>
           <CardContent>
             {data.logs.length === 0 ? (
-              <InlineEmpty>No provider traffic yet.</InlineEmpty>
+              <InlineEmpty>{t('admin.noProviderTraffic')}</InlineEmpty>
             ) : (
               <List>
                 {data.logs.slice(0, 12).map((l) => (
@@ -478,7 +487,7 @@ function AdminBody({
                     <span className="font-medium">{l.providerKey}</span>
                     <span className="text-sm text-muted-foreground">{l.operation}</span>
                     <Badge variant={l.success ? 'success' : 'destructive'} className="ml-auto">
-                      {l.success ? 'ok' : 'fail'}
+                      {l.success ? t('admin.logOk') : t('admin.logFail')}
                     </Badge>
                     <span className="text-xs tabular-nums text-muted-foreground">
                       {l.latencyMs != null ? `${l.latencyMs}ms` : ''}
@@ -493,10 +502,10 @@ function AdminBody({
 
       {/* Audit */}
       <Card>
-        <SectionTitle icon={ScrollText}>Audit log</SectionTitle>
+        <SectionTitle icon={ScrollText}>{t('admin.auditLog')}</SectionTitle>
         <CardContent>
           {data.audit.length === 0 ? (
-            <InlineEmpty>No admin actions recorded.</InlineEmpty>
+            <InlineEmpty>{t('admin.noAudit')}</InlineEmpty>
           ) : (
             <List>
               {data.audit.slice(0, 12).map((a) => (
@@ -535,6 +544,7 @@ function AirspaceImportPanel({
   busy: boolean;
   actionError: string | null;
 }) {
+  const t = useT();
   const latest = imports.jobs[0];
   const progress = airspaceProgress(latest);
   const running = imports.jobs.some((j) => ['active', 'waiting', 'delayed'].includes(j.state));
@@ -542,7 +552,7 @@ function AirspaceImportPanel({
   const pagesImported = progress?.pagesImported ?? 0;
   const percent = totalPages ? Math.min(100, Math.round((pagesImported / totalPages) * 100)) : 0;
   const datasetVersion =
-    latest?.data?.datasetVersion ?? progress?.datasetVersion ?? 'unknown dataset';
+    latest?.data?.datasetVersion ?? progress?.datasetVersion ?? t('admin.unknownDataset');
 
   return (
     <Card>
@@ -556,15 +566,15 @@ function AirspaceImportPanel({
             onClick={onStart}
           >
             <RefreshCw />
-            {running ? 'Import running' : 'Start global import'}
+            {running ? t('admin.importRunning') : t('admin.startGlobalImport')}
           </Button>
         }
       >
-        OpenAIP airspace import
+        {t('admin.airspaceImport')}
         <Badge
           variant={running ? 'warning' : latest?.state === 'failed' ? 'destructive' : 'outline'}
         >
-          {running ? 'running' : (latest?.state ?? 'idle')}
+          {running ? t('admin.running') : (latest?.state ?? t('admin.idle'))}
         </Badge>
       </SectionTitle>
       <CardContent>
@@ -573,11 +583,9 @@ function AirspaceImportPanel({
         ) : actionError ? (
           <InlineEmpty>{actionError}</InlineEmpty>
         ) : !imports.configured ? (
-          <InlineEmpty>
-            OPENAIP_API_KEY is not configured on the API/worker environment.
-          </InlineEmpty>
+          <InlineEmpty>{t('admin.notConfigured')}</InlineEmpty>
         ) : !latest ? (
-          <InlineEmpty>No airspace import has run yet.</InlineEmpty>
+          <InlineEmpty>{t('admin.noImportYet')}</InlineEmpty>
         ) : (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -591,20 +599,20 @@ function AirspaceImportPanel({
             </div>
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-5">
               <span className="tabular-nums">
-                pages {pagesImported}
+                {t('admin.pages')} {pagesImported}
                 {totalPages ? `/${totalPages}` : ''}
               </span>
               <span className="tabular-nums">
-                {(progress?.totalCount ?? 0).toLocaleString()} total
+                {(progress?.totalCount ?? 0).toLocaleString()} {t('admin.total')}
               </span>
               <span className="tabular-nums">
-                {(progress?.upserted ?? 0).toLocaleString()} upserted
+                {(progress?.upserted ?? 0).toLocaleString()} {t('admin.upserted')}
               </span>
               <span className="tabular-nums">
-                {(progress?.invalid ?? 0).toLocaleString()} invalid
+                {(progress?.invalid ?? 0).toLocaleString()} {t('admin.invalid')}
               </span>
               <span className="tabular-nums">
-                {(progress?.retired ?? 0).toLocaleString()} retired
+                {(progress?.retired ?? 0).toLocaleString()} {t('admin.retired')}
               </span>
             </div>
           </div>
