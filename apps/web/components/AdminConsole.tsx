@@ -154,9 +154,7 @@ async function responseErrorMessage(
     error?: { message?: string };
     message?: string;
   } | null;
-  return (
-    body?.error?.message ?? body?.message ?? t('admin.requestFailed', { status: res.status })
-  );
+  return body?.error?.message ?? body?.message ?? t('admin.requestFailed', { status: res.status });
 }
 
 function errorMessage(err: unknown): string {

@@ -273,9 +273,7 @@ export function FlightView({ flightId }: { flightId: string }) {
         <ErrorState
           title={error === 'Flight not found' ? t('flight.notFound') : t('flight.loadError')}
           description={
-            error === 'Flight not found'
-              ? t('flight.notFoundBody')
-              : t('flight.loadErrorBody')
+            error === 'Flight not found' ? t('flight.notFoundBody') : t('flight.loadErrorBody')
           }
         />
       </Container>
@@ -348,7 +346,10 @@ export function FlightView({ flightId }: { flightId: string }) {
                     label={t('map.altitude')}
                     value={live.altitudeFt != null ? `${live.altitudeFt.toLocaleString()} ft` : '—'}
                   />
-                  <Metric label={t('flight.geoAltitude')} value={fmtFt(live.geoAltitudeFt ?? null)} />
+                  <Metric
+                    label={t('flight.geoAltitude')}
+                    value={fmtFt(live.geoAltitudeFt ?? null)}
+                  />
                   <Metric
                     label={t('flight.groundSpeed')}
                     value={
@@ -391,7 +392,10 @@ export function FlightView({ flightId }: { flightId: string }) {
                         : '—'
                     }
                   />
-                  <Metric label={t('flight.onGround')} value={live.onGround ? t('flight.yes') : t('flight.no')} />
+                  <Metric
+                    label={t('flight.onGround')}
+                    value={live.onGround ? t('flight.yes') : t('flight.no')}
+                  />
                   <Metric label={t('flight.updated')} value={timeShort(live.ts)} />
                 </div>
                 <SignalPanel live={live} />
@@ -582,7 +586,9 @@ function SignalPanel({ live }: { live: Live }) {
         </Badge>
         {source !== '—' && <Badge variant="outline">{source}</Badge>}
         {live.qualityScore != null && (
-          <Badge variant="outline">{t('flight.quality', { pct: formatPercent(live.qualityScore) })}</Badge>
+          <Badge variant="outline">
+            {t('flight.quality', { pct: formatPercent(live.qualityScore) })}
+          </Badge>
         )}
         <span className="text-xs text-muted-foreground">
           {t('flight.age', { age: live.ageMs != null ? fmtAgeMs(live.ageMs) : signalAge(live.ts) })}
@@ -635,16 +641,35 @@ function OperationsPanel({ snapshot }: { snapshot: StatusSnapshot | null }) {
               <Field label={t('airport.gate')} value={snapshot.gate ?? '—'} />
               <Field label={t('flight.terminal')} value={snapshot.terminal ?? '—'} />
               <Field label={t('flight.baggage')} value={snapshot.baggageBelt ?? '—'} />
-              <Field label={t('flight.scheduledDep')} value={dateTimeShort(snapshot.scheduledDeparture)} />
-              <Field label={t('flight.estimatedDep')} value={dateTimeShort(snapshot.estimatedDeparture)} />
-              <Field label={t('flight.actualDep')} value={dateTimeShort(snapshot.actualDeparture)} />
-              <Field label={t('flight.scheduledArr')} value={dateTimeShort(snapshot.scheduledArrival)} />
-              <Field label={t('flight.estimatedArr')} value={dateTimeShort(snapshot.estimatedArrival)} />
+              <Field
+                label={t('flight.scheduledDep')}
+                value={dateTimeShort(snapshot.scheduledDeparture)}
+              />
+              <Field
+                label={t('flight.estimatedDep')}
+                value={dateTimeShort(snapshot.estimatedDeparture)}
+              />
+              <Field
+                label={t('flight.actualDep')}
+                value={dateTimeShort(snapshot.actualDeparture)}
+              />
+              <Field
+                label={t('flight.scheduledArr')}
+                value={dateTimeShort(snapshot.scheduledArrival)}
+              />
+              <Field
+                label={t('flight.estimatedArr')}
+                value={dateTimeShort(snapshot.estimatedArrival)}
+              />
               <Field label={t('flight.actualArr')} value={dateTimeShort(snapshot.actualArrival)} />
             </div>
           </div>
         ) : (
-          <EmptyState icon={Activity} title={t('flight.noProviderStatus')} className="border-0 py-8" />
+          <EmptyState
+            icon={Activity}
+            title={t('flight.noProviderStatus')}
+            className="border-0 py-8"
+          />
         )}
       </CardContent>
     </Card>
