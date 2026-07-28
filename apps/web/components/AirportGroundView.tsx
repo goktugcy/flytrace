@@ -33,23 +33,40 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 /**
- * Only runway operations are shown — arrivals on final approach/landing and
- * departures holding short / rolling / climbing out. Enroute overflights
- * (AIRBORNE/CRUISE) and idle gate/taxi/parked traffic are excluded, so the view
- * matches a FlightRadar-style "aircraft using the runway" picture.
+ * Airport traffic: everything on the surface (gate / pushback / taxi / hold /
+ * line-up / takeoff roll) plus arrivals on final and departures climbing out.
+ * Only high-altitude enroute overflights (AIRBORNE / CRUISE) and UNKNOWN are
+ * excluded — so whenever a feed reports a ground aircraft, it shows here.
  */
 const OPS_STATES = new Set<string>([
-  'APPROACH',
-  'LANDING',
-  'DESCENT',
+  'AT_GATE',
+  'ARRIVED_GATE',
+  'PARKED_REMOTE',
+  'PUSHBACK',
+  'TAXI_OUT',
+  'TAXI_IN',
   'HOLD_SHORT',
   'LINE_UP',
   'TAKEOFF_ROLL',
+  'APPROACH',
+  'LANDING',
+  'DESCENT',
   'CLIMB',
 ]);
 
 const FILTERS: Record<string, string[] | null> = {
   All: null,
+  Ground: [
+    'AT_GATE',
+    'ARRIVED_GATE',
+    'PARKED_REMOTE',
+    'PUSHBACK',
+    'TAXI_OUT',
+    'TAXI_IN',
+    'HOLD_SHORT',
+    'LINE_UP',
+    'TAKEOFF_ROLL',
+  ],
   Landing: ['APPROACH', 'LANDING', 'DESCENT'],
   Departure: ['HOLD_SHORT', 'LINE_UP', 'TAKEOFF_ROLL', 'CLIMB'],
 };
@@ -431,7 +448,7 @@ export function AirportGroundView({ icao }: { icao: string }) {
   }, [icao]);
 
   const legend = useMemo(
-    () => ['APPROACH', 'LANDING', 'HOLD_SHORT', 'LINE_UP', 'TAKEOFF_ROLL', 'CLIMB'],
+    () => ['AT_GATE', 'TAXI_OUT', 'TAKEOFF_ROLL', 'APPROACH', 'LANDING', 'CLIMB'],
     [],
   );
 
