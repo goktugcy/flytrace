@@ -216,41 +216,129 @@ async function main(): Promise<void> {
     : DEFAULT_OVERPASS_MIRRORS;
   const radiusM = Number(process.env.AIRPORT_OSM_RADIUS_M) || 6000;
   const datasetVersion = process.env.AIRPORT_OSM_DATASET_VERSION ?? 'osm-local';
+  const delayMs = Number(process.env.AIRPORT_OSM_DELAY_MS) || 2000;
+  const { db, close } = createDb({ url: config.DATABASE_URL, max: 1 });
+  try {
+    const targets = await resolveTargets(db, logger);
+    logger.info('airport-osm: targets resolved', { count: targets.length });
+    let done = 0;
+    let failed = 0;
+    // Retry each airport a few times with growing backoff — Overpass mirrors
+    // rate-limit sustained batch traffic (504/429), so a short wait usually
+    // clears the window instead of skipping the airport.
+    const maxAttempts = Math.max(1, Number(process.env.AIRPORT_OSM_RETRIES) || 3);
+    for (const airport of targets) {
+      let ok = false;
+      for (let attempt = 1; attempt <= maxAttempts && !ok; attempt += 1) {
+        try {
+          const { upserted } = await importAirportOsm(db, {
+            airportId: airport.id,
+            lat: airport.lat,
+            lon: airport.lon,
+            radiusM,
+            overpassUrl,
+            datasetVersion,
+            logger,
+          });
+          done += 1;
+          ok = true;
+          logger.info('airport-osm: airport done', {
+            icao: airport.icao,
+            upserted,
+            progress: `${done + failed}/${targets.length}`,
+          });
+        } catch (err) {
+          if (attempt < maxAttempts) {
+            const backoff = 6000 * attempt; // 6s, 12s, …
+            logger.warn('airport-osm: airport attempt failed, backing off', {
+              icao: airport.icao,
+              attempt,
+              backoffMs: backoff,
+              error: String(err),
+            });
+            await sleep(backoff);
+          } else {
+            failed += 1;
+            logger.error('airport-osm: airport failed after retries, skipping', {
+              icao: airport.icao,
+              error: String(err),
+            });
+          }
+        }
+      }
+      if (targets.length > 1) await sleep(delayMs); // be gentle with the shared mirrors
+    }
+    logger.info('airport-osm: complete', { done, failed, total: targets.length });
+  } finally {
+    await close();
+  }
+}
+
+interface ImportTarget {
+  id: string;
+  icao: string;
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Which airports to import. Default: the explicit AIRPORT_OSM_ICAOS list.
+ * Bulk mode (AIRPORT_OSM_ALL=true): every airport of the configured types
+ * (default large + medium) that has a location and NO geometry yet — so the
+ * job is resumable and can be run repeatedly to fill coverage. Optional filters:
+ * AIRPORT_OSM_TYPES, AIRPORT_OSM_COUNTRY (ISO), AIRPORT_OSM_LIMIT (per run).
+ */
+async function resolveTargets(db: Database, logger: Logger): Promise<ImportTarget[]> {
+  const usable = (
+    rows: { id: string; icao: string | null; lat: number | null; lon: number | null }[],
+  ) =>
+    rows.filter(
+      (r): r is ImportTarget => Boolean(r.id && r.icao) && r.lat != null && r.lon != null,
+    );
+
+  if (process.env.AIRPORT_OSM_ALL === 'true') {
+    const types = (process.env.AIRPORT_OSM_TYPES ?? 'large_airport,medium_airport')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const limit = Math.max(1, Number(process.env.AIRPORT_OSM_LIMIT) || 1000);
+    const country = process.env.AIRPORT_OSM_COUNTRY?.trim().toUpperCase();
+    const rows = (await db.execute(sql`
+      select a.id, a.icao,
+             ST_Y(a.location::geometry) as lat, ST_X(a.location::geometry) as lon
+      from airports a
+      left join (select distinct airport_id from airport_geometries) g on g.airport_id = a.id
+      where a.location is not null
+        and a.icao is not null
+        and g.airport_id is null
+        and a.type in (${sql.join(
+          types.map((t) => sql`${t}`),
+          sql`, `,
+        )})
+        ${country ? sql`and a.country = ${country}` : sql``}
+      order by case a.type when 'large_airport' then 1 when 'medium_airport' then 2 else 3 end,
+               a.scheduled_service desc nulls last
+      limit ${limit}
+    `)) as unknown as { id: string; icao: string | null; lat: number | null; lon: number | null }[];
+    return usable(rows);
+  }
+
+  // Explicit ICAO list (default).
   const icaos = (process.env.AIRPORT_OSM_ICAOS ?? 'LTFM,LTFJ,LTAC')
     .split(',')
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
-  const { db, close } = createDb({ url: config.DATABASE_URL, max: 1 });
-  try {
-    for (const icao of icaos) {
-      const rows = (await db.execute(sql`
-        select id, ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
-        from airports where icao = ${icao} limit 1
-      `)) as unknown as { id: string; lat: number | null; lon: number | null }[];
-      const airport = rows[0];
-      if (!airport || airport.lat == null || airport.lon == null) {
-        logger.warn('airport-osm: airport not found or has no location', { icao });
-        continue;
-      }
-      try {
-        const { upserted } = await importAirportOsm(db, {
-          airportId: airport.id,
-          lat: airport.lat,
-          lon: airport.lon,
-          radiusM,
-          overpassUrl,
-          datasetVersion,
-          logger,
-        });
-        logger.info('airport-osm: airport done', { icao, upserted });
-      } catch (err) {
-        logger.error('airport-osm: airport failed, continuing', { icao, error: String(err) });
-      }
-      if (icaos.length > 1) await sleep(2000); // be gentle with the shared mirrors
-    }
-  } finally {
-    await close();
+  const out: ImportTarget[] = [];
+  for (const icao of icaos) {
+    const rows = (await db.execute(sql`
+      select id, icao, ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon
+      from airports where icao = ${icao} limit 1
+    `)) as unknown as { id: string; icao: string | null; lat: number | null; lon: number | null }[];
+    const [t] = usable(rows);
+    if (t) out.push(t);
+    else logger.warn('airport-osm: airport not found or has no location', { icao });
   }
+  return out;
 }
 
 if (import.meta.main) {

@@ -1,4 +1,4 @@
-import { createSystemRepo, sql } from '@flytrace/db';
+import { createSystemRepo, importRunwaysFromCsv, sql } from '@flytrace/db';
 import { type AirspaceImportJob, AppError, QUEUES } from '@flytrace/shared';
 import type { Job, Queue } from 'bullmq';
 import { type Context, Hono } from 'hono';
@@ -176,6 +176,30 @@ export function createAdminRoutes(ctx: AppContext): Hono<AppEnv> {
       ctx.logger.warn('airspace import queue read failed', { err: data.error });
     }
     return ok(c, data);
+  });
+
+  // Airport ground geometry coverage summary.
+  app.get('/admin/airport-geometry', async (c) => {
+    const rows = (await ctx.db.execute(sql`
+      select
+        count(distinct airport_id)::int                        as airports,
+        count(*) filter (where kind = 'runway')::int           as runways,
+        count(*) filter (where source = 'osm')::int            as "osmFeatures",
+        count(distinct airport_id) filter (where source = 'osm')::int as "osmAirports"
+      from airport_geometries
+    `)) as unknown as Record<string, number>[];
+    return ok(c, { coverage: rows[0] ?? {} });
+  });
+
+  // Bulk-import runway centrelines for every airport from OurAirports (one CSV,
+  // no per-airport API calls). Fast enough to run inline. OSM-detailed airports
+  // are skipped so runways never duplicate.
+  app.post('/admin/airport-geometry/runways', async (c) => {
+    ctx.logger.info('admin: airport runways import requested', {
+      userId: c.get('user')?.id ?? null,
+    });
+    const result = await importRunwaysFromCsv(ctx.db, { logger: ctx.logger });
+    return ok(c, result);
   });
 
   app.post('/admin/airspace/imports/openaip-global', async (c) => {

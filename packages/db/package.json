@@ -16,6 +16,7 @@
     "airports:import": "bun run src/import-airports.ts",
     "airspace:import": "bun run src/import-airspace.ts",
     "airport-geo:import": "bun run src/import-airport-osm.ts",
+    "airport-runways:import": "bun run src/import-airport-runways.ts",
     "db:studio": "drizzle-kit studio",
     "test": "bun test"
   },

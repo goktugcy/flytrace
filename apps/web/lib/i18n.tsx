@@ -450,6 +450,11 @@ const en: Record<string, string> = {
   'admin.logOk': 'ok',
   'admin.logFail': 'fail',
   'admin.auditLog': 'Audit log',
+  'admin.airportGeom.title': 'Airport ground geometry',
+  'admin.airportGeom.body':
+    'Import runway lines for every airport from OurAirports in one bulk download — no per-airport API calls. Detailed taxiways, gates and aprons come from the separate per-airport OpenStreetMap import.',
+  'admin.airportGeom.import': 'Import runways',
+  'admin.airportGeom.done': '{airports} airports · {runways} runways imported',
   'admin.noAudit': 'No admin actions recorded.',
   'admin.unknownDataset': 'unknown dataset',
   'admin.importRunning': 'Import running',
@@ -911,6 +916,11 @@ const tr: Record<string, string> = {
   'admin.logOk': 'başarılı',
   'admin.logFail': 'hata',
   'admin.auditLog': 'Denetim kaydı',
+  'admin.airportGeom.title': 'Havalimanı yer geometrisi',
+  'admin.airportGeom.body':
+    'Tüm havalimanlarının pist çizgilerini OurAirports’tan tek toplu indirmeyle içe aktar — havalimanı başına API çağrısı yok. Ayrıntılı taxiway, kapı ve apron, ayrı havalimanı-bazlı OpenStreetMap importundan gelir.',
+  'admin.airportGeom.import': 'Pistleri içe aktar',
+  'admin.airportGeom.done': '{airports} havalimanı · {runways} pist içe aktarıldı',
   'admin.noAudit': 'Kayıtlı yönetici işlemi yok.',
   'admin.unknownDataset': 'bilinmeyen veri kümesi',
   'admin.importRunning': 'İçe aktarım sürüyor',

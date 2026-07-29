@@ -167,6 +167,8 @@ export function AdminConsole() {
   const [state, setState] = useState<State>('loading');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoMsg, setGeoMsg] = useState<string | null>(null);
 
   const get = (p: string) => fetch(`${API_BASE}/api/v1/admin/${p}`, { credentials: 'include' });
 
@@ -255,6 +257,27 @@ export function AdminConsole() {
     }
   }
 
+  async function importRunways() {
+    setGeoBusy(true);
+    setGeoMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/airport-geometry/runways`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        setGeoMsg(await responseErrorMessage(res, t));
+        return;
+      }
+      const d = ((await res.json()) as { data: { airports: number; runways: number } }).data;
+      setGeoMsg(t('admin.airportGeom.done', { airports: d.airports, runways: d.runways }));
+    } catch (err) {
+      setGeoMsg(errorMessage(err));
+    } finally {
+      setGeoBusy(false);
+    }
+  }
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <div className="flex items-end justify-between gap-4">
@@ -299,6 +322,9 @@ export function AdminConsole() {
             startAirspaceImport={startAirspaceImport}
             actionBusy={actionBusy}
             actionError={actionError}
+            importRunways={importRunways}
+            geoBusy={geoBusy}
+            geoMsg={geoMsg}
           />
         )}
       </div>
@@ -312,12 +338,18 @@ function AdminBody({
   startAirspaceImport,
   actionBusy,
   actionError,
+  importRunways,
+  geoBusy,
+  geoMsg,
 }: {
   data: AdminData;
   retry: (path: string) => Promise<void>;
   startAirspaceImport: () => Promise<void>;
   actionBusy: boolean;
   actionError: string | null;
+  importRunways: () => Promise<void>;
+  geoBusy: boolean;
+  geoMsg: string | null;
 }) {
   const t = useT();
   return (
@@ -520,6 +552,24 @@ function AdminBody({
               ))}
             </List>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Airport ground geometry */}
+      <Card>
+        <SectionTitle
+          icon={Plane}
+          action={
+            <Button size="sm" onClick={importRunways} disabled={geoBusy}>
+              {geoBusy ? t('admin.importRunning') : t('admin.airportGeom.import')}
+            </Button>
+          }
+        >
+          {t('admin.airportGeom.title')}
+        </SectionTitle>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">{t('admin.airportGeom.body')}</p>
+          {geoMsg && <p className="mt-2 text-sm font-medium text-foreground">{geoMsg}</p>}
         </CardContent>
       </Card>
     </div>

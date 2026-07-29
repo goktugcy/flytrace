@@ -15,6 +15,7 @@ export * from './repos/system.ts';
 export * from './repos/user.ts';
 export * from './repos/airport-ground-read.ts';
 export * from './repos/airport-ground-events.ts';
+export { importRunwaysFromCsv, parseRunwaysCsv } from './import-airport-runways.ts';
 export * from './repos/security.ts';
 export * from './repos/airspace-import.ts';
 export * from './repos/airspace-read.ts';
