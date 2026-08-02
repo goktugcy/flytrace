@@ -1,0 +1,61 @@
+# Keep the build context small AND free of anything that must never reach an
+# image layer. Note that a file excluded here cannot be COPYed even by mistake,
+# which is the point for the secret entries below.
+
+# ── secrets: never, under any circumstances, into an image ──
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# ── dependencies & build output (rebuilt inside the image) ──
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+out
+**/out
+build
+**/build
+.turbo
+**/.turbo
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# ── vcs, editor, os ──
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+
+# ── tests, fixtures and dev-only assets ──
+# Test SOURCES are never imported by production code, so dropping them shrinks
+# the context safely. `**/testing` is deliberately NOT excluded: some package
+# barrels re-export a testing module (e.g. @flytrace/notifications), so removing
+# it would break the bundle rather than slim it.
+**/*.test.ts
+**/*.test.tsx
+apps/api/src/testing
+apps/tracker/fixtures
+load
+coverage
+**/coverage
+
+# ── docs & local data ──
+docs
+*.md
+!README.md
+pgdata
+redisdata
+logs
+*.log

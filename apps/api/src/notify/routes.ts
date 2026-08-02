@@ -1,11 +1,10 @@
 import { createCatalogRepo, createFlightReadRepo, createNotifyRepo } from '@flytrace/db';
 import { HttpEmailTransport, WebPushChannel } from '@flytrace/notifications';
-import { AppError, DB_EVENT_TYPES } from '@flytrace/shared';
+import { AppError, DB_EVENT_TYPES, hashToken, randomToken } from '@flytrace/shared';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../app.ts';
 import { requireUser } from '../auth/routes.ts';
-import { randomToken } from '../auth/service.ts';
 import type { AppContext } from '../context.ts';
 
 const createWatchSchema = z.object({
@@ -202,8 +201,12 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     const parsed = emailSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success)
       throw new AppError('VALIDATION_ERROR', 'invalid email', { details: parsed.error.issues });
-    const token = randomToken().slice(0, 24);
-    await repo.createEmailChannel(user.id, parsed.data.email, token);
+    // Full-entropy token in the link; only its digest is persisted, with an
+    // explicit expiry so an abandoned verification email cannot be redeemed
+    // months later.
+    const token = randomToken();
+    const expiresAt = new Date(ctx.clock.now() + ctx.config.LINK_TOKEN_TTL_MINUTES * 60_000);
+    await repo.createEmailChannel(user.id, parsed.data.email, hashToken(token), expiresAt);
 
     let sent = false;
     if (ctx.config.EMAIL_API_KEY) {
@@ -229,7 +232,7 @@ export function createNotifyRoutes(ctx: AppContext): Hono<AppEnv> {
     const parsed = emailVerifySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success)
       throw new AppError('VALIDATION_ERROR', 'invalid token', { details: parsed.error.issues });
-    const userId = await repo.verifyEmailToken(parsed.data.token);
+    const userId = await repo.verifyEmailToken(hashToken(parsed.data.token));
     if (!userId) throw new AppError('NOT_FOUND', 'invalid or expired token');
     return ok(c, { ok: true });
   });

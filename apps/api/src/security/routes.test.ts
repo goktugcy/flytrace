@@ -3,8 +3,31 @@ import type { AuthUser } from '@flytrace/db';
 import { AppError, isAppError } from '@flytrace/shared';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
+import { type PolicyMiddlewareDeps, buildRateLimitPolicies } from './edge/rate-limit-policies.ts';
 import { InMemoryRateLimiter } from './edge/rate-limit.ts';
 import { type SecurityRoutesDeps, createSecurityRoutes } from './routes.ts';
+
+/** Generous defaults; individual tests tighten the policy they care about. */
+function policyConfig(overrides: Record<string, number> = {}) {
+  const base: Record<string, number> = {};
+  for (const name of [
+    'RATE_LIMIT',
+    'RATE_LIMIT_LOGIN',
+    'RATE_LIMIT_SIGNUP',
+    'RATE_LIMIT_MFA_CHALLENGE',
+    'RATE_LIMIT_MFA_VERIFY',
+    'RATE_LIMIT_REFRESH',
+    'RATE_LIMIT_PASSWORD_RESET',
+    'RATE_LIMIT_WS_TICKET',
+    'RATE_LIMIT_SECURITY',
+    'RATE_LIMIT_ADMIN',
+    'RATE_LIMIT_OPS',
+  ]) {
+    base[`${name}_MAX`] = 1000;
+    base[`${name}_WINDOW_MS`] = 60_000;
+  }
+  return { ...base, ...overrides } as unknown as Parameters<typeof buildRateLimitPolicies>[0];
+}
 
 const ORIGIN = 'http://localhost:3000';
 const USER: AuthUser = {
@@ -19,17 +42,26 @@ function buildDeps(): SecurityRoutesDeps & {
   revokedDevices: string[];
   revokedRefreshDevices: string[];
   revokedSessions: Array<string | undefined>;
+  revokedDeviceSessionIds: string[];
+  credentialChanges: Array<{ userId: string; reason: string }>;
+  passwordChanges: Array<{ userId: string; newPassword: string }>;
 } {
   const auditEntries: Array<{ action: string; meta?: Record<string, unknown> }> = [];
   const revokedDevices: string[] = [];
   const revokedRefreshDevices: string[] = [];
   const revokedSessions: Array<string | undefined> = [];
+  const revokedDeviceSessionIds: string[] = [];
+  const credentialChanges: Array<{ userId: string; reason: string }> = [];
+  const passwordChanges: Array<{ userId: string; newPassword: string }> = [];
 
   return {
     auditEntries,
     revokedDevices,
     revokedRefreshDevices,
     revokedSessions,
+    revokedDeviceSessionIds,
+    credentialChanges,
+    passwordChanges,
     mfa: {
       async beginEnrollment() {
         return { secret: 'SETUPSECRET', otpauthUri: 'otpauth://totp/FlyTrace:u' };
@@ -82,13 +114,45 @@ function buildDeps(): SecurityRoutesDeps & {
     async verifyPassword(_user, password) {
       if (password !== 'correct-password') throw new AppError('UNAUTHENTICATED', 'bad password');
     },
+    flow: {
+      async revokeAllAfterCredentialChange(userId, reason) {
+        credentialChanges.push({ userId, reason });
+      },
+    },
+    async changePassword(userId, newPassword) {
+      passwordChanges.push({ userId, newPassword });
+    },
+    async listSessions(userId) {
+      return [
+        {
+          id: 'sess-1',
+          deviceId: 'dev-1',
+          ip: '203.0.113.0/24',
+          userAgent: 'UA/1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-02-01T00:00:00.000Z',
+        },
+      ].filter(() => userId === USER.id);
+    },
     async revokeSession(sessionToken) {
       revokedSessions.push(sessionToken);
+    },
+    async revokeDeviceSessions(deviceId) {
+      revokedDeviceSessionIds.push(deviceId);
+      return 1;
     },
   };
 }
 
-function buildApp(deps = buildDeps(), user: AuthUser | null = USER, rateLimitMax = 50) {
+function buildApp(
+  deps = buildDeps(),
+  user: AuthUser | null = USER,
+  policyOverrides: Record<string, number> = {},
+) {
+  const rateLimit: PolicyMiddlewareDeps = {
+    limiter: new InMemoryRateLimiter(() => 0),
+    policies: buildRateLimitPolicies(policyConfig(policyOverrides)),
+  };
   const app = new Hono<AppEnv>();
   app.use('*', async (c, next) => {
     c.set('requestId', 'test-request');
@@ -100,8 +164,8 @@ function buildApp(deps = buildDeps(), user: AuthUser | null = USER, rateLimitMax
     '/',
     createSecurityRoutes(deps, {
       allowedOrigins: [ORIGIN],
-      rateLimitMax,
-      rateLimitWindowMs: 60_000,
+      rateLimit,
+      cookies: { secure: false, sameSite: 'Lax' },
     }),
   );
   app.onError((err, c) => {
@@ -202,6 +266,7 @@ describe('security routes', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: { method: string } };
     expect(body.data.method).toBe('backup_code');
+    expect(deps.auditEntries[0]?.action).toBe('mfa.step_up_verified');
     expect(deps.auditEntries[0]?.meta).toEqual({ method: 'backup_code' });
   });
 
@@ -239,7 +304,36 @@ describe('security routes', () => {
     });
     expect(revoked.status).toBe(200);
     expect(deps.revokedRefreshDevices).toEqual(['dev-1']);
+    // Sessions already issued to the device must die with it, not just the
+    // refresh token that would mint new ones.
+    expect(deps.revokedDeviceSessionIds).toEqual(['dev-1']);
     expect(deps.revokedDevices).toEqual(['dev-1']);
+  });
+
+  test('refuses to revoke a device the caller does not own', async () => {
+    const { app, deps } = buildApp();
+    const res = await app.request('/security/devices/someone-elses-device', {
+      method: 'DELETE',
+      headers: jsonHeaders,
+      body: JSON.stringify({ password: 'correct-password' }),
+    });
+    expect(res.status).toBe(404);
+    expect(deps.revokedDevices).toEqual([]);
+    expect(deps.revokedRefreshDevices).toEqual([]);
+  });
+
+  test('disabling MFA invalidates every existing credential', async () => {
+    const { app, deps } = buildApp();
+    const res = await app.request('/security/mfa/disable', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ password: 'correct-password' }),
+    });
+    expect(res.status).toBe(200);
+    expect(deps.credentialChanges).toEqual([{ userId: USER.id, reason: 'mfa_disabled' }]);
+    const cookies = (res.headers.getSetCookie?.() ?? []).join(' ');
+    expect(cookies).toContain('flytrace_session=');
+    expect(cookies).toContain('flytrace_refresh=');
   });
 
   test('revokes the current server session and clears its cookie', async () => {
@@ -263,11 +357,96 @@ describe('security routes', () => {
     expect(res.status).toBe(403);
   });
 
-  test('applies a route-level rate limit', async () => {
-    const deps = buildDeps();
-    deps.rateLimiter = new InMemoryRateLimiter(() => 0);
-    const { app } = buildApp(deps, USER, 1);
+  test('changing the password revokes every credential and signs the caller out', async () => {
+    const { app, deps } = buildApp();
+    const res = await app.request('/security/password', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ currentPassword: 'correct-password', newPassword: 'a-new-password' }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(deps.passwordChanges).toEqual([{ userId: USER.id, newPassword: 'a-new-password' }]);
+    // A password change that left old sessions alive would be useless against
+    // an attacker who already holds a session cookie.
+    expect(deps.credentialChanges).toEqual([{ userId: USER.id, reason: 'password_changed' }]);
+    const cookies = (res.headers.getSetCookie?.() ?? []).join(' ');
+    expect(cookies).toContain('flytrace_session=');
+    expect(cookies).toContain('flytrace_refresh=');
+    expect(deps.auditEntries.map((e) => e.action)).toContain('password.changed');
+  });
+
+  test('a wrong current password neither changes it nor revokes anything', async () => {
+    const { app, deps } = buildApp();
+    const res = await app.request('/security/password', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ currentPassword: 'wrong-password', newPassword: 'a-new-password' }),
+    });
+    expect(res.status).toBe(401);
+    expect(deps.passwordChanges).toEqual([]);
+    expect(deps.credentialChanges).toEqual([]);
+    expect(deps.auditEntries.map((e) => e.action)).toContain('password.change_failed');
+  });
+
+  test('rejects reusing the current password, and a too-short new one', async () => {
+    const { app, deps } = buildApp();
+    // Both are 400 — the module's validateJson convention for a bad body.
+    const same = await app.request('/security/password', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        currentPassword: 'correct-password',
+        newPassword: 'correct-password',
+      }),
+    });
+    expect(same.status).toBe(400);
+    const sameBody = (await same.json()) as { error: { message: string } };
+    expect(sameBody.error.message).toContain('differ from the current one');
+
+    const short = await app.request('/security/password', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ currentPassword: 'correct-password', newPassword: 'short' }),
+    });
+    expect(short.status).toBe(400);
+
+    // Neither attempt touched the stored password.
+    expect(deps.passwordChanges).toEqual([]);
+    expect(deps.credentialChanges).toEqual([]);
+  });
+
+  test('password change is rate-limited under the passwordReset policy', async () => {
+    const { app } = buildApp(buildDeps(), USER, { RATE_LIMIT_PASSWORD_RESET_MAX: 1 });
+    const attempt = () =>
+      app.request('/security/password', {
+        method: 'POST',
+        headers: jsonHeaders,
+        body: JSON.stringify({ currentPassword: 'wrong-password', newPassword: 'a-new-password' }),
+      });
+    expect((await attempt()).status).toBe(401);
+    expect((await attempt()).status).toBe(429);
+  });
+
+  test('lists the caller own sessions without any token material', async () => {
+    const { app } = buildApp();
+    const res = await app.request('/security/sessions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { items: Array<Record<string, unknown>> } };
+    expect(body.data.items).toHaveLength(1);
+    expect(body.data.items[0]?.id).toBe('sess-1');
+    // Only the coarsened network, and no token/hash field of any kind.
+    expect(body.data.items[0]?.ip).toBe('203.0.113.0/24');
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain('token');
+    expect(raw).not.toContain('hash');
+  });
+
+  test('applies the shared "security" policy to every route', async () => {
+    const { app } = buildApp(buildDeps(), USER, { RATE_LIMIT_SECURITY_MAX: 1 });
     expect((await app.request('/security/devices')).status).toBe(200);
-    expect((await app.request('/security/devices')).status).toBe(429);
+    const limited = await app.request('/security/devices');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('Retry-After')).toBe('60');
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { bunHasher, randomToken } from './service.ts';
+import { randomToken } from '@flytrace/shared';
+import { bunHasher } from './service.ts';
 
 describe('bunHasher (argon2id)', () => {
   test('verifies the correct password and rejects a wrong one', async () => {

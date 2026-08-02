@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { Clock } from '@flytrace/shared';
-import { ipPrefix, normalizeIp } from './ip.ts';
+import { type IpStoragePolicy, applyIpPolicy, ipPrefix, normalizeIp } from './ip.ts';
 
 /**
  * Device management (docs §7b). A device is identified by a stable fingerprint
  * hash of its user-agent + COARSE (prefix) IP — coarse so the same device does
  * not fork into many records as its address churns. Registration dedups on the
  * (user, fingerprint) pair and refreshes last-seen.
+ *
+ * What gets PERSISTED as `last_ip` is governed by {@link IpStoragePolicy};
+ * the default stores only the network prefix, never the exact address.
  */
 
 export interface DeviceRecord {
@@ -46,6 +49,8 @@ export interface DeviceServiceDeps {
   /** Prefix widths used to coarsen the IP before fingerprinting. */
   v4bits?: number | undefined;
   v6bits?: number | undefined;
+  /** What may be persisted as `last_ip`. Defaults to the network prefix. */
+  ipPolicy?: IpStoragePolicy | undefined;
 }
 
 /**
@@ -61,6 +66,14 @@ export interface RegisterDeviceInput {
   ip?: string | null | undefined;
 }
 
+/** Outcome of a device registration — tells callers whether it is a first sight. */
+export interface RegisteredDevice {
+  deviceId: string;
+  fingerprint: string;
+  /** True when no prior row existed for this (user, fingerprint) pair. */
+  isNew: boolean;
+}
+
 export class DeviceService {
   constructor(private readonly deps: DeviceServiceDeps) {}
 
@@ -69,23 +82,36 @@ export class DeviceService {
     return ipPrefix(normalizeIp(ip), this.deps.v4bits, this.deps.v6bits);
   }
 
+  private storableIp(ip: string | null | undefined): string | null {
+    return applyIpPolicy(ip, this.deps.ipPolicy ?? 'prefix', this.deps.v4bits, this.deps.v6bits);
+  }
+
   /**
    * Register (or refresh) the calling device, returning its stable device id.
    * Dedups on (user, fingerprint): a returning device updates last-seen rather
    * than creating a duplicate row.
    */
   async registerDevice(userId: string, input: RegisterDeviceInput): Promise<string> {
+    return (await this.register(userId, input)).deviceId;
+  }
+
+  /**
+   * As {@link registerDevice}, but also reports whether this was a first
+   * sighting — the signal that drives the new-device audit event and the
+   * security notification.
+   */
+  async register(userId: string, input: RegisterDeviceInput): Promise<RegisteredDevice> {
     const ua = input.ua ?? null;
-    const ip = input.ip ? normalizeIp(input.ip) : null;
+    const ip = this.storableIp(input.ip);
     const fingerprint = deviceFingerprint(ua ?? '', this.coarse(input.ip));
     const now = new Date(this.deps.clock.now());
 
     const existing = await this.deps.repo.findByFingerprint(userId, fingerprint);
     if (existing) {
       await this.deps.repo.touch(existing.id, now, ip);
-      return existing.id;
+      return { deviceId: existing.id, fingerprint, isNew: false };
     }
-    return this.deps.repo.insert({
+    const deviceId = await this.deps.repo.insert({
       userId,
       fingerprint,
       ua,
@@ -94,6 +120,7 @@ export class DeviceService {
       lastSeenAt: now,
       createdAt: now,
     });
+    return { deviceId, fingerprint, isNew: true };
   }
 
   listDevices(userId: string): Promise<DeviceRecord[]> {
@@ -111,11 +138,7 @@ export class DeviceService {
 
   /** Record activity for an already-known device. */
   markSeen(deviceId: string, ip?: string | null): Promise<void> {
-    return this.deps.repo.touch(
-      deviceId,
-      new Date(this.deps.clock.now()),
-      ip ? normalizeIp(ip) : null,
-    );
+    return this.deps.repo.touch(deviceId, new Date(this.deps.clock.now()), this.storableIp(ip));
   }
 }
 

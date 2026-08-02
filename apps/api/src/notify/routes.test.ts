@@ -1,23 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { createApp } from '../app.ts';
 import type { AppContext } from '../context.ts';
+import { testContext } from '../testing/context.ts';
 
-function fakeCtx(): AppContext {
-  return {
-    config: {
-      CORS_ORIGINS: ['http://localhost:3000'],
-      AUTH_SECRET: 'x'.repeat(16),
-      WEB_PUSH_PUBLIC_KEY: 'VAPID_PUB',
-    },
-    logger: createLogger({ level: 'error', base: {} }),
-    clock: systemClock,
-    db: { execute: async () => [] as unknown[] },
-    redis: { smembers: async () => [], scard: async () => 0 },
-    redisPrefix: 'test:',
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = (): AppContext =>
+  testContext({
+    config: { WEB_PUSH_PUBLIC_KEY: 'VAPID_PUB' },
+    redis: { smembers: async () => [], scard: async () => 0 } as unknown as AppContext['redis'],
+  });
 
 describe('notify routes', () => {
   test('watchlist requires auth (401 without a session)', async () => {

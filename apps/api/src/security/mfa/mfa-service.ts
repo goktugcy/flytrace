@@ -90,6 +90,17 @@ export class MfaService {
     return Math.floor(this.deps.clock.now() / 1000);
   }
 
+  /**
+   * Whether the user has completed MFA enrolment. Read by the sign-in flow to
+   * decide between "issue a session" and "issue a challenge"; a storage error
+   * must NOT be swallowed here — the caller fails the sign-in closed rather
+   * than skipping the second factor.
+   */
+  async isEnabled(userId: string): Promise<boolean> {
+    const record = await this.deps.repo.getUserMfa(userId);
+    return record?.enabled === true;
+  }
+
   /** Step 1: mint a secret and return it + the otpauth URI for QR display. */
   async beginEnrollment(userId: string, account?: string): Promise<EnrollmentStart> {
     const secret = generateSecret();

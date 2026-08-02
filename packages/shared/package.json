@@ -13,11 +13,13 @@
     "./contracts": "./src/contracts/index.ts",
     "./ids": "./src/ids/index.ts",
     "./clock": "./src/clock/index.ts",
-    "./security": "./src/security/index.ts"
+    "./security": "./src/security/index.ts",
+    "./security/tokens": "./src/security/tokens.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "tsc --noEmit"
   },
   "dependencies": {
     "zod": "^3.24.1"

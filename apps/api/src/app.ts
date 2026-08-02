@@ -2,12 +2,13 @@ import {
   type AuthUser,
   createAesGcmMfaSecretCodec,
   createAuthRepo,
+  createNotifyRepo,
   createSecurityAuditRepo,
   createSecurityDeviceRepo,
   createSecurityMfaRepo,
   createSecurityRefreshTokenRepo,
-  sql,
 } from '@flytrace/db';
+import { EmailChannel, HttpEmailTransport } from '@flytrace/notifications';
 import { AppError, correlationId, createTracer, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -15,20 +16,30 @@ import { secureHeaders } from 'hono/secure-headers';
 import { createAdminRoutes } from './admin/routes.ts';
 import { createAirportOpsRoutes } from './airport-ops/routes.ts';
 import { createAirspaceRoutes } from './airspace/routes.ts';
+import type { CookieOptions } from './auth/cookie.ts';
 import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
+import { SignInFlow } from './auth/sign-in-flow.ts';
 import { createCatalogRoutes } from './catalog/routes.ts';
 import type { AppContext } from './context.ts';
 import { createFlightsRoutes } from './flights/routes.ts';
 import { createApiMetrics } from './metrics.ts';
+import { resolveInternalAccess } from './monitoring/internal-auth.ts';
 import { tracingMiddleware } from './monitoring/request-tracing.ts';
 import { createMonitoringRoutes } from './monitoring/routes.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { createTelegramRoutes } from './notify/telegram.ts';
 import { DbAuditLog, InMemoryAuditLog } from './security/edge/audit-log.ts';
 import { buildCsp } from './security/edge/headers.ts';
-import { InMemoryRateLimiter, rateLimitMiddleware } from './security/edge/index.ts';
+import {
+  type PolicyMiddlewareDeps,
+  buildRateLimitPolicies,
+  clientIp,
+  ipRateLimit,
+} from './security/edge/rate-limit-policies.ts';
+import { resolveRateLimiter } from './security/edge/rate-limit.ts';
 import { CloudflareTurnstile, MockTurnstile } from './security/edge/turnstile.ts';
+import { MfaChallengeService, resolveMfaChallengeStore } from './security/mfa/challenge.ts';
 import { MfaService } from './security/mfa/mfa-service.ts';
 import { createSecurityRoutes } from './security/routes.ts';
 import { DeviceService } from './security/session/devices.ts';
@@ -37,12 +48,17 @@ import {
   randomToken as randomRefreshToken,
   sha256TokenHasher,
 } from './security/session/refresh-tokens.ts';
+import {
+  ChannelSecurityNotifier,
+  NoopSecurityNotifier,
+  type SecurityNotifier,
+} from './security/session/security-notifier.ts';
 import { createUserRoutes } from './user/routes.ts';
 import { createWeatherRoutes } from './weather/routes.ts';
 import { type TicketPayload, signTicket } from './ws/ticket.ts';
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface AppEnv {
   Variables: {
@@ -78,15 +94,55 @@ function buildApiCsp(config: AppConfig): string {
   });
 }
 
+/**
+ * Build the security notifier. Without a configured email transport there is
+ * nothing to deliver on, so we fall back to a no-op recorder rather than
+ * pretending alerts are going out.
+ */
+function buildSecurityNotifier(ctx: AppContext): SecurityNotifier {
+  if (!ctx.config.SECURITY_NOTIFICATIONS_ENABLED || !ctx.config.EMAIL_API_KEY) {
+    if (ctx.config.SECURITY_NOTIFICATIONS_ENABLED) {
+      ctx.logger.warn(
+        'security notifications are enabled but no EMAIL_API_KEY is configured — new-device and token-reuse alerts will not be delivered',
+      );
+    }
+    return new NoopSecurityNotifier();
+  }
+  const transport = new HttpEmailTransport({
+    apiKey: ctx.config.EMAIL_API_KEY,
+    apiUrl: ctx.config.EMAIL_API_URL,
+  });
+  return new ChannelSecurityNotifier({
+    repo: createNotifyRepo(ctx.db),
+    channels: [
+      {
+        key: 'email',
+        adapter: new EmailChannel({
+          from: ctx.config.EMAIL_FROM,
+          transport,
+          webBaseUrl: ctx.config.WEB_BASE_URL,
+        }),
+      },
+    ],
+    logger: ctx.logger,
+  });
+}
+
 export function createApp(ctx: AppContext) {
   const app = new Hono<AppEnv>();
+
+  // ── Composition root ───────────────────────────────────────────────────────
+  // Every security adapter is selected exactly once, here. Route modules
+  // receive what they need; none of them constructs its own limiter, store or
+  // notifier — that is how the security routes previously ended up with a
+  // private in-memory limiter no other instance could see.
 
   const authRepo = createAuthRepo(ctx.db);
   const authService = new AuthService({
     repo: authRepo,
     clock: ctx.clock,
     hasher: bunHasher,
-    sessionTtlMs: SESSION_TTL_MS,
+    sessionTtlMs: ctx.config.SESSION_TTL_DAYS * DAY_MS,
   });
   const mfaSecretCodec = createAesGcmMfaSecretCodec(
     ctx.config.MFA_SECRET_ENCRYPTION_KEY || ctx.config.AUTH_SECRET,
@@ -96,21 +152,75 @@ export function createApp(ctx: AppContext) {
     clock: ctx.clock,
     issuer: ctx.config.MFA_ISSUER,
   });
+  const mfaChallenges = new MfaChallengeService({
+    store: resolveMfaChallengeStore(
+      {
+        MFA_CHALLENGE_BACKEND: ctx.config.MFA_CHALLENGE_BACKEND,
+        APP_ENV: ctx.config.APP_ENV,
+      },
+      {
+        redis: ctx.redis,
+        prefix: ctx.redisPrefix,
+        logger: ctx.logger,
+      },
+    ),
+    clock: ctx.clock,
+    ttlMs: ctx.config.MFA_CHALLENGE_TTL_SECONDS * 1000,
+    maxAttempts: ctx.config.MFA_MAX_ATTEMPTS,
+  });
   const deviceService = new DeviceService({
     repo: createSecurityDeviceRepo(ctx.db),
     clock: ctx.clock,
+    ipPolicy: ctx.config.SECURITY_IP_STORAGE,
   });
   const refreshTokenService = new RefreshTokenService({
     repo: createSecurityRefreshTokenRepo(ctx.db),
     clock: ctx.clock,
     random: randomRefreshToken,
     hasher: sha256TokenHasher,
-    ttlMs: ctx.config.SESSION_REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000,
+    ttlMs: ctx.config.SESSION_REFRESH_TTL_DAYS * DAY_MS,
+    reuseGraceMs: ctx.config.REFRESH_TOKEN_REUSE_GRACE_MS,
   });
   const auditLog =
     ctx.config.AUDIT_BACKEND === 'db'
       ? new DbAuditLog(createSecurityAuditRepo(ctx.db), ctx.clock)
       : new InMemoryAuditLog(ctx.clock);
+  const securityNotifier = buildSecurityNotifier(ctx);
+
+  // ONE rate limiter for the whole process, shared across every policy and by
+  // the sign-in flow's challenge guard. Built before its consumers.
+  const rateLimiter = resolveRateLimiter(
+    { RATE_LIMIT_BACKEND: ctx.config.RATE_LIMIT_BACKEND, APP_ENV: ctx.config.APP_ENV },
+    { redis: ctx.redis, prefix: `${ctx.redisPrefix}rl:`, logger: ctx.logger },
+  );
+  const rateLimit: PolicyMiddlewareDeps = {
+    limiter: rateLimiter,
+    policies: buildRateLimitPolicies(ctx.config),
+    logger: ctx.logger,
+  };
+
+  const signInFlow = new SignInFlow({
+    auth: authService,
+    mfa: mfaService,
+    challenges: mfaChallenges,
+    devices: deviceService,
+    refreshTokens: refreshTokenService,
+    audit: auditLog,
+    notifier: securityNotifier,
+    clock: ctx.clock,
+    logger: ctx.logger,
+    ipPolicy: ctx.config.SECURITY_IP_STORAGE,
+    impossibleTravelMaxKmh: ctx.config.IMPOSSIBLE_TRAVEL_MAX_KMH,
+    // Bounds challenge minting per account — see SignInFlow.guardChallengeIssuance.
+    // Reads the shared policy table rather than the raw config, so every limit
+    // in the system has exactly one definition.
+    challengeLimiter: {
+      limiter: rateLimiter,
+      max: rateLimit.policies.mfaChallenge.max,
+      windowMs: rateLimit.policies.mfaChallenge.windowMs,
+    },
+  });
+
   if (
     ctx.config.TURNSTILE_ENABLED &&
     !ctx.config.TURNSTILE_SECRET &&
@@ -121,9 +231,19 @@ export function createApp(ctx: AppContext) {
   const turnstileVerifier = ctx.config.TURNSTILE_SECRET
     ? new CloudflareTurnstile({ secret: ctx.config.TURNSTILE_SECRET })
     : new MockTurnstile();
-  const cookieSecure = ctx.config.APP_ENV !== 'local';
+
+  const cookies: CookieOptions = {
+    secure: ctx.config.APP_ENV !== 'local',
+    sameSite: ctx.config.SESSION_COOKIE_SAMESITE,
+    domain: ctx.config.SESSION_COOKIE_DOMAIN,
+  };
+
   const metrics = ctx.metrics ?? createApiMetrics();
   const tracer = createTracer(ctx.config, { logger: ctx.logger });
+
+  // Fails fast if /metrics and /health/detailed would be publicly readable.
+  const internalAccess = resolveInternalAccess(ctx.config);
+  ctx.logger.info('operational endpoints protected', { mode: internalAccess.mode });
 
   // ── Middleware chain (see docs/11-api.md §11.10) ──
   app.use('*', async (c, next) => {
@@ -136,6 +256,7 @@ export function createApp(ctx: AppContext) {
     const ms = Date.now() - start;
     metrics.httpRequests.inc({ method: c.req.method, status: String(c.res.status) });
     metrics.httpDuration.observe(ms / 1000, { method: c.req.method });
+    // Path only — never the query string, headers or body: those carry tokens.
     ctx.logger.info('request', {
       requestId,
       method: c.req.method,
@@ -148,18 +269,9 @@ export function createApp(ctx: AppContext) {
   // Wrap every request in a tracing span (noop unless OTEL_* configured).
   app.use('*', tracingMiddleware(tracer));
 
-  // Rate limit the public API (in-memory by default; RATE_LIMIT_BACKEND=redis
-  // for cross-node). Keyed by client IP; generous default so it's non-breaking.
-  const rateLimiter = new InMemoryRateLimiter();
-  app.use(
-    '/api/*',
-    rateLimitMiddleware({
-      limiter: rateLimiter,
-      keyFn: (c) => c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'anon',
-      max: ctx.config.RATE_LIMIT_MAX ?? 100,
-      windowMs: ctx.config.RATE_LIMIT_WINDOW_MS ?? 60_000,
-    }),
-  );
+  // Baseline public-API limit, keyed by client IP. Sensitive endpoints layer
+  // their own stricter policy on top (see the auth and security route modules).
+  app.use('/api/*', ipRateLimit(rateLimit, 'api'));
 
   app.use('*', secureHeaders());
   const cspHeaderName = configuredCspHeaderName(ctx.config.CSP_MODE);
@@ -194,12 +306,13 @@ export function createApp(ctx: AppContext) {
   // Populate c.var.user from the session cookie (best-effort; skips DB when absent).
   app.use('*', attachSession(authService));
 
-  // ── Auth (credentials + server sessions; docs/15 §15.1) ──
+  // ── Auth: credentials, MFA step-up, refresh rotation (docs/15 §15.1) ──
   app.route(
     '/api/auth',
-    createAuthRoutes(authService, {
+    createAuthRoutes(signInFlow, {
       allowedOrigins: ctx.config.CORS_ORIGINS,
-      cookieSecure,
+      cookies,
+      rateLimit,
       turnstile: {
         verifier: turnstileVerifier,
         enabled: ctx.config.TURNSTILE_ENABLED,
@@ -210,34 +323,15 @@ export function createApp(ctx: AppContext) {
     }),
   );
 
-  // ── System routes ──
-  app.get('/health', (c) => c.json({ status: 'ok', service: 'api', time: ctx.clock.nowIso() }));
-
-  app.get('/ready', async (c) => {
-    const checks: Record<string, 'ok' | 'fail'> = { db: 'fail', redis: 'fail' };
-    try {
-      await ctx.db.execute(sql`select 1`);
-      checks.db = 'ok';
-    } catch (err) {
-      ctx.logger.error('readiness: db check failed', { err: String(err) });
-    }
-    try {
-      const pong = await ctx.redis.ping();
-      checks.redis = pong === 'PONG' ? 'ok' : 'fail';
-    } catch (err) {
-      ctx.logger.error('readiness: redis check failed', { err: String(err) });
-    }
-    const ready = Object.values(checks).every((v) => v === 'ok');
-    return c.json({ ready, checks }, ready ? 200 : 503);
-  });
-
-  // Prometheus metrics (internal network only in prod; docs/11 §11.6, docs/14).
-  app.get('/metrics', (c) =>
-    c.text(metrics.registry.render(), 200, { 'content-type': 'text/plain; version=0.0.4' }),
+  // ── Operational endpoints: /health, /health/ready, /health/detailed, /metrics ──
+  app.route(
+    '/',
+    createMonitoringRoutes(ctx, {
+      internalAccess,
+      renderMetrics: () => metrics.registry.render(),
+      opsRateLimit: ipRateLimit(rateLimit, 'ops'),
+    }),
   );
-
-  // Detailed health JSON (db/redis/queue/ws/memory) — GET /health/detailed.
-  app.route('/', createMonitoringRoutes(ctx));
 
   app.get('/api/v1', (c) =>
     c.json({
@@ -248,9 +342,9 @@ export function createApp(ctx: AppContext) {
 
   // ── WebSocket ticket (docs/12 §12.7) ──
   // Short-lived, single-use handshake credential. Guests get a public-channel
-  // ticket; once Better Auth lands (Phase 1), an authenticated session upgrades
-  // this to a user/admin ticket bound to the session's userId.
-  app.post('/api/v1/ws/ticket', async (c) => {
+  // ticket; an authenticated session upgrades this to a user/admin ticket bound
+  // to the session's userId. Single-use enforcement (jti) lives in the gateway.
+  app.post('/api/v1/ws/ticket', ipRateLimit(rateLimit, 'wsTicket'), async (c) => {
     const now = ctx.clock.now();
     const ttlMs = 60_000;
     const user = c.get('user');
@@ -300,7 +394,7 @@ export function createApp(ctx: AppContext) {
   // ── Current weather and modelled aviation risk (Open-Meteo) ──
   app.route('/api/v1', createWeatherRoutes());
 
-  // ── Security: MFA, devices, refresh/session revoke ──
+  // ── Security: MFA enrolment, devices, session/refresh revocation ──
   app.route(
     '/api/v1',
     createSecurityRoutes(
@@ -309,23 +403,32 @@ export function createApp(ctx: AppContext) {
         devices: deviceService,
         refreshTokens: refreshTokenService,
         audit: auditLog,
+        flow: signInFlow,
         verifyPassword: async (user, password) => {
           const found = await authRepo.findUserByEmail(user.email);
           if (!found?.passwordHash || !(await bunHasher.verify(password, found.passwordHash))) {
             throw new AppError('UNAUTHENTICATED', 'reauthentication failed');
           }
         },
+        changePassword: async (userId, newPassword) => {
+          // Same KDF as sign-up — the password path never touches the fast
+          // token digest used for session/refresh tokens.
+          await authRepo.updatePasswordHash(userId, await bunHasher.hash(newPassword));
+        },
+        listSessions: (userId) => authRepo.listSessionsForUser(userId),
         revokeSession: (sessionToken) => authService.signOut(sessionToken),
+        revokeDeviceSessions: (deviceId) => authService.signOutDevice(deviceId),
       },
       {
         allowedOrigins: ctx.config.CORS_ORIGINS,
-        rateLimitMax: 20,
-        rateLimitWindowMs: ctx.config.RATE_LIMIT_WINDOW_MS,
+        rateLimit,
+        cookies,
       },
     ),
   );
 
   // ── Admin console (role=admin; docs/11 §11.6) ──
+  app.use('/api/v1/admin/*', ipRateLimit(rateLimit, 'admin'));
   app.route('/api/v1', createAdminRoutes(ctx));
 
   // ── Fallbacks & error mapping ──
@@ -340,9 +443,13 @@ export function createApp(ctx: AppContext) {
         ctx.logger.error('app error', { requestId, code: err.code, msg: err.message });
       return c.json(err.toEnvelope(requestId), err.httpStatus as 400);
     }
+    // Only the request id reaches the client; the message could name a host,
+    // a query, or a token that appeared in a driver error.
     ctx.logger.error('unhandled error', { requestId, err: String(err) });
     return c.json(new AppError('INTERNAL', 'Internal error').toEnvelope(requestId), 500);
   });
 
   return app;
 }
+
+export { clientIp };

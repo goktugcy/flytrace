@@ -51,6 +51,16 @@ function redact(value: unknown): unknown {
   return value;
 }
 
+/**
+ * The narrow logger surface infra modules depend on. Structurally satisfied by
+ * {@link Logger}, so a module can ask for only what it uses without forcing
+ * callers to construct a full logger (or tests to stub eight methods).
+ */
+export interface MinimalLogger {
+  warn(msg: string, fields?: Record<string, unknown>): void;
+  info?(msg: string, fields?: Record<string, unknown>): void;
+}
+
 export interface CreateLoggerOptions {
   level?: LogLevel;
   base?: Record<string, unknown>;

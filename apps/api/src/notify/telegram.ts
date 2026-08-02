@@ -1,10 +1,9 @@
 import { createNotifyRepo } from '@flytrace/db';
 import { telegramApi } from '@flytrace/notifications';
-import { AppError } from '@flytrace/shared';
+import { AppError, hashToken, randomToken } from '@flytrace/shared';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { requireUser } from '../auth/routes.ts';
-import { randomToken } from '../auth/service.ts';
 import type { AppContext } from '../context.ts';
 
 interface TelegramUpdate {
@@ -28,8 +27,12 @@ export function createTelegramRoutes(ctx: AppContext): Hono<AppEnv> {
     if (!user) throw new AppError('UNAUTHENTICATED', 'sign in required');
     if (!ctx.config.TELEGRAM_BOT_USERNAME)
       throw new AppError('UPSTREAM_UNAVAILABLE', 'telegram not configured');
-    const linkToken = randomToken().slice(0, 24);
-    await repo.createTelegramLink(user.id, linkToken);
+    // 16 bytes → 32 hex chars: comfortably inside Telegram's 64-char /start
+    // payload limit while still far beyond guessing range. Only the digest is
+    // persisted, and the link now expires.
+    const linkToken = randomToken(16);
+    const expiresAt = new Date(ctx.clock.now() + ctx.config.LINK_TOKEN_TTL_MINUTES * 60_000);
+    await repo.createTelegramLink(user.id, hashToken(linkToken), expiresAt);
     return c.json(
       {
         data: {
@@ -55,7 +58,7 @@ export function createTelegramRoutes(ctx: AppContext): Hono<AppEnv> {
 
     if (text.startsWith('/start ')) {
       const linkToken = text.slice('/start '.length).trim();
-      const userId = await repo.consumeTelegramLink(linkToken, chatId);
+      const userId = await repo.consumeTelegramLink(hashToken(linkToken), chatId);
       await reply(
         token,
         chatId,

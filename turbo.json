@@ -24,6 +24,30 @@
     },
     "db:migrate": {
       "cache": false
+    },
+    "@flytrace/shared#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@flytrace/db#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@flytrace/providers#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@flytrace/notifications#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@flytrace/airspace#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@flytrace/airport-ops#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
     }
   }
 }

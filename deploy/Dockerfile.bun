@@ -1,0 +1,120 @@
+# syntax=docker/dockerfile:1.7
+#
+# Parametric image for every Bun service in the monorepo (api, tracker, worker,
+# notifier). One Dockerfile, one `--build-arg APP=…`, so the four services can
+# never drift apart in base image, user, signal handling or hardening.
+#
+#   docker build -f deploy/Dockerfile.bun --build-arg APP=api -t flytrace/api .
+#
+# Layout:
+#   deps    → install the workspace from a frozen lockfile; this layer is cached
+#             on the manifests alone, so a source-only change reuses it.
+#   build   → bundle the service to a single dist/index.js.
+#   runtime → THAT FILE, and nothing else.
+#
+# The runtime layer carries no node_modules at all. `bun build --target=bun`
+# produces a genuinely self-contained bundle (verified: it boots and resolves
+# hono/ioredis/postgres with an empty working directory), so dependency pruning
+# is not a step we have to get right — dev dependencies, source files, the
+# lockfile and any stray .env simply are not in the image.
+#
+# Secrets: none. Every value comes from the environment at `docker run` time.
+# Build args select the app and stamp the version — never credentials, which
+# would persist in image history.
+
+# ──────────────────────────────────────────────────────────── deps ──
+FROM oven/bun:1.3.14-alpine AS deps
+WORKDIR /repo
+
+# Only the manifests, so a source-only change does not invalidate the install.
+COPY package.json bun.lock ./
+COPY apps/api/package.json                 apps/api/
+COPY apps/tracker/package.json             apps/tracker/
+COPY apps/worker/package.json              apps/worker/
+COPY apps/notifier/package.json            apps/notifier/
+COPY apps/web/package.json                 apps/web/
+COPY packages/shared/package.json          packages/shared/
+COPY packages/db/package.json              packages/db/
+COPY packages/providers/package.json       packages/providers/
+COPY packages/notifications/package.json   packages/notifications/
+COPY packages/airspace/package.json        packages/airspace/
+COPY packages/airport-ops/package.json     packages/airport-ops/
+# Test-only workspace. Its manifest must be present or the frozen lockfile
+# will not validate; no test source ever reaches an image (see .dockerignore).
+COPY tests/integration/package.json        tests/integration/
+
+# --frozen-lockfile makes the build FAIL if bun.lock does not already satisfy
+# the manifests, so an image can never be produced from an un-reviewed
+# dependency graph.
+RUN bun install --frozen-lockfile
+
+# ─────────────────────────────────────────────────────────── build ──
+FROM deps AS build
+ARG APP
+WORKDIR /repo
+
+COPY tsconfig.base.json ./
+COPY packages/ packages/
+COPY apps/${APP}/ apps/${APP}/
+
+# Fail loudly rather than silently producing an image for the wrong service.
+RUN test -n "${APP}" || (echo "build-arg APP is required (api|tracker|worker|notifier)" && exit 1)
+RUN cd apps/${APP} && bun run build && test -f dist/index.js
+
+# Park the artifact at a fixed path so the runtime COPY needs no build arg
+# (ARG values are not expanded in a --from path in every buildkit version).
+# The source map travels with it: without one, every production stack trace is
+# unreadable minified output, and 4 MB in a private image is a cheap price for
+# on-call being able to read a crash. It is a map, not the sources themselves.
+RUN mkdir -p /artifact \
+ && cp apps/${APP}/dist/index.js /artifact/index.js \
+ && cp apps/${APP}/dist/index.js.map /artifact/index.js.map
+
+# ───────────────────────────────────────────────────────── runtime ──
+FROM oven/bun:1.3.14-alpine AS runtime
+ARG APP
+ARG APP_VERSION=dev
+ARG GIT_SHA=unknown
+
+# wget serves the HEALTHCHECK; tini gives us a real init so SIGTERM reaches the
+# process and zombie children are reaped.
+RUN apk add --no-cache tini wget
+
+ENV NODE_ENV=production \
+    APP_ENV=production \
+    APP_NAME=${APP} \
+    APP_VERSION=${APP_VERSION} \
+    GIT_SHA=${GIT_SHA} \
+    # Bun writes its install/transpile cache under $HOME by default; point it at
+    # /tmp so the image runs unchanged with a READ-ONLY root filesystem.
+    BUN_INSTALL_CACHE_DIR=/tmp/.bun-cache \
+    HOME=/tmp
+
+WORKDIR /app
+
+# The base image already ships an unprivileged `bun` user (uid 1000). The app
+# directory stays root-owned and read-only to the runtime user: the process has
+# no business rewriting its own code.
+COPY --from=build --chown=root:root /artifact/index.js     ./dist/index.js
+COPY --from=build --chown=root:root /artifact/index.js.map ./dist/index.js.map
+
+USER bun
+
+# `exec`-form ENTRYPOINT: the service is PID 1 under tini, receives SIGTERM
+# directly, and runs its existing graceful-shutdown handler (close the queue
+# consumers, drain the server, close the pool) instead of being SIGKILLed.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["bun", "run", "/app/dist/index.js"]
+
+# Liveness only — deliberately not /health/ready. A readiness failure means a
+# dependency is down; restarting the container would not fix it and would turn
+# a database blip into a crash loop. Orchestrators should poll /health/ready
+# separately for traffic gating. Overridden per-service in compose for the
+# headless workers, which expose no HTTP port.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget --quiet --tries=1 --spider "http://127.0.0.1:${API_PORT:-3001}/health" || exit 1
+
+LABEL org.opencontainers.image.title="flytrace-${APP}" \
+      org.opencontainers.image.source="https://github.com/flytrace/flytrace" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}"

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { createApp } from '../app.ts';
 import type { AppContext } from '../context.ts';
+import { testContext } from '../testing/context.ts';
 
 const PREFIX = 'test:';
 
@@ -19,17 +19,8 @@ class FakeRedis {
   }
 }
 
-function fakeCtx(redis: FakeRedis): AppContext {
-  return {
-    config: { CORS_ORIGINS: ['http://localhost:3000'], AUTH_SECRET: 'x'.repeat(16) },
-    logger: createLogger({ level: 'error', base: {} }),
-    clock: systemClock,
-    db: { execute: async () => [] as unknown[] },
-    redis,
-    redisPrefix: PREFIX,
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = (redis: FakeRedis): AppContext =>
+  testContext({ redis: redis as unknown as AppContext['redis'] });
 
 function seed(r: FakeRedis, id: string, lat: number, lon: number): void {
   r.sets.set(

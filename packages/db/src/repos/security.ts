@@ -237,11 +237,106 @@ export interface DbRefreshTokenRecord extends DbNewRefreshToken {
   replacedBy: string | null;
 }
 
+/** Input for one atomic rotation step. Hashes only — never raw tokens. */
+export interface DbRefreshTokenRotation {
+  oldTokenHash: string;
+  newTokenHash: string;
+  expiresAt: Date;
+  now: Date;
+}
+
+/**
+ * Result of {@link createSecurityRefreshTokenRepo}.rotate. `reuse` means the
+ * presented token had already been revoked — the caller decides whether that is
+ * a benign in-flight retry or an attack, and acts on the family accordingly.
+ */
+export type DbRotateOutcome =
+  | { status: 'rotated'; previous: DbRefreshTokenRecord; newId: string }
+  | { status: 'not_found' }
+  | { status: 'reuse'; previous: DbRefreshTokenRecord }
+  | { status: 'expired'; previous: DbRefreshTokenRecord };
+
 export function createSecurityRefreshTokenRepo(db: Database) {
   return {
     async insert(rec: DbNewRefreshToken): Promise<string> {
       const [row] = await db.insert(refreshTokens).values(rec).returning({ id: refreshTokens.id });
       return requiredReturnedId(row, 'refresh_tokens insert');
+    },
+
+    /**
+     * Rotate a refresh token in ONE transaction.
+     *
+     * `SELECT … FOR UPDATE` takes a row lock on the presented token, so two
+     * concurrent refreshes of the same token serialise: the first rotates, the
+     * second wakes to find `revoked_at` set and is reported as `reuse`. That
+     * makes the check-then-act sequence atomic — without the lock, both callers
+     * could read an un-revoked row and each mint a successor, silently forking
+     * the rotation family and defeating reuse detection entirely.
+     */
+    async rotate(input: DbRefreshTokenRotation): Promise<DbRotateOutcome> {
+      return db.transaction(async (tx) => {
+        const rows = (await tx.execute(sql`
+          select id, user_id as "userId", device_id as "deviceId",
+                 token_hash as "tokenHash", family_id as "familyId",
+                 expires_at as "expiresAt", revoked_at as "revokedAt",
+                 replaced_by as "replacedBy"
+          from refresh_tokens
+          where token_hash = ${input.oldTokenHash}
+          for update
+        `)) as unknown as Array<{
+          id: string;
+          userId: string;
+          deviceId: string;
+          tokenHash: string;
+          familyId: string;
+          expiresAt: Date | string;
+          revokedAt: Date | string | null;
+          replacedBy: string | null;
+        }>;
+
+        const row = rows[0];
+        if (!row) return { status: 'not_found' as const };
+
+        const previous: DbRefreshTokenRecord = {
+          id: row.id,
+          userId: row.userId,
+          deviceId: row.deviceId,
+          tokenHash: row.tokenHash,
+          familyId: row.familyId,
+          expiresAt: new Date(row.expiresAt),
+          revokedAt: row.revokedAt === null ? null : new Date(row.revokedAt),
+          replacedBy: row.replacedBy,
+        };
+
+        if (previous.revokedAt !== null) return { status: 'reuse' as const, previous };
+
+        if (previous.expiresAt.getTime() <= input.now.getTime()) {
+          await tx
+            .update(refreshTokens)
+            .set({ revokedAt: input.now })
+            .where(and(eq(refreshTokens.id, previous.id), isNull(refreshTokens.revokedAt)));
+          return { status: 'expired' as const, previous };
+        }
+
+        const [inserted] = await tx
+          .insert(refreshTokens)
+          .values({
+            userId: previous.userId,
+            deviceId: previous.deviceId,
+            tokenHash: input.newTokenHash,
+            familyId: previous.familyId,
+            expiresAt: input.expiresAt,
+          })
+          .returning({ id: refreshTokens.id });
+        const newId = requiredReturnedId(inserted, 'refresh_tokens rotate insert');
+
+        await tx
+          .update(refreshTokens)
+          .set({ revokedAt: input.now, replacedBy: newId })
+          .where(eq(refreshTokens.id, previous.id));
+
+        return { status: 'rotated' as const, previous, newId };
+      });
     },
 
     async findByHash(tokenHash: string): Promise<DbRefreshTokenRecord | null> {

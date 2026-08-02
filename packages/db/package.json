@@ -18,7 +18,9 @@
     "airport-geo:import": "bun run src/import-airport-osm.ts",
     "airport-runways:import": "bun run src/import-airport-runways.ts",
     "db:studio": "drizzle-kit studio",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "tsc --noEmit",
+    "build:migrate": "bun build src/migrate.ts --target=bun --outdir=dist --sourcemap=linked --minify"
   },
   "dependencies": {
     "@flytrace/airspace": "workspace:*",

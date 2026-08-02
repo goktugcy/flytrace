@@ -1,19 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { createApp } from '../app.ts';
 import type { AppContext } from '../context.ts';
+import { testContext } from '../testing/context.ts';
 
-function fakeCtx(rows: unknown[] = []): AppContext {
-  return {
-    config: { CORS_ORIGINS: ['http://localhost:3000'], AUTH_SECRET: 'x'.repeat(16) },
-    logger: createLogger({ level: 'error', base: {} }),
-    clock: systemClock,
-    db: { execute: async () => rows },
-    redis: {},
-    redisPrefix: 'test:',
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = (rows: unknown[] = []): AppContext => testContext({ dbRows: rows });
 
 describe('catalog routes', () => {
   test('GET /airports/viewport returns airport GeoJSON features', async () => {

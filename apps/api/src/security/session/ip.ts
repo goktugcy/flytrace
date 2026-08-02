@@ -91,6 +91,39 @@ export function ipPrefix(ip: string, v4bits = 24, v6bits = 48): string {
 }
 
 /**
+ * How much of a client address is allowed to be persisted.
+ *
+ * `prefix` (the default) is the project's data-minimisation position: an exact
+ * IP is personal data with a real retention cost, while the /24 (v4) or /48
+ * (v6) network keeps every signal session-security actually needs — "is this a
+ * network we have seen this user on?" — and survives the CGNAT/mobile address
+ * churn that makes exact addresses noisy anyway.
+ *
+ * `full` is available for deployments with a regulatory reason to keep exact
+ * addresses (fraud investigation, incident forensics). `none` drops the value
+ * entirely for the strictest environments; new-device detection still works
+ * because it also keys on the user-agent fingerprint.
+ */
+export type IpStoragePolicy = 'prefix' | 'full' | 'none';
+
+/**
+ * Apply the configured storage policy to an address before it is written to the
+ * database. Returns null when there is nothing safe (or nothing at all) to store.
+ */
+export function applyIpPolicy(
+  ip: string | null | undefined,
+  policy: IpStoragePolicy,
+  v4bits = 24,
+  v6bits = 48,
+): string | null {
+  if (!ip) return null;
+  if (policy === 'none') return null;
+  const normalized = normalizeIp(ip);
+  if (!normalized) return null;
+  return policy === 'full' ? normalized : ipPrefix(normalized, v4bits, v6bits);
+}
+
+/**
  * Extract the client IP from request headers, honoring `x-forwarded-for` (the
  * left-most entry is the original client) then `x-real-ip`. Returns a normalized
  * IP or null when none is present.

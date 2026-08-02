@@ -1,11 +1,13 @@
 import {
   type Database,
   createAirportGroundEventRepo,
+  createAuthRepo,
   createCatalogReadRepo,
   createCatalogRepo,
   createFlightReadRepo,
   createFlightRepo,
   createFlightStatusRepo,
+  createNotifyRepo,
   createPooledDb,
   createSystemRepo,
   resolvePoolConfig,
@@ -40,6 +42,7 @@ import {
   startProviderFetchWorker,
 } from './queues.ts';
 import { ProviderScheduler } from './scheduler.ts';
+import { SecurityJanitor } from './security-janitor.ts';
 import { WatchedFlightMonitor } from './watch-monitor.ts';
 
 export interface WorkerContext {
@@ -260,6 +263,16 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     : null;
   watchMonitor?.start();
 
+  // Housekeeping: keep expired sessions and dead link tokens from accumulating
+  // forever. Read-time expiry already makes them unusable; this reclaims them.
+  const securityJanitor = new SecurityJanitor({
+    auth: createAuthRepo(db),
+    notify: createNotifyRepo(db),
+    logger,
+    intervalMs: config.SECURITY_JANITOR_INTERVAL_MS,
+  });
+  securityJanitor.start();
+
   return {
     config,
     logger,
@@ -270,6 +283,7 @@ export async function createContext(config: WorkerConfig): Promise<WorkerContext
     airspaceImportQueue,
     registry,
     close: async () => {
+      securityJanitor.stop();
       watchMonitor?.stop();
       consumer.stop();
       await airspaceImportWorker.close();

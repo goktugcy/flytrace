@@ -14,7 +14,7 @@ const flightRouteProviderSchema = z.object({
 });
 
 /** API needs base + database + redis + api + auth + web-push env slices. */
-const apiConfigSchema = configSchemas.base
+export const apiConfigSchema = configSchemas.base
   .merge(configSchemas.database)
   .merge(configSchemas.redis)
   .merge(configSchemas.api)

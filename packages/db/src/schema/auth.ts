@@ -36,7 +36,14 @@ export const accounts = pgTable(
   ],
 );
 
-/** Sessions — server-managed sessions for Better Auth. */
+/**
+ * Sessions — server-managed sessions.
+ *
+ * The cookie carries a 256-bit opaque token; only its SHA-256 digest is stored
+ * (`token_hash`, 64 hex chars — see `@flytrace/shared` `hashToken`). A database
+ * dump therefore yields no usable bearer credential. Lookups hash the presented
+ * token and hit the unique index.
+ */
 export const sessions = pgTable(
   'sessions',
   {
@@ -44,13 +51,19 @@ export const sessions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    token: text('token').notNull().unique(),
+    tokenHash: text('token_hash').notNull().unique(),
+    /** Device this session was minted for (links a session to its refresh family). */
+    deviceId: uuid('device_id'),
     ip: inet('ip'),
     userAgent: text('user_agent'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('idx_sessions_user').on(t.userId), index('idx_sessions_expires').on(t.expiresAt)],
+  (t) => [
+    index('idx_sessions_user').on(t.userId),
+    index('idx_sessions_expires').on(t.expiresAt),
+    index('idx_sessions_device').on(t.deviceId),
+  ],
 );
 
 /** User settings — preferences (theme, locale, units, quiet hours). */

@@ -58,10 +58,12 @@ export const refreshTokens = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     /** Id of the token that replaced this one on rotation (nullable). */
     replacedBy: uuid('replaced_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('idx_refresh_tokens_user').on(t.userId),
     index('idx_refresh_tokens_family').on(t.familyId),
     index('idx_refresh_tokens_device').on(t.deviceId),
+    index('idx_refresh_tokens_expires').on(t.expiresAt),
   ],
 );

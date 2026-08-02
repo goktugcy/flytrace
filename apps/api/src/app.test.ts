@@ -1,39 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { createApp } from './app.ts';
 import type { AppContext } from './context.ts';
+import { testContext } from './testing/context.ts';
 
-/** Minimal fake context — /health and routing don't touch db/redis. */
-function fakeCtx(config: Record<string, unknown> = {}): AppContext {
-  return {
-    config: {
-      APP_ENV: 'local',
-      AUTH_SECRET: 'test-auth-secret-at-least-16-chars',
-      AUDIT_BACKEND: 'memory',
-      CORS_ORIGINS: ['http://localhost:3000'],
-      MFA_ISSUER: 'FlyTrace',
-      RATE_LIMIT_MAX: 100,
-      RATE_LIMIT_WINDOW_MS: 60_000,
-      SESSION_REFRESH_TTL_DAYS: 30,
-      CSP_MODE: 'off',
-      CSP_CONNECT_SRC: [],
-      CSP_IMG_SRC: [],
-      CSP_SCRIPT_SRC: [],
-      CSP_STYLE_SRC: [],
-      CSP_FONT_SRC: [],
-      CSP_FRAME_SRC: [],
-      TURNSTILE_ENABLED: false,
-      TURNSTILE_FAIL_OPEN: false,
-      TURNSTILE_EXPECTED_ACTION: 'turnstile-spin-v1',
-      ...config,
-    },
-    logger: createLogger({ level: 'error' }),
-    clock: systemClock,
-    db: {},
-    redis: {},
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = (config: Partial<AppContext['config']> = {}): AppContext => testContext({ config });
 
 describe('api app', () => {
   const app = createApp(fakeCtx());

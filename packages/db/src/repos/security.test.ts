@@ -116,6 +116,7 @@ describeDb('security repositories (postgres integration)', () => {
 
       expect(await tokens.markReplaced(firstId, secondId, new Date())).toBe(true);
       expect(await tokens.markReplaced(firstId, crypto.randomUUID(), new Date())).toBe(false);
+      void firstId;
       await tokens.revokeFamily('family-a', new Date());
       expect((await tokens.findByHash((await tokenHashFor(secondId))!))?.revokedAt).not.toBeNull();
 
@@ -130,6 +131,115 @@ describeDb('security repositories (postgres integration)', () => {
       expect(
         (await tokens.findByHash((await tokenHashFor(deviceOnlyId))!))?.revokedAt,
       ).not.toBeNull();
+    } finally {
+      await db.execute(sql`delete from users where id = ${userId}`);
+    }
+  });
+
+  test('refresh rotation is atomic and serialises concurrent callers', async () => {
+    const userId = await createUser('rotate');
+    const devices = createSecurityDeviceRepo(db);
+    const tokens = createSecurityRefreshTokenRepo(db);
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const expiresAt = new Date('2026-02-01T00:00:00.000Z');
+
+    try {
+      const deviceId = await devices.insert({
+        userId,
+        fingerprint: `fp-${crypto.randomUUID()}`,
+        ua: 'UA/1',
+        lastIp: '203.0.113.10',
+        trusted: false,
+        lastSeenAt: now,
+        createdAt: now,
+      });
+      const originalHash = `hash-${crypto.randomUUID()}`;
+      await tokens.insert({
+        userId,
+        deviceId,
+        tokenHash: originalHash,
+        familyId: `family-${crypto.randomUUID()}`,
+        expiresAt,
+      });
+
+      const rotated = await tokens.rotate({
+        oldTokenHash: originalHash,
+        newTokenHash: `hash-${crypto.randomUUID()}`,
+        expiresAt,
+        now,
+      });
+      expect(rotated.status).toBe('rotated');
+      if (rotated.status !== 'rotated') return;
+      // The predecessor is revoked and linked to its successor in one commit.
+      const previous = await tokens.findByHash(originalHash);
+      expect(previous?.revokedAt).not.toBeNull();
+      expect(previous?.replacedBy).toBe(rotated.newId);
+
+      // Replaying the same hash is reported as reuse, not as a second rotation.
+      const replay = await tokens.rotate({
+        oldTokenHash: originalHash,
+        newTokenHash: `hash-${crypto.randomUUID()}`,
+        expiresAt,
+        now,
+      });
+      expect(replay.status).toBe('reuse');
+
+      // Two concurrent rotations of one live token: exactly one wins, because
+      // SELECT ... FOR UPDATE makes the check-then-act atomic.
+      const liveHash = `hash-${crypto.randomUUID()}`;
+      await tokens.insert({
+        userId,
+        deviceId,
+        tokenHash: liveHash,
+        familyId: `family-${crypto.randomUUID()}`,
+        expiresAt,
+      });
+      const [a, b] = await Promise.all([
+        tokens.rotate({
+          oldTokenHash: liveHash,
+          newTokenHash: `hash-${crypto.randomUUID()}`,
+          expiresAt,
+          now,
+        }),
+        tokens.rotate({
+          oldTokenHash: liveHash,
+          newTokenHash: `hash-${crypto.randomUUID()}`,
+          expiresAt,
+          now,
+        }),
+      ]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual(['reuse', 'rotated']);
+
+      // An unknown hash is distinguishable only to the repo, never to a client.
+      expect(
+        (
+          await tokens.rotate({
+            oldTokenHash: 'never-issued',
+            newTokenHash: `hash-${crypto.randomUUID()}`,
+            expiresAt,
+            now,
+          })
+        ).status,
+      ).toBe('not_found');
+
+      // An expired token is revoked on presentation.
+      const expiredHash = `hash-${crypto.randomUUID()}`;
+      await tokens.insert({
+        userId,
+        deviceId,
+        tokenHash: expiredHash,
+        familyId: `family-${crypto.randomUUID()}`,
+        expiresAt: new Date('2025-01-01T00:00:00.000Z'),
+      });
+      const expiredOutcome = await tokens.rotate({
+        oldTokenHash: expiredHash,
+        newTokenHash: `hash-${crypto.randomUUID()}`,
+        expiresAt,
+        now,
+      });
+      expect(expiredOutcome.status).toBe('expired');
+      expect((await tokens.findByHash(expiredHash))?.revokedAt).not.toBeNull();
     } finally {
       await db.execute(sql`delete from users where id = ${userId}`);
     }

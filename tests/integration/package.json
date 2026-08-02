@@ -1,0 +1,23 @@
+{
+  "name": "@flytrace/integration-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@flytrace/api": "workspace:*",
+    "@flytrace/db": "workspace:*",
+    "@flytrace/notifier": "workspace:*",
+    "@flytrace/shared": "workspace:*",
+    "@flytrace/tracker": "workspace:*",
+    "@flytrace/worker": "workspace:*",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.3"
+  }
+}

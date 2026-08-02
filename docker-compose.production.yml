@@ -1,0 +1,461 @@
+# FlyTrace — production deployment reference.
+#
+#   cp deploy/env/production.env.example .env.production
+#   # fill in every REQUIRED value, then:
+#   docker compose -f docker-compose.production.yml --env-file .env.production up -d
+#
+# Design decisions worth knowing before you edit this file:
+#
+#   * `depends_on` alone is NOT readiness. Every dependency edge below uses
+#     `condition: service_healthy` (for long-running services) or
+#     `service_completed_successfully` (for the migration job). A plain
+#     `depends_on` only waits for the container to be *created*, which is why
+#     apps used to start against a database that was still initialising.
+#   * Migrations run in ONE dedicated job. No application container migrates at
+#     boot — see deploy/Dockerfile.migrate for why.
+#   * Two networks. Only `edge` is reachable from the proxy; Postgres, Redis and
+#     the internal endpoints live on `internal`, which has no published ports.
+#   * No secret is written in this file. Everything comes from the env file,
+#     and every required value uses the `${VAR:?message}` form so `up` fails
+#     immediately with a readable error instead of booting mis-configured.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    # Bounded log growth: 3 × 20 MB per container. Without this a chatty
+    # service fills the host disk and takes everything down with it.
+    max-size: '20m'
+    max-file: '3'
+
+x-app-env: &app-env
+  NODE_ENV: production
+  APP_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  WEB_BASE_URL: ${WEB_BASE_URL:?WEB_BASE_URL is required}
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ────────────────────────────────────────────────────────── data ──
+  postgres:
+    image: postgis/postgis:16-3.4
+    <<: *restart
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      # Never a literal here — supply it through the env file or a secrets
+      # manager. It is not baked into any image.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # Deterministic collation so index ordering cannot shift under a libc
+      # upgrade (a classic cause of silently corrupt btree indexes).
+      POSTGRES_INITDB_ARGS: '--data-checksums --locale-provider=icu --icu-locale=en-US'
+    command:
+      - postgres
+      # max_connections must exceed the sum of every pool: see
+      # docs/18-production.md §Connection budget.
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-768MB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - wal_compression=on
+      - -c
+      - log_min_duration_statement=${PG_LOG_MIN_DURATION_MS:-1000}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Separate volume so a backup survives `docker volume rm pgdata`.
+      - pgbackup:/backups
+    networks: [internal]
+    # NO published ports. Reach it with `docker compose exec postgres psql`.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '${PG_CPU_LIMIT:-2}'
+          memory: ${PG_MEMORY_LIMIT:-2g}
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    logging: *default-logging
+    # Redis carries FOUR different workloads here (docs/18-production.md
+    # §Redis): the hot flight state + pub/sub fan-out (rebuildable), the BullMQ
+    # queues and consumer groups (NOT rebuildable — losing them drops in-flight
+    # jobs), rate-limit counters (rebuildable), and MFA challenges (short-lived;
+    # losing them costs users one re-login).
+    #
+    # Because the queues matter, AOF is ON with everysec fsync. `allkeys-lru`
+    # would be wrong: it can evict a queue key under memory pressure. We use
+    # `noeviction` so Redis refuses writes instead of silently dropping jobs —
+    # alert on `used_memory` rather than letting it evict.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-1gb}
+      - --maxmemory-policy
+      - noeviction
+      # Disable the commands that make an accidental exposure catastrophic.
+      - --rename-command
+      - 'FLUSHALL ""'
+      - --rename-command
+      - 'FLUSHDB ""'
+      - --rename-command
+      - 'CONFIG ""'
+    volumes:
+      - redisdata:/data
+    networks: [internal]
+    # NO published ports.
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: '${REDIS_CPU_LIMIT:-1}'
+          memory: ${REDIS_MEMORY_LIMIT:-1500m}
+
+  # ───────────────────────────────────────────────── migration gate ──
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.migrate
+    image: ${IMAGE_PREFIX:-flytrace}/migrate:${IMAGE_TAG:-latest}
+    # A job, not a service: it runs once and exits. `on-failure` would retry a
+    # genuinely broken migration forever.
+    restart: 'no'
+    logging: *default-logging
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      MIGRATION_LOCK_TIMEOUT_MS: ${MIGRATION_LOCK_TIMEOUT_MS:-120000}
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  # ─────────────────────────────────────────────────────── services ──
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.bun
+      args:
+        APP: api
+        APP_VERSION: ${IMAGE_TAG:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${IMAGE_PREFIX:-flytrace}/api:${IMAGE_TAG:-latest}
+    <<: *restart
+    logging: *default-logging
+    environment:
+      <<: *app-env
+      API_PORT: 3001
+      API_HOST: 0.0.0.0
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
+      AUTH_URL: ${AUTH_URL:?AUTH_URL is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      # ── production-only security posture ──
+      # Shared across instances; the app REFUSES to boot with `memory` here.
+      RATE_LIMIT_BACKEND: redis
+      MFA_CHALLENGE_BACKEND: redis
+      AUDIT_BACKEND: db
+      WS_PUBSUB_BACKEND: redis
+      WS_PRESENCE_BACKEND: redis
+      # Guards /metrics and /health/detailed. Boot fails without it.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required (>=32 chars)}
+      MFA_SECRET_ENCRYPTION_KEY: ${MFA_SECRET_ENCRYPTION_KEY:?MFA_SECRET_ENCRYPTION_KEY is required}
+      SESSION_COOKIE_DOMAIN: ${SESSION_COOKIE_DOMAIN:-}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+      SECURITY_IP_STORAGE: ${SECURITY_IP_STORAGE:-prefix}
+      CSP_MODE: ${CSP_MODE:-enforce}
+      CSP_REPORT_URI: ${CSP_REPORT_URI:-/api/v1/security/csp-report}
+      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-false}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-FlyTrace <alerts@flytrace.local>}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      WEB_PUSH_PUBLIC_KEY: ${WEB_PUSH_PUBLIC_KEY:-}
+      WEB_PUSH_PRIVATE_KEY: ${WEB_PUSH_PRIVATE_KEY:-}
+      DB_POOL_MAX: ${API_DB_POOL_MAX:-10}
+    networks: [internal, edge]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      # Hard gate: if the migration job failed, the API never starts.
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:3001/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${API_CPU_LIMIT:-2}'
+          memory: ${API_MEMORY_LIMIT:-1g}
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:?NEXT_PUBLIC_WS_URL is required}
+        NEXT_PUBLIC_TURNSTILE_ENABLED: ${NEXT_PUBLIC_TURNSTILE_ENABLED:-false}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        CSP_MODE: ${CSP_MODE:-enforce}
+        APP_VERSION: ${IMAGE_TAG:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${IMAGE_PREFIX:-flytrace}/web:${IMAGE_TAG:-latest}
+    <<: *restart
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      CSP_MODE: ${CSP_MODE:-enforce}
+      CSP_REPORT_URI: ${CSP_REPORT_URI:-/api/v1/security/csp-report}
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:3000/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    deploy:
+      resources:
+        limits:
+          cpus: '${WEB_CPU_LIMIT:-1}'
+          memory: ${WEB_MEMORY_LIMIT:-768m}
+
+  tracker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.bun
+      args:
+        APP: tracker
+        APP_VERSION: ${IMAGE_TAG:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${IMAGE_PREFIX:-flytrace}/tracker:${IMAGE_TAG:-latest}
+    <<: *restart
+    logging: *default-logging
+    environment:
+      <<: *app-env
+      TRACKER_SOURCE: ${TRACKER_SOURCE:-adsb}
+      TRACKER_BBOX: ${TRACKER_BBOX:-}
+      ADSB_API_URL: ${ADSB_API_URL:-https://api.adsb.lol/v2}
+      ADSB_CENTER_LAT: ${ADSB_CENTER_LAT:-39.0}
+      ADSB_CENTER_LON: ${ADSB_CENTER_LON:-35.0}
+      ADSB_RADIUS_NM: ${ADSB_RADIUS_NM:-250}
+      ADSB_POLL_INTERVAL_MS: ${ADSB_POLL_INTERVAL_MS:-5000}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      # The tracker is headless; this is its only HTTP listener (metrics+health)
+      # and it stays on the internal network.
+      TRACKER_METRICS_PORT: 9101
+      TRACKER_METRICS_HOST: 0.0.0.0
+      DB_POOL_MAX: ${TRACKER_DB_POOL_MAX:-5}
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:9101/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${TRACKER_CPU_LIMIT:-1}'
+          memory: ${TRACKER_MEMORY_LIMIT:-768m}
+
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.bun
+      args:
+        APP: worker
+        APP_VERSION: ${IMAGE_TAG:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${IMAGE_PREFIX:-flytrace}/worker:${IMAGE_TAG:-latest}
+    <<: *restart
+    logging: *default-logging
+    environment:
+      <<: *app-env
+      WORKER_PROVIDER_FETCH_SCOPE: ${WORKER_PROVIDER_FETCH_SCOPE:-watched}
+      AERODATABOX_API_KEY: ${AERODATABOX_API_KEY:-}
+      BACKUP_PROVIDER: ${BACKUP_PROVIDER:-pgdump}
+      BACKUP_DIR: /backups
+      SECURITY_JANITOR_INTERVAL_MS: ${SECURITY_JANITOR_INTERVAL_MS:-3600000}
+      DB_POOL_MAX: ${WORKER_DB_POOL_MAX:-5}
+    volumes:
+      - pgbackup:/backups
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Headless: no HTTP listener, so process liveness is the only signal.
+    healthcheck:
+      test: ['CMD-SHELL', 'pgrep -f dist/index.js > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${WORKER_CPU_LIMIT:-1}'
+          memory: ${WORKER_MEMORY_LIMIT:-768m}
+
+  notifier:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.bun
+      args:
+        APP: notifier
+        APP_VERSION: ${IMAGE_TAG:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${IMAGE_PREFIX:-flytrace}/notifier:${IMAGE_TAG:-latest}
+    <<: *restart
+    logging: *default-logging
+    environment:
+      <<: *app-env
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_API_URL: ${EMAIL_API_URL:-https://api.resend.com/emails}
+      EMAIL_FROM: ${EMAIL_FROM:-FlyTrace <alerts@flytrace.local>}
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      WEB_PUSH_PUBLIC_KEY: ${WEB_PUSH_PUBLIC_KEY:-}
+      WEB_PUSH_PRIVATE_KEY: ${WEB_PUSH_PRIVATE_KEY:-}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:ops@flytrace.local}
+      DIGEST_ENABLED: ${DIGEST_ENABLED:-false}
+      DB_POOL_MAX: ${NOTIFIER_DB_POOL_MAX:-5}
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ['CMD-SHELL', 'pgrep -f dist/index.js > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${NOTIFIER_CPU_LIMIT:-1}'
+          memory: ${NOTIFIER_MEMORY_LIMIT:-512m}
+
+  # ─────────────────────────────────────────────────── reverse proxy ──
+  # The ONLY container with published ports. Terminates TLS, upgrades the
+  # WebSocket, sets the real client IP, and blocks /metrics + /health/detailed
+  # from the public internet. See deploy/nginx/flytrace.conf.
+  proxy:
+    image: nginx:1.27-alpine
+    <<: *restart
+    logging: *default-logging
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+    volumes:
+      - ./deploy/nginx/flytrace.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_DIR:-./deploy/nginx/certs}:/etc/nginx/certs:ro
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1/nginx-health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '${PROXY_CPU_LIMIT:-1}'
+          memory: ${PROXY_MEMORY_LIMIT:-256m}
+
+networks:
+  # Data plane: Postgres, Redis and every internal listener. No published ports.
+  internal:
+    driver: bridge
+    internal: false # set true once images are pre-built and pulled, not built here
+  # Anything the proxy must reach.
+  edge:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  # Backups live on their own volume so the database volume can be recreated
+  # without destroying the only copy of the data.
+  pgbackup:

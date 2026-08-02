@@ -164,8 +164,13 @@ export function createNotifyRepo(db: Database) {
     },
 
     // ── Telegram deep-link linking (docs/10 §10.6) ──
-    /** Create a pending, unverified telegram channel holding a one-time token. */
-    async createTelegramLink(userId: string, token: string): Promise<void> {
+    // Link tokens are one-time bearer credentials: callers pass the SHA-256
+    // digest (`hashToken` from @flytrace/shared), never the raw token, and every
+    // token carries an explicit expiry. Consumption is a single conditional
+    // UPDATE, so it is atomic — a replayed token finds `link_token_hash = null`
+    // and matches zero rows.
+    /** Create a pending, unverified telegram channel holding a one-time token hash. */
+    async createTelegramLink(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
       await db.execute(sql`
         delete from notification_channels
         where user_id = ${userId} and channel = 'telegram' and verified = false
@@ -176,25 +181,32 @@ export function createNotifyRepo(db: Database) {
         address: {},
         verified: false,
         enabled: true,
-        linkToken: token,
+        linkTokenHash: tokenHash,
+        linkTokenExpiresAt: expiresAt,
       });
     },
 
-    /** Bind a chat to the token's user; returns the userId, or null if unknown. */
-    async consumeTelegramLink(token: string, chatId: number | string): Promise<string | null> {
+    /** Bind a chat to the token's user; returns the userId, or null if unknown/expired. */
+    async consumeTelegramLink(tokenHash: string, chatId: number | string): Promise<string | null> {
       const rows = (await db.execute(sql`
         update notification_channels
         set address = ${JSON.stringify({ chatId })}::jsonb, verified = true,
-            link_token = null, updated_at = now()
-        where link_token = ${token} and channel = 'telegram'
+            link_token_hash = null, link_token_expires_at = null, updated_at = now()
+        where link_token_hash = ${tokenHash} and channel = 'telegram'
+          and (link_token_expires_at is null or link_token_expires_at > now())
         returning user_id as "userId"
       `)) as unknown as { userId: string }[];
       return rows[0]?.userId ?? null;
     },
 
     // ── Email double opt-in ──
-    /** Create a pending, unverified email channel holding a verification token. */
-    async createEmailChannel(userId: string, email: string, token: string): Promise<void> {
+    /** Create a pending, unverified email channel holding a verification token hash. */
+    async createEmailChannel(
+      userId: string,
+      email: string,
+      tokenHash: string,
+      expiresAt: Date,
+    ): Promise<void> {
       await db.execute(sql`
         delete from notification_channels
         where user_id = ${userId} and channel = 'email'
@@ -207,18 +219,33 @@ export function createNotifyRepo(db: Database) {
         address: { email },
         verified: false,
         enabled: true,
-        linkToken: token,
+        linkTokenHash: tokenHash,
+        linkTokenExpiresAt: expiresAt,
       });
     },
 
-    /** Verify an email channel by its token; returns the userId, or null. */
-    async verifyEmailToken(token: string): Promise<string | null> {
+    /** Verify an email channel by its token hash; returns the userId, or null. */
+    async verifyEmailToken(tokenHash: string): Promise<string | null> {
       const rows = (await db.execute(sql`
-        update notification_channels set verified = true, link_token = null, updated_at = now()
-        where link_token = ${token} and channel = 'email'
+        update notification_channels
+        set verified = true, link_token_hash = null, link_token_expires_at = null,
+            updated_at = now()
+        where link_token_hash = ${tokenHash} and channel = 'email'
+          and (link_token_expires_at is null or link_token_expires_at > now())
         returning user_id as "userId"
       `)) as unknown as { userId: string }[];
       return rows[0]?.userId ?? null;
+    },
+
+    /** Housekeeping: clear link tokens whose expiry has passed. */
+    async expireStaleLinkTokens(): Promise<number> {
+      const rows = (await db.execute(sql`
+        update notification_channels
+        set link_token_hash = null, link_token_expires_at = null, updated_at = now()
+        where link_token_hash is not null and link_token_expires_at <= now()
+        returning id
+      `)) as unknown as { id: string }[];
+      return rows.length;
     },
 
     /** Disable all telegram channels for a chat (the /stop command). */

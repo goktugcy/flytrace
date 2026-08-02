@@ -211,17 +211,85 @@ const securitySchema = z.object({
   CSP_STYLE_SRC: csvList(),
   CSP_FONT_SRC: csvList(),
   CSP_FRAME_SRC: csvList(),
+  // ── Rate limiting ──
+  // The backend is validated here; `resolveRateLimiter` additionally REFUSES
+  // the memory backend in production (per-process counters multiply every limit
+  // by the instance count).
   RATE_LIMIT_BACKEND: z.enum(['memory', 'redis']).default('memory'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  // Per-category policies. Defaults are tuned for "a real user never notices,
+  // an online guesser gives up"; every one is overridable per environment.
+  RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_LOGIN_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+  RATE_LIMIT_SIGNUP_MAX: z.coerce.number().int().positive().default(5),
+  RATE_LIMIT_SIGNUP_WINDOW_MS: z.coerce.number().int().positive().default(3_600_000),
+  RATE_LIMIT_MFA_CHALLENGE_MAX: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_MFA_CHALLENGE_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+  RATE_LIMIT_MFA_VERIFY_MAX: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_MFA_VERIFY_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+  RATE_LIMIT_REFRESH_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_REFRESH_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+  RATE_LIMIT_PASSWORD_RESET_MAX: z.coerce.number().int().positive().default(5),
+  RATE_LIMIT_PASSWORD_RESET_WINDOW_MS: z.coerce.number().int().positive().default(3_600_000),
+  RATE_LIMIT_WS_TICKET_MAX: z.coerce.number().int().positive().default(30),
+  RATE_LIMIT_WS_TICKET_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_SECURITY_MAX: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_SECURITY_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_ADMIN_MAX: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_ADMIN_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_OPS_MAX: z.coerce.number().int().positive().default(120),
+  RATE_LIMIT_OPS_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+
   AUDIT_BACKEND: z.enum(['memory', 'db']).default('memory'),
-  SESSION_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
+
+  // ── Sessions, refresh tokens, cookies ──
+  SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
+  SESSION_REFRESH_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
+  /**
+   * Grace window in which re-presenting a just-rotated refresh token counts as
+   * a benign in-flight retry rather than an attack. 0 disables it (strictest).
+   */
+  REFRESH_TOKEN_REUSE_GRACE_MS: z.coerce.number().int().nonnegative().default(10_000),
+  SESSION_COOKIE_SAMESITE: z.enum(['Lax', 'Strict', 'None']).default('Lax'),
+  SESSION_COOKIE_DOMAIN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  /**
+   * How much of a client address may be persisted. `prefix` (default) stores
+   * the /24 (v4) or /48 (v6) network — enough for new-network detection,
+   * without retaining an exact address as personal data.
+   */
+  SECURITY_IP_STORAGE: z.enum(['prefix', 'full', 'none']).default('prefix'),
+  /** Send out-of-band alerts on new devices, token reuse, credential changes. */
+  SECURITY_NOTIFICATIONS_ENABLED: boolish.default('true'),
+  /** Lifetime of email-verification and Telegram deep-link tokens. */
+  LINK_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().max(10_080).default(1440),
+
   IMPOSSIBLE_TRAVEL_MAX_KMH: z.coerce.number().positive().default(900),
+
+  // ── MFA ──
   MFA_ISSUER: z.string().default('FlyTrace'),
   MFA_SECRET_ENCRYPTION_KEY: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().min(16).optional(),
   ),
+  /** Where login-time MFA challenges live. `memory` is rejected in production. */
+  MFA_CHALLENGE_BACKEND: z.enum(['redis', 'memory']).default('redis'),
+  /** Challenge lifetime; clamped to 60–600s by the service. */
+  MFA_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(600).default(300),
+  /** Failed code attempts tolerated before a challenge is burned. */
+  MFA_MAX_ATTEMPTS: z.coerce.number().int().positive().max(20).default(5),
+
+  // ── Operational endpoints (/metrics, /health/detailed) ──
+  /** Bearer token for internal scrapers. REQUIRED outside local development. */
+  INTERNAL_API_TOKEN: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(32).optional(),
+  ),
+  /** Opt out of the token check when access is already restricted by network. */
+  INTERNAL_ENDPOINTS_NETWORK_ONLY: boolish.default('false'),
 });
 
 /** Compose the schemas an app needs; each app validates only its slice. */

@@ -1,3 +1,4 @@
+import { loadRootEnv } from '@flytrace/shared';
 import { sql } from 'drizzle-orm';
 import { createDb } from './index.ts';
 
@@ -28,6 +29,11 @@ interface ExistingAirlineCode {
 }
 
 async function main() {
+  // Fill process.env from the single root .env, like loadConfig() does for the
+  // scripts that use it — so the documented `bun run` command works from a
+  // fresh checkout. Real environment variables always win.
+  loadRootEnv();
+
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required to import airlines');
   const { db, close } = createDb({ url, max: 1 });

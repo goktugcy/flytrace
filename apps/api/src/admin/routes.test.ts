@@ -1,22 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { createApp } from '../app.ts';
 import type { AppEnv } from '../app.ts';
 import type { AppContext } from '../context.ts';
+import { testContext } from '../testing/context.ts';
 import { createAdminRoutes } from './routes.ts';
 
-function fakeCtx(): AppContext {
-  return {
-    config: { CORS_ORIGINS: ['http://localhost:3000'], AUTH_SECRET: 'x'.repeat(16) },
-    logger: createLogger({ level: 'error', base: {} }),
-    clock: systemClock,
-    db: { execute: async () => [] as unknown[] },
-    redis: { llen: async () => 0, zcard: async () => 0 },
-    redisPrefix: 'test:',
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = (): AppContext =>
+  testContext({
+    redis: { llen: async () => 0, zcard: async () => 0 } as unknown as AppContext['redis'],
+  });
 
 function adminApp(ctx: AppContext) {
   const app = new Hono<AppEnv>();

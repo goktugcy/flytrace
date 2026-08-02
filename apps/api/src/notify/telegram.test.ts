@@ -1,19 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { createLogger, systemClock } from '@flytrace/shared';
 import { createApp } from '../app.ts';
-import type { AppContext } from '../context.ts';
+import { testContext } from '../testing/context.ts';
 
-function fakeCtx(): AppContext {
-  return {
-    config: { CORS_ORIGINS: ['http://localhost:3000'], AUTH_SECRET: 'x'.repeat(16) },
-    logger: createLogger({ level: 'error', base: {} }),
-    clock: systemClock,
-    db: { execute: async () => [] as unknown[] },
-    redis: {},
-    redisPrefix: 'test:',
-    close: async () => {},
-  } as unknown as AppContext;
-}
+const fakeCtx = () => testContext();
 
 describe('telegram routes', () => {
   test('link requires auth (401)', async () => {
