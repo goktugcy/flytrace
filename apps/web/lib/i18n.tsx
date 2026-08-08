@@ -153,6 +153,26 @@ const en: Record<string, string> = {
   'sec.password.prompt': 'Confirm with your password',
   'sec.copied': 'Copied',
 
+  'pwreset.forgot.title': 'Forgot your password?',
+  'pwreset.forgot.body':
+    'Enter your email address and we will send you a link to choose a new password.',
+  'pwreset.forgot.submit': 'Send reset link',
+  'pwreset.forgot.sent.title': 'Check your email',
+  'pwreset.forgot.sent.body':
+    'If an account exists for that address, a reset link is on its way. The link expires in an hour and works once.',
+  'pwreset.forgot.link': 'Forgot password?',
+  'pwreset.back': 'Back to sign in',
+
+  'pwreset.reset.title': 'Choose a new password',
+  'pwreset.reset.body': 'Resetting your password signs you out on every device.',
+  'pwreset.reset.new': 'New password',
+  'pwreset.reset.confirm': 'Confirm new password',
+  'pwreset.reset.submit': 'Reset password',
+  'pwreset.reset.mismatch': 'The two passwords do not match.',
+  'pwreset.reset.missing': 'This link is missing its token. Request a new one.',
+  'pwreset.reset.done.title': 'Password updated',
+  'pwreset.reset.done.body': 'You have been signed out everywhere. Sign in with your new password.',
+
   'map.altitude': 'Altitude',
   'map.geoAltitude': 'Geo alt',
   'map.speed': 'Speed',
@@ -681,6 +701,26 @@ const tr: Record<string, string> = {
 
   'sec.password.prompt': 'Şifrenle onayla',
   'sec.copied': 'Kopyalandı',
+
+  'pwreset.forgot.title': 'Şifreni mi unuttun?',
+  'pwreset.forgot.body':
+    'E-posta adresini gir, yeni şifre belirlemen için bir bağlantı gönderelim.',
+  'pwreset.forgot.submit': 'Sıfırlama bağlantısı gönder',
+  'pwreset.forgot.sent.title': 'E-postanı kontrol et',
+  'pwreset.forgot.sent.body':
+    'Bu adrese ait bir hesap varsa sıfırlama bağlantısı yola çıktı. Bağlantı bir saat içinde geçersiz olur ve bir kez çalışır.',
+  'pwreset.forgot.link': 'Şifreni mi unuttun?',
+  'pwreset.back': 'Girişe dön',
+
+  'pwreset.reset.title': 'Yeni şifre belirle',
+  'pwreset.reset.body': 'Şifreni sıfırlamak seni tüm cihazlardan çıkarır.',
+  'pwreset.reset.new': 'Yeni şifre',
+  'pwreset.reset.confirm': 'Yeni şifre (tekrar)',
+  'pwreset.reset.submit': 'Şifreyi sıfırla',
+  'pwreset.reset.mismatch': 'İki şifre birbiriyle eşleşmiyor.',
+  'pwreset.reset.missing': 'Bu bağlantıda token yok. Yeni bir tane iste.',
+  'pwreset.reset.done.title': 'Şifre güncellendi',
+  'pwreset.reset.done.body': 'Her yerden çıkış yapıldı. Yeni şifrenle giriş yap.',
 
   'map.altitude': 'İrtifa',
   'map.geoAltitude': 'Geo irtifa',

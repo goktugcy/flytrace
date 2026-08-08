@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/states';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { CheckCircle2, Plane, ShieldCheck } from 'lucide-react';
+import Link from 'next/link';
 import Script from 'next/script';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 
@@ -372,6 +373,15 @@ export function AuthForm({ next, nonce }: { next: string; nonce?: string | undef
                     ? t('auth.submit.signin')
                     : t('auth.submit.signup')}
               </Button>
+
+              {mode === 'sign-in' && (
+                <Link
+                  href="/forgot-password"
+                  className="block text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {t('pwreset.forgot.link')}
+                </Link>
+              )}
             </form>
           )}
         </CardContent>

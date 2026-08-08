@@ -19,7 +19,7 @@ import type { Logger } from '@flytrace/shared';
  * deletes, so a concurrent run simply finds fewer rows.
  */
 export interface SecurityJanitorDeps {
-  auth: Pick<AuthRepo, 'deleteExpiredSessions'>;
+  auth: Pick<AuthRepo, 'deleteExpiredSessions' | 'deleteExpiredPasswordResetTokens'>;
   notify: Pick<NotifyRepo, 'expireStaleLinkTokens'>;
   logger: Logger;
   intervalMs: number;
@@ -31,9 +31,10 @@ export class SecurityJanitor {
   constructor(private readonly deps: SecurityJanitorDeps) {}
 
   /** Run one sweep. Never throws — a failed sweep must not kill the worker. */
-  async runOnce(): Promise<{ sessions: number; linkTokens: number }> {
+  async runOnce(): Promise<{ sessions: number; linkTokens: number; resetTokens: number }> {
     let sessions = 0;
     let linkTokens = 0;
+    let resetTokens = 0;
     try {
       sessions = await this.deps.auth.deleteExpiredSessions();
     } catch (err) {
@@ -44,10 +45,15 @@ export class SecurityJanitor {
     } catch (err) {
       this.deps.logger.warn('link-token reap failed', { err: String(err) });
     }
-    if (sessions > 0 || linkTokens > 0) {
-      this.deps.logger.info('security janitor swept', { sessions, linkTokens });
+    try {
+      resetTokens = await this.deps.auth.deleteExpiredPasswordResetTokens();
+    } catch (err) {
+      this.deps.logger.warn('password-reset token reap failed', { err: String(err) });
     }
-    return { sessions, linkTokens };
+    if (sessions > 0 || linkTokens > 0 || resetTokens > 0) {
+      this.deps.logger.info('security janitor swept', { sessions, linkTokens, resetTokens });
+    }
+    return { sessions, linkTokens, resetTokens };
   }
 
   start(): void {

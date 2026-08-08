@@ -66,6 +66,37 @@ export const sessions = pgTable(
   ],
 );
 
+/**
+ * Password-reset tokens.
+ *
+ * Only the SHA-256 digest is stored — the raw token exists solely in the emailed
+ * link, exactly like sessions and refresh tokens. A database dump therefore
+ * cannot be replayed into an account takeover.
+ *
+ * `usedAt` makes consumption single-use and auditable: a used row is kept (not
+ * deleted) so a second click on the same link is distinguishable from a link
+ * that never existed, and so the reap job can clear both on the same schedule.
+ */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    /** Coarsened per SECURITY_IP_STORAGE, for audit only. */
+    requestedIp: text('requested_ip'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('idx_password_reset_user').on(t.userId),
+    index('idx_password_reset_expires').on(t.expiresAt),
+  ],
+);
+
 /** User settings — preferences (theme, locale, units, quiet hours). */
 export const userSettings = pgTable('user_settings', {
   userId: uuid('user_id')

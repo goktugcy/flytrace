@@ -214,6 +214,40 @@ re-verifies the current password (so a stolen session cookie alone cannot change
 it), and is rate-limited under the `passwordReset` policy because it is a
 credential-guessing surface from *inside* the account.
 
+### 8.4a Forgotten password
+
+```
+POST /api/auth/password/forgot  { email }        → ALWAYS 200 { ok: true }
+POST /api/auth/password/reset   { token, newPassword }
+```
+
+`forgot` answers identically for a known and an unknown address — no 404, no
+different message. Anything else turns the form into an account-enumeration
+oracle, which is how a credential-stuffing list gets narrowed to real accounts
+before an attack starts. An unknown address is still audited
+(`password.reset_requested_unknown`) so a spray is visible to us.
+
+`reset` returns one failure message for unknown, expired and already-used links
+alike. On success **every session and refresh token is revoked** — a reset
+forced by someone who had already stolen a session must not leave them signed in.
+
+- Token: 256-bit CSPRNG, stored **only** as a SHA-256 digest in
+  `password_reset_tokens`; the raw value exists solely in the emailed link.
+- `PASSWORD_RESET_TTL_MINUTES` (default 60). Single-use, enforced by the
+  `used_at is null` guard inside the claiming UPDATE, so two simultaneous clicks
+  cannot both win.
+- A new request retires every outstanding link for that account; otherwise a
+  link that leaked hours ago still opens it.
+- Rate-limited under the `passwordReset` policy — by email **and** IP on
+  `forgot` (email-only lets one attacker mail-bomb a victim; IP-only lets a
+  botnet enumerate), by IP on `reset`.
+- Delivery goes to `users.email` directly, **not** through the SecurityNotifier:
+  that fans out to *verified* endpoints only, which would permanently lock out
+  anyone who never verified their address. A delivery failure is logged and
+  swallowed so it cannot leak whether the account exists.
+- Needs `EMAIL_API_KEY`. Without it the API logs a warning outside local
+  development and records instead of sending — reset links will not arrive.
+
 `GET /api/v1/security/sessions` lists the caller's active sessions — id, device,
 coarsened IP, user-agent, timestamps. No token material, by construction: the
 database only holds digests.

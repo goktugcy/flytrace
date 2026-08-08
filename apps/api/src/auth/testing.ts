@@ -22,6 +22,10 @@ interface StoredSession {
 export class InMemoryAuthRepo implements AuthRepo {
   private readonly usersByEmail = new Map<string, AuthUser & { passwordHash: string | null }>();
   private readonly sessions = new Map<string, StoredSession>();
+  private readonly resetTokens = new Map<
+    string,
+    { userId: string; expiresAt: Date; usedAt: Date | null; requestedIp: string | null }
+  >();
   private seq = 0;
   /** Fixed "now" so expiry checks are deterministic; overridable per test. */
   now: () => number = () => Date.now();
@@ -133,6 +137,50 @@ export class InMemoryAuthRepo implements AuthRepo {
     for (const [hash, row] of this.sessions) {
       if (row.expiresAt.getTime() <= this.now()) {
         this.sessions.delete(hash);
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  // ── password reset ──
+
+  /** Mirrors the SQL: a new request retires every outstanding token. */
+  async createPasswordResetToken(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    requestedIp: string | null;
+  }): Promise<void> {
+    for (const [hash, row] of this.resetTokens) {
+      if (row.userId === input.userId && !row.usedAt) {
+        this.resetTokens.set(hash, { ...row, usedAt: new Date(this.now()) });
+      }
+    }
+    this.resetTokens.set(input.tokenHash, {
+      userId: input.userId,
+      expiresAt: input.expiresAt,
+      usedAt: null,
+      requestedIp: input.requestedIp,
+    });
+  }
+
+  async consumePasswordResetToken(
+    tokenHash: string,
+  ): Promise<{ userId: string; email: string } | null> {
+    const row = this.resetTokens.get(tokenHash);
+    if (!row || row.usedAt || row.expiresAt.getTime() <= this.now()) return null;
+    this.resetTokens.set(tokenHash, { ...row, usedAt: new Date(this.now()) });
+    const user = [...this.usersByEmail.values()].find((u) => u.id === row.userId);
+    if (!user) return null;
+    return { userId: row.userId, email: user.email };
+  }
+
+  async deleteExpiredPasswordResetTokens(): Promise<number> {
+    let n = 0;
+    for (const [hash, row] of this.resetTokens) {
+      if (row.usedAt || row.expiresAt.getTime() <= this.now()) {
+        this.resetTokens.delete(hash);
         n += 1;
       }
     }

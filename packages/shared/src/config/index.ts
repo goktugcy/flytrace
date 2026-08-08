@@ -266,6 +266,8 @@ const securitySchema = z.object({
   SECURITY_NOTIFICATIONS_ENABLED: boolish.default('true'),
   /** Lifetime of email-verification and Telegram deep-link tokens. */
   LINK_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().max(10_080).default(1440),
+  /** Reset links are short-lived: the window an intercepted mail stays useful. */
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().max(1440).default(60),
 
   IMPOSSIBLE_TRAVEL_MAX_KMH: z.coerce.number().positive().default(900),
 

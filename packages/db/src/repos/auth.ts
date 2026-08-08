@@ -178,6 +178,66 @@ export function createAuthRepo(db: Database) {
         .returning({ id: sessions.id })) as { id: string }[];
       return rows.length;
     },
+
+    // ── Password reset ───────────────────────────────────────────────────────
+
+    /**
+     * Invalidate every outstanding reset token for a user, then store a new one.
+     *
+     * Requesting a reset must retire the previous links: otherwise every request
+     * leaves another live token, so an old email that leaked hours ago still
+     * opens the account. One request, one usable link.
+     */
+    async createPasswordResetToken(input: {
+      userId: string;
+      tokenHash: string;
+      expiresAt: Date;
+      requestedIp: string | null;
+    }): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          update password_reset_tokens
+             set used_at = now()
+           where user_id = ${input.userId}::uuid and used_at is null
+        `);
+        await tx.execute(sql`
+          insert into password_reset_tokens (user_id, token_hash, expires_at, requested_ip)
+          values (${input.userId}::uuid, ${input.tokenHash}, ${input.expiresAt.toISOString()},
+                  ${input.requestedIp})
+        `);
+      });
+    },
+
+    /**
+     * Claim a reset token, atomically. The `used_at is null` guard lives in the
+     * UPDATE's WHERE clause so two simultaneous clicks cannot both win — the
+     * second updates zero rows and gets null back.
+     */
+    async consumePasswordResetToken(
+      tokenHash: string,
+    ): Promise<{ userId: string; email: string } | null> {
+      const rows = (await db.execute(sql`
+        update password_reset_tokens t
+           set used_at = now()
+          from users u
+         where t.token_hash = ${tokenHash}
+           and t.used_at is null
+           and t.expires_at > now()
+           and u.id = t.user_id
+        returning t.user_id as "userId", u.email as email
+      `)) as unknown as { userId: string; email: string }[];
+      return rows[0] ?? null;
+    },
+
+    /** Housekeeping: reap reset tokens that are spent or long expired. */
+    async deleteExpiredPasswordResetTokens(): Promise<number> {
+      const rows = (await db.execute(sql`
+        delete from password_reset_tokens
+         where expires_at <= now() or used_at is not null
+        returning id
+      `)) as unknown as { id: string }[];
+      return rows.length;
+    },
   };
 }
 

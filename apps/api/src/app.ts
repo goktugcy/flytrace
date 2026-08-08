@@ -17,6 +17,12 @@ import { createAdminRoutes } from './admin/routes.ts';
 import { createAirportOpsRoutes } from './airport-ops/routes.ts';
 import { createAirspaceRoutes } from './airspace/routes.ts';
 import type { CookieOptions } from './auth/cookie.ts';
+import {
+  NoopPasswordResetMailer,
+  type PasswordResetMailer,
+  PasswordResetService,
+  TransportPasswordResetMailer,
+} from './auth/password-reset.ts';
 import { attachSession, createAuthRoutes } from './auth/routes.ts';
 import { AuthService, bunHasher } from './auth/service.ts';
 import { SignInFlow } from './auth/sign-in-flow.ts';
@@ -221,6 +227,35 @@ export function createApp(ctx: AppContext) {
     },
   });
 
+  // Forgotten-password reset. Without an email transport the link cannot be
+  // delivered, so we record instead of pretending it went out.
+  const resetMailer: PasswordResetMailer = ctx.config.EMAIL_API_KEY
+    ? new TransportPasswordResetMailer({
+        from: ctx.config.EMAIL_FROM,
+        transport: new HttpEmailTransport({
+          apiKey: ctx.config.EMAIL_API_KEY,
+          apiUrl: ctx.config.EMAIL_API_URL,
+        }),
+      })
+    : new NoopPasswordResetMailer();
+  if (!ctx.config.EMAIL_API_KEY && ctx.config.APP_ENV !== 'local') {
+    ctx.logger.warn(
+      'no EMAIL_API_KEY configured — password reset links cannot be delivered outside local development',
+    );
+  }
+  const passwordResetService = new PasswordResetService({
+    repo: authRepo,
+    mailer: resetMailer,
+    audit: auditLog,
+    clock: ctx.clock,
+    logger: ctx.logger,
+    hashPassword: (password) => bunHasher.hash(password),
+    flow: signInFlow,
+    webBaseUrl: ctx.config.WEB_BASE_URL,
+    ttlMinutes: ctx.config.PASSWORD_RESET_TTL_MINUTES,
+    ipPolicy: ctx.config.SECURITY_IP_STORAGE,
+  });
+
   if (
     ctx.config.TURNSTILE_ENABLED &&
     !ctx.config.TURNSTILE_SECRET &&
@@ -313,6 +348,7 @@ export function createApp(ctx: AppContext) {
       allowedOrigins: ctx.config.CORS_ORIGINS,
       cookies,
       rateLimit,
+      passwordReset: passwordResetService,
       turnstile: {
         verifier: turnstileVerifier,
         enabled: ctx.config.TURNSTILE_ENABLED,

@@ -5,6 +5,7 @@ import type { AppEnv } from '../app.ts';
 import type { PolicyMiddlewareDeps } from '../security/edge/rate-limit-policies.ts';
 import { identifierRateLimit, ipRateLimit } from '../security/edge/rate-limit-policies.ts';
 import { type TurnstileVerifier, turnstileMiddleware } from '../security/edge/turnstile.ts';
+import { validateJson } from '../security/edge/validation.ts';
 import { extractClientIp } from '../security/session/ip.ts';
 import {
   type CookieOptions,
@@ -15,6 +16,7 @@ import {
   setRefreshCookie,
   setSessionCookie,
 } from './cookie.ts';
+import type { PasswordResetService } from './password-reset.ts';
 import type { AuthService } from './service.ts';
 import type { AuthenticatedSession, SignInFlow } from './sign-in-flow.ts';
 
@@ -35,6 +37,12 @@ const signInSchema = z.object({
 const mfaVerifySchema = z.object({
   challengeToken: z.string().min(16).max(256),
   code: z.string().min(4).max(64),
+});
+const forgotPasswordSchema = z.object({ email: z.string().email() });
+/** Same minimum as sign-up: a reset must not be a way to weaken a password. */
+const resetPasswordSchema = z.object({
+  token: z.string().min(16).max(256),
+  newPassword: z.string().min(8).max(200),
 });
 
 /**
@@ -86,6 +94,8 @@ export interface AuthRoutesOptions {
   allowedOrigins: string[];
   cookies: CookieOptions;
   rateLimit: PolicyMiddlewareDeps;
+  /** Omitted in tests that do not exercise the reset endpoints. */
+  passwordReset?: PasswordResetService;
   turnstile?: {
     verifier: TurnstileVerifier;
     enabled: boolean;
@@ -276,6 +286,49 @@ export function createAuthRoutes(flow: SignInFlow, opts: AuthRoutesOptions): Hon
     clearRefreshCookie(c, opts.cookies);
     return c.json({ data: { ok: true }, meta: { requestId: c.get('requestId') } });
   });
+
+  // ── forgotten password ─────────────────────────────────────────────────────
+  if (opts.passwordReset) {
+    const resets = opts.passwordReset;
+
+    /**
+     * Always 200, whether or not the address belongs to an account.
+     *
+     * Anything else — a 404, a different latency, a distinguishable message —
+     * turns this into an account-enumeration oracle, which is exactly how a
+     * credential-stuffing list gets narrowed to real users before an attack.
+     * Bucketed by BOTH email and IP: by email alone, one attacker could mail-bomb
+     * a victim; by IP alone, a botnet could still enumerate.
+     */
+    app.post(
+      '/password/forgot',
+      identifierRateLimit(opts.rateLimit, 'passwordReset', emailFromBody),
+      async (c) => {
+        const body = await validateJson(forgotPasswordSchema)(c);
+        await resets.request(body.email, requestContext(c));
+        return c.json({ data: { ok: true }, meta: { requestId: c.get('requestId') } });
+      },
+    );
+
+    /**
+     * Consume the link. Rate-limited by IP because there is no identifier to key
+     * on yet — the token IS the identifier, and a valid one must not be
+     * guessable in the first place (256 bits, stored only as a digest).
+     *
+     * On success every session and refresh token dies, so a reset forced by
+     * someone who had already stolen a session does not leave them signed in.
+     */
+    app.post('/password/reset', ipRateLimit(opts.rateLimit, 'passwordReset'), async (c) => {
+      const body = await validateJson(resetPasswordSchema)(c);
+      await resets.reset(body.token, body.newPassword, requestContext(c));
+      clearSessionCookie(c, opts.cookies);
+      clearRefreshCookie(c, opts.cookies);
+      return c.json({
+        data: { ok: true, signedOutEverywhere: true },
+        meta: { requestId: c.get('requestId') },
+      });
+    });
+  }
 
   app.get('/session', (c) => {
     return c.json({

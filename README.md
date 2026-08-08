@@ -65,6 +65,8 @@ POST /api/auth/sign-in   { email, password }
 POST /api/auth/mfa/verify { challengeToken, code }   ← TOTP or backup code
     → { status: "authenticated", user }   + session & refresh cookies
 
+POST /api/auth/password/forgot   { email } → always 200, never says if it exists
+POST /api/auth/password/reset    { token, newPassword } → revokes everything
 POST /api/auth/refresh        rotate the refresh token, mint a new session
 POST /api/auth/sign-out       revoke this session + its refresh token
 POST /api/auth/sign-out-all   revoke every session and refresh token
