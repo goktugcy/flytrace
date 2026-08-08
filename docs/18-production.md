@@ -416,11 +416,33 @@ Two networks. Only the **proxy** publishes ports. Postgres and Redis are on
 upgrade (1h read timeout, buffering off), a 1 MB body limit, security headers,
 and blocks `/metrics` + `/health/detailed` from the public internet.
 
-**Real client IP matters for security, not just logs.** `X-Forwarded-For` is
-client-settable; if it were forwarded verbatim, anyone could land in a different
-rate-limit bucket every request. `set_real_ip_from` + `real_ip_header` make
-nginx trust it only from listed networks, and the proxy then **overwrites** the
-header. **Edit `set_real_ip_from` to match your actual edge** before going live.
+**Real client IP matters for security, not just logs.** Address headers are
+client-settable; forwarded verbatim, anyone could land in a different rate-limit
+bucket every request.
+
+The config is written for **Cloudflare**:
+
+- `set_real_ip_from` lists Cloudflare's published IPv4 + IPv6 ranges
+  (`cloudflare.com/ips-v4` / `-v6`, fetched 2026-08-08). Re-check them when you
+  touch the file.
+- `real_ip_header CF-Connecting-IP` — behind Cloudflare this is the right input:
+  a single address Cloudflare determined and overwrites. `X-Forwarded-For` is a
+  client-influenced list Cloudflare only appends to, and parsing it correctly
+  needs `real_ip_recursive` plus a complete trusted list — wrong the moment
+  either drifts.
+- The proxy then **overwrites** `CF-Connecting-IP`, `X-Forwarded-For` and
+  `X-Real-IP` with the address it resolved. Overwriting `CF-Connecting-IP`
+  matters because the app reads it first (`clientIp`); nginx forwards inbound
+  headers untouched by default, so without that line a request arriving from a
+  non-Cloudflare address could forge it.
+
+**This holds only if the origin is unreachable except through Cloudflare.**
+Restrict the origin firewall to those ranges, or use `cloudflared` /
+Authenticated Origin Pulls. An attacker who finds the origin IP bypasses
+Cloudflare entirely and no header configuration helps.
+
+Behind a different edge (ALB, direct), both the range list and `real_ip_header`
+must change — see the comments at the top of the file.
 
 ---
 
