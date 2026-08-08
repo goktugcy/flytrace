@@ -363,11 +363,17 @@ export function createApp(ctx: AppContext) {
     });
   });
 
-  // Current authenticated user.
-  app.get('/api/v1/me', (c) => {
+  // Current authenticated user. Carries `mfaEnabled` so the security settings
+  // screen can render the right state without a second round trip; it is a
+  // boolean about the caller's own account, never the secret or backup codes.
+  app.get('/api/v1/me', async (c) => {
     const user = c.get('user');
     if (!user) throw new AppError('UNAUTHENTICATED', 'not signed in');
-    return c.json({ data: { user }, meta: { requestId: c.get('requestId') } });
+    const mfaEnabled = await mfaService.isEnabled(user.id).catch(() => false);
+    return c.json({
+      data: { user: { ...user, mfaEnabled } },
+      meta: { requestId: c.get('requestId') },
+    });
   });
 
   // ── Public flight read endpoints (docs/11 §11.6) ──

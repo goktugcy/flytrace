@@ -57,6 +57,9 @@ export function DashboardView() {
           <Button asChild variant="outline" size="sm">
             <Link href="/settings/notifications">{t('dash.settings')}</Link>
           </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/security">{t('sec.title')}</Link>
+          </Button>
           <Button asChild size="sm">
             <Link href="/map">{t('dash.liveMap')}</Link>
           </Button>
