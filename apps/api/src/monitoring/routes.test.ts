@@ -9,7 +9,9 @@ const TOKEN = 'internal-scrape-token-that-is-long-enough';
 
 function ctx(config: Partial<AppContext['config']> = {}, healthy = true): AppContext {
   return testContext({
-    config,
+    // A deployed env needs a complete config: the app also refuses to boot
+    // without EMAIL_API_KEY, which is not what these tests are about.
+    config: { EMAIL_API_KEY: 'test-email-key', ...config },
     db: {
       execute: async (q: unknown) => {
         if (!healthy) throw new Error('connection to server at "db.internal" (10.0.0.5) failed');
@@ -106,6 +108,24 @@ describe('internal endpoints', () => {
     const app = createApp(ctx({ APP_ENV: 'local' }));
     expect((await app.request('/metrics')).status).toBe(200);
     expect((await app.request('/health/detailed')).status).toBe(200);
+  });
+
+  it('refuses to build the app in production without an email transport', () => {
+    // Password-reset links and security alerts would be accepted and silently
+    // never delivered, so account recovery would look fine and not work.
+    expect(() =>
+      createApp(
+        ctx({
+          APP_ENV: 'production',
+          // Satisfy the other production guards so this asserts the email rule
+          // specifically, not whichever check happens to run first.
+          INTERNAL_API_TOKEN: TOKEN,
+          RATE_LIMIT_BACKEND: 'redis',
+          MFA_CHALLENGE_BACKEND: 'redis',
+          EMAIL_API_KEY: undefined,
+        }),
+      ),
+    ).toThrow(/EMAIL_API_KEY is required/);
   });
 
   it('refuses to build the app in production without a token', () => {

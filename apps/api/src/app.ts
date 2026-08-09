@@ -8,7 +8,7 @@ import {
   createSecurityMfaRepo,
   createSecurityRefreshTokenRepo,
 } from '@flytrace/db';
-import { EmailChannel, HttpEmailTransport } from '@flytrace/notifications';
+import { EmailChannel, type HttpEmailTransport } from '@flytrace/notifications';
 import { AppError, correlationId, createTracer, isAppError, uuidv7 } from '@flytrace/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -33,6 +33,7 @@ import { createApiMetrics } from './metrics.ts';
 import { resolveInternalAccess } from './monitoring/internal-auth.ts';
 import { tracingMiddleware } from './monitoring/request-tracing.ts';
 import { createMonitoringRoutes } from './monitoring/routes.ts';
+import { resolveEmailDelivery } from './notify/email-delivery.ts';
 import { createNotifyRoutes } from './notify/routes.ts';
 import { createTelegramRoutes } from './notify/telegram.ts';
 import { DbAuditLog, InMemoryAuditLog } from './security/edge/audit-log.ts';
@@ -105,19 +106,20 @@ function buildApiCsp(config: AppConfig): string {
  * nothing to deliver on, so we fall back to a no-op recorder rather than
  * pretending alerts are going out.
  */
-function buildSecurityNotifier(ctx: AppContext): SecurityNotifier {
-  if (!ctx.config.SECURITY_NOTIFICATIONS_ENABLED || !ctx.config.EMAIL_API_KEY) {
+function buildSecurityNotifier(
+  ctx: AppContext,
+  transport: HttpEmailTransport | null,
+): SecurityNotifier {
+  if (!ctx.config.SECURITY_NOTIFICATIONS_ENABLED || !transport) {
     if (ctx.config.SECURITY_NOTIFICATIONS_ENABLED) {
+      // Only reachable in local development — resolveEmailDelivery throws
+      // outside it rather than letting alerts vanish.
       ctx.logger.warn(
         'security notifications are enabled but no EMAIL_API_KEY is configured — new-device and token-reuse alerts will not be delivered',
       );
     }
     return new NoopSecurityNotifier();
   }
-  const transport = new HttpEmailTransport({
-    apiKey: ctx.config.EMAIL_API_KEY,
-    apiUrl: ctx.config.EMAIL_API_URL,
-  });
   return new ChannelSecurityNotifier({
     repo: createNotifyRepo(ctx.db),
     channels: [
@@ -191,7 +193,10 @@ export function createApp(ctx: AppContext) {
     ctx.config.AUDIT_BACKEND === 'db'
       ? new DbAuditLog(createSecurityAuditRepo(ctx.db), ctx.clock)
       : new InMemoryAuditLog(ctx.clock);
-  const securityNotifier = buildSecurityNotifier(ctx);
+  // One decision for "can we send mail at all?" — refuses to boot outside local
+  // development rather than leaving reset links and alerts undeliverable.
+  const email = resolveEmailDelivery(ctx.config);
+  const securityNotifier = buildSecurityNotifier(ctx, email.transport);
 
   // ONE rate limiter for the whole process, shared across every policy and by
   // the sign-in flow's challenge guard. Built before its consumers.
@@ -229,20 +234,12 @@ export function createApp(ctx: AppContext) {
 
   // Forgotten-password reset. Without an email transport the link cannot be
   // delivered, so we record instead of pretending it went out.
-  const resetMailer: PasswordResetMailer = ctx.config.EMAIL_API_KEY
+  const resetMailer: PasswordResetMailer = email.transport
     ? new TransportPasswordResetMailer({
         from: ctx.config.EMAIL_FROM,
-        transport: new HttpEmailTransport({
-          apiKey: ctx.config.EMAIL_API_KEY,
-          apiUrl: ctx.config.EMAIL_API_URL,
-        }),
+        transport: email.transport,
       })
     : new NoopPasswordResetMailer();
-  if (!ctx.config.EMAIL_API_KEY && ctx.config.APP_ENV !== 'local') {
-    ctx.logger.warn(
-      'no EMAIL_API_KEY configured — password reset links cannot be delivered outside local development',
-    );
-  }
   const passwordResetService = new PasswordResetService({
     repo: authRepo,
     mailer: resetMailer,

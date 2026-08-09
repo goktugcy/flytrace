@@ -245,8 +245,10 @@ forced by someone who had already stolen a session must not leave them signed in
   that fans out to *verified* endpoints only, which would permanently lock out
   anyone who never verified their address. A delivery failure is logged and
   swallowed so it cannot leak whether the account exists.
-- Needs `EMAIL_API_KEY`. Without it the API logs a warning outside local
-  development and records instead of sending — reset links will not arrive.
+- Needs `EMAIL_API_KEY`; the API **refuses to boot** without it outside local
+  development (§8.6). `HttpEmailTransport` is its only delivery path —
+  `EMAIL_PROVIDER`, `SMTP_URL` and `BREVO_API_KEY` are read by the notifier's
+  digest subsystem and give the API no way to send.
 
 `GET /api/v1/security/sessions` lists the caller's active sessions — id, device,
 coarsened IP, user-agent, timestamps. No token material, by construction: the
@@ -286,6 +288,7 @@ The API **refuses to start** when:
 | `MFA_CHALLENGE_BACKEND=memory` | a challenge issued by one replica is invisible to the next |
 | `INTERNAL_API_TOKEN` missing (staging/production) | `/metrics` and `/health/detailed` would be public |
 | `INTERNAL_API_TOKEN` shorter than 32 chars | brute-forceable |
+| `EMAIL_API_KEY` missing (staging/production) | password-reset links and security alerts are accepted but never delivered — account recovery silently does not work |
 | invalid `RATE_LIMIT_BACKEND` value | config typo |
 
 Outside production these degrade with a **loud warning** instead. Local
@@ -481,6 +484,11 @@ must change — see the comments at the top of the file.
 ---
 
 ## 12. Rollout plan for the token-hash migration
+
+> **This section only applies to an EXISTING deployment carrying rows written by
+> pre-`0005` code.** On a first deployment it does not apply at all: a fresh
+> database runs `0000`–`0006` in order, `0005` finds no plaintext tokens to
+> convert, and there is nothing to plan a maintenance window around. Skip to §13.
 
 **What changes:** `sessions.token` → `sessions.token_hash`,
 `notification_channels.link_token` → `link_token_hash` (+ expiry).

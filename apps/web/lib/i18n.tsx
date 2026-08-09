@@ -151,6 +151,12 @@ const en: Record<string, string> = {
   'sec.signout.action': 'Sign out all devices',
 
   'sec.password.prompt': 'Confirm with your password',
+  'sec.password.confirm': 'Confirm',
+  'sec.password.desc.device':
+    'Signs this device out and revokes its tokens.' + ' Confirm with your password to continue.',
+  'sec.password.desc.mfaOff':
+    'Two-factor will be turned off and you will be' + ' signed out on every device.',
+  'sec.password.desc.regen': 'Your existing backup codes stop working immediately.',
   'sec.copied': 'Copied',
 
   'pwreset.forgot.title': 'Forgot your password?',
@@ -700,6 +706,12 @@ const tr: Record<string, string> = {
   'sec.signout.action': 'Tüm cihazlardan çık',
 
   'sec.password.prompt': 'Şifrenle onayla',
+  'sec.password.confirm': 'Onayla',
+  'sec.password.desc.device':
+    'Bu cihaz çıkarılır ve token’ları iptal edilir.' + ' Devam etmek için şifreni gir.',
+  'sec.password.desc.mfaOff':
+    'İki adımlı doğrulama kapatılır ve tüm' + ' cihazlardan çıkış yaparsın.',
+  'sec.password.desc.regen': 'Mevcut yedek kodların anında geçersiz olur.',
   'sec.copied': 'Kopyalandı',
 
   'pwreset.forgot.title': 'Şifreni mi unuttun?',

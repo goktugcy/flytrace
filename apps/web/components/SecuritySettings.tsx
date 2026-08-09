@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { usePasswordPrompt } from '@/components/ui/password-prompt';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/states';
 import {
@@ -88,6 +89,7 @@ function groupSecret(secret: string): string {
 
 export function SecuritySettings() {
   const t = useT();
+  const passwordPrompt = usePasswordPrompt();
   const [state, setState] = useState<State>('loading');
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -154,15 +156,6 @@ export function SecuritySettings() {
     }
   }
 
-  /**
-   * Ask for the password an action requires. These endpoints re-verify it
-   * server-side; the prompt is only how we collect it, and it is never stored.
-   */
-  function askPassword(): string | null {
-    const value = window.prompt(t('sec.password.prompt'));
-    return value && value.length > 0 ? value : null;
-  }
-
   async function beginEnrollment() {
     await run('mfa-setup', async () => {
       const data = await api<{ secret: string; otpauthUri: string }>('/security/mfa/setup', {
@@ -189,7 +182,10 @@ export function SecuritySettings() {
   }
 
   async function regenerateCodes() {
-    const password = askPassword();
+    const password = await passwordPrompt.ask({
+      title: t('sec.mfa.regen'),
+      description: t('sec.password.desc.regen'),
+    });
     if (!password) return;
     await run('mfa-regen', async () => {
       const data = await api<{ backupCodes: string[] }>('/security/mfa/backup-codes/refresh', {
@@ -201,7 +197,11 @@ export function SecuritySettings() {
   }
 
   async function disableMfa() {
-    const password = askPassword();
+    const password = await passwordPrompt.ask({
+      title: t('sec.mfa.disable'),
+      description: t('sec.password.desc.mfaOff'),
+      destructive: true,
+    });
     if (!password) return;
     await run('mfa-disable', async () => {
       await api('/security/mfa/disable', {
@@ -214,7 +214,11 @@ export function SecuritySettings() {
   }
 
   async function revokeDevice(id: string) {
-    const password = askPassword();
+    const password = await passwordPrompt.ask({
+      title: t('sec.devices.revoke'),
+      description: t('sec.password.desc.device'),
+      destructive: true,
+    });
     if (!password) return;
     await run(`device-${id}`, async () => {
       await api(`/security/devices/${id}`, {
@@ -618,6 +622,7 @@ export function SecuritySettings() {
           </>
         )}
       </div>
+      {passwordPrompt.element}
     </main>
   );
 }
