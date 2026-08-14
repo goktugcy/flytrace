@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build": "bun build src/index.ts --target=bun --outdir=dist --sourcemap=linked --minify",
-    "start:src": "bun run src/index.ts"
+    "start:src": "bun run src/index.ts",
+    "telegram:webhook": "bun run scripts/telegram-webhook.ts"
   },
   "dependencies": {
     "@flytrace/airspace": "workspace:*",

@@ -18,7 +18,8 @@
     "db:seed": "bun run --cwd packages/db db:seed",
     "db:studio": "bun run --cwd packages/db db:studio",
     "infra:up": "docker compose up -d",
-    "infra:down": "docker compose down"
+    "infra:down": "docker compose down",
+    "telegram:webhook": "bun run --cwd apps/api telegram:webhook"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

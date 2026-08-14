@@ -289,6 +289,7 @@ The API **refuses to start** when:
 | `INTERNAL_API_TOKEN` missing (staging/production) | `/metrics` and `/health/detailed` would be public |
 | `INTERNAL_API_TOKEN` shorter than 32 chars | brute-forceable |
 | `EMAIL_API_KEY` missing (staging/production) | password-reset links and security alerts are accepted but never delivered — account recovery silently does not work |
+| `TELEGRAM_BOT_TOKEN` set without `TELEGRAM_WEBHOOK_SECRET` (staging/production) | the public webhook would accept forged updates: a `/stop` with a guessed chat id silences a user, and any update makes the bot message arbitrary people |
 | invalid `RATE_LIMIT_BACKEND` value | config typo |
 
 Outside production these degrade with a **loud warning** instead. Local
@@ -341,6 +342,60 @@ Responses carry `RateLimit-Limit/Remaining/Reset` (and the legacy
   their own. Violations post to `/api/v1/security/csp-report`.
 - **Audit log**: `AUDIT_BACKEND=db` in production. Records carry the coarsened
   IP and never a token, password or code.
+
+### 8.9 Telegram notifications
+
+Three secrets, all required together once the bot is enabled outside local
+development (the API refuses to boot otherwise):
+
+| variable | where it comes from |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | BotFather, on `/newbot` |
+| `TELEGRAM_BOT_USERNAME` | the bot's handle; a leading `@` is stripped for you |
+| `TELEGRAM_WEBHOOK_SECRET` | you generate it — `openssl rand -hex 32` |
+
+**Setup**
+
+1. Talk to [@BotFather](https://t.me/BotFather) → `/newbot` → note the token and
+   the handle.
+2. Put all three values in the API's environment.
+3. Register the webhook — this is what binds the secret to the bot:
+   ```bash
+   bun run telegram:webhook set https://api.example.com
+   bun run telegram:webhook status     # verify url, pending_update_count, last_error
+   ```
+   The script reads `TELEGRAM_WEBHOOK_SECRET` from the same environment the API
+   uses, so the two cannot drift apart. Telegram only delivers to **https** with
+   a publicly-valid certificate — a self-signed cert is rejected by `setWebhook`.
+4. Optional, via BotFather: `/setcommands` with `start` and `stop`.
+
+**How linking works.** `POST /api/v1/channels/telegram/link` (authenticated)
+mints a 128-bit token, stores only its digest with an expiry
+(`LINK_TOKEN_TTL_MINUTES`), and returns `https://t.me/<bot>?start=<token>`. The
+user opens it; Telegram sends `/start <token>` to the webhook; the handler
+exchanges the digest for the user and records the chat id as a **verified**
+channel. `/stop` disables that chat's channels.
+
+**Why the secret is mandatory.** `/api/telegram/webhook` is public — nginx
+proxies `/api/` and Telegram has to reach it. The
+`X-Telegram-Bot-Api-Secret-Token` header is the *only* thing separating a real
+update from a forged one. Without it:
+
+- a forged `/stop` with a guessed chat id disables that user's alerts —
+  `disableTelegramByChat` matches on chat id alone and cannot tell who is asking
+- any forged update makes the bot reply, so an attacker can drive your bot into
+  messaging arbitrary people, which is how a bot gets banned
+
+The header is compared in constant time, and the endpoint **fails closed** when
+no secret is configured rather than skipping the check.
+
+**Rotating the secret:** change it in the environment and re-run
+`telegram:webhook set` — in that order. Between the two, updates are rejected
+and Telegram retries, so nothing is lost.
+
+**Removing the bot:** `bun run telegram:webhook clear`. Existing linked channels
+stay in the database; unset `TELEGRAM_BOT_TOKEN` to disable the feature.
+
 
 ## 9. Monitoring & health
 
