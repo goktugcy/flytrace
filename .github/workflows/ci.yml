@@ -271,6 +271,7 @@ jobs:
             -e RATE_LIMIT_BACKEND=redis -e MFA_CHALLENGE_BACKEND=redis -e AUDIT_BACKEND=db \
             -e INTERNAL_API_TOKEN=ci-only-internal-token-not-a-real-secret \
             -e MFA_SECRET_ENCRYPTION_KEY=ci-only-mfa-key-not-a-real-secret \
+            -e EMAIL_API_KEY=ci-only-email-key-not-a-real-secret \
             flytrace/api:ci
 
           for i in $(seq 1 30); do
