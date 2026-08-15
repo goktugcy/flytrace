@@ -47,7 +47,11 @@ WORKDIR /repo
 COPY tsconfig.base.json ./
 COPY packages/ packages/
 
-RUN cd packages/db && bun run build:migrate && test -f dist/migrate.js
+# Migration runner AND the seed/import tools: this is the database-operations
+# image, and `compose run --rm migrate …` is the only way to reach a database
+# that publishes no ports. Shipping just the migrator left the documented
+# seed command (`bun run src/seed.ts`) pointing at source that is not here.
+RUN cd packages/db && bun run build:tools && test -f dist/migrate.js && test -f dist/seed.js
 
 # ───────────────────────────────────────────────────────── runtime ──
 FROM oven/bun:1.3.14-alpine AS runtime
@@ -62,11 +66,13 @@ WORKDIR /app
 
 # The bundle resolves its SQL via `new URL('../migrations', import.meta.url)`,
 # so the folder must sit one level above the bundle: /app/migrations.
-COPY --from=build --chown=root:root /repo/packages/db/dist/migrate.js     ./dist/migrate.js
-COPY --from=build --chown=root:root /repo/packages/db/dist/migrate.js.map ./dist/migrate.js.map
+COPY --from=build --chown=root:root /repo/packages/db/dist/ ./dist/
 COPY --chown=root:root packages/db/migrations ./migrations
 
 USER bun
 
+# Default: migrate. Override the command to run a tool, e.g.
+#   docker compose run --rm migrate bun run /app/dist/seed.js
+#   docker compose run --rm migrate bun run /app/dist/import-airports.js
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["bun", "run", "/app/dist/migrate.js"]

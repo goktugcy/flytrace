@@ -20,7 +20,8 @@
     "db:studio": "drizzle-kit studio",
     "test": "bun test",
     "build": "tsc --noEmit",
-    "build:migrate": "bun build src/migrate.ts --target=bun --outdir=dist --sourcemap=linked --minify"
+    "build:migrate": "bun build src/migrate.ts --target=bun --outdir=dist --sourcemap=linked --minify",
+    "build:tools": "bun build src/migrate.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/seed.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/import-airlines.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/import-airports.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/import-airspace.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/import-airport-osm.ts --target=bun --outdir=dist --sourcemap=linked --minify && bun build src/import-airport-runways.ts --target=bun --outdir=dist --sourcemap=linked --minify"
   },
   "dependencies": {
     "@flytrace/airspace": "workspace:*",
