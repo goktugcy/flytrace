@@ -16,7 +16,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U flytrace -d flytrace']
+      # -h forces TCP; the socket answers during init while TCP is still closed.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U flytrace -d flytrace']
       interval: 5s
       timeout: 5s
       retries: 10

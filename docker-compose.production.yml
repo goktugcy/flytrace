@@ -78,7 +78,11 @@ services:
     networks: [internal]
     # NO published ports. Reach it with `docker compose exec postgres psql`.
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      # -h forces a TCP check. Without it pg_isready asks the UNIX socket, which
+      # the image's temporary init server answers while TCP is still closed —
+      # so the container reports healthy, the migration job starts, and it gets
+      # ECONNREFUSED.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
       interval: 10s
       timeout: 5s
       retries: 10

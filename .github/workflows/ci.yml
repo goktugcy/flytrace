@@ -77,7 +77,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U flytrace -d flytrace"
+          --health-cmd "pg_isready -h 127.0.0.1 -U flytrace -d flytrace"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:7-alpine
@@ -252,7 +252,7 @@ jobs:
             postgis/postgis:16-3.4
           docker run -d --name ci-redis --network ft-ci redis:7-alpine
           for i in $(seq 1 30); do
-            docker exec ci-pg pg_isready -U flytrace -d flytrace && break || sleep 2
+            docker exec ci-pg pg_isready -h 127.0.0.1 -U flytrace -d flytrace && break || sleep 2
           done
 
           echo "── the dedicated migration job runs once, before any app ──"
