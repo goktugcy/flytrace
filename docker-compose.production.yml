@@ -206,6 +206,16 @@ services:
       SECURITY_IP_STORAGE: ${SECURITY_IP_STORAGE:-prefix}
       CSP_MODE: ${CSP_MODE:-enforce}
       CSP_REPORT_URI: ${CSP_REPORT_URI:-/api/v1/security/csp-report}
+      # The CSP SOURCE lists. Without these the policy can never be widened:
+      # the code reads them, but a variable the container is never given is
+      # simply absent — so every external image, font or script host stays
+      # blocked with no configuration that can allow it.
+      CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
+      CSP_IMG_SRC: ${CSP_IMG_SRC:-}
+      CSP_SCRIPT_SRC: ${CSP_SCRIPT_SRC:-}
+      CSP_STYLE_SRC: ${CSP_STYLE_SRC:-}
+      CSP_FONT_SRC: ${CSP_FONT_SRC:-}
+      CSP_FRAME_SRC: ${CSP_FRAME_SRC:-}
       TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-false}
       TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
@@ -260,6 +270,16 @@ services:
       NODE_ENV: production
       CSP_MODE: ${CSP_MODE:-enforce}
       CSP_REPORT_URI: ${CSP_REPORT_URI:-/api/v1/security/csp-report}
+      # The CSP SOURCE lists. Without these the policy can never be widened:
+      # the code reads them, but a variable the container is never given is
+      # simply absent — so every external image, font or script host stays
+      # blocked with no configuration that can allow it.
+      CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
+      CSP_IMG_SRC: ${CSP_IMG_SRC:-}
+      CSP_SCRIPT_SRC: ${CSP_SCRIPT_SRC:-}
+      CSP_STYLE_SRC: ${CSP_STYLE_SRC:-}
+      CSP_FONT_SRC: ${CSP_FONT_SRC:-}
+      CSP_FRAME_SRC: ${CSP_FRAME_SRC:-}
     networks: [edge]
     depends_on:
       api: { condition: service_healthy }
