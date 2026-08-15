@@ -36,17 +36,40 @@ export function loadRootEnv(): void {
   const file = join(root, '.env');
   if (!existsSync(file)) return;
 
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
+  for (const [key, value] of Object.entries(parseEnvFile(readFileSync(file, 'utf8')))) {
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+/**
+ * Parse dotenv text into key/value pairs. Exported so the quoting rules are
+ * testable without touching process.env or the filesystem.
+ */
+export function parseEnvFile(contents: string): Record<string, string> {
+  const out: Record<string, string> = {};
+
+  for (const line of contents.split('\n')) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!match) continue;
     const key = match[1] as string;
-    let value = (match[2] ?? '').trim();
-    const quoted =
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"));
-    value = quoted ? value.slice(1, -1) : value.replace(/\s+#.*$/, '').trim();
-    if (process.env[key] === undefined) process.env[key] = value;
+    const raw = (match[2] ?? '').trim();
+
+    // A quoted value ends at its CLOSING quote, not at end-of-line: whatever
+    // follows is a trailing comment. Requiring the line to end with the quote
+    // silently kept the quotes on `KEY="v"  # note`, and they then travelled
+    // into URLs and headers as literal `"` characters. Quoting also has to
+    // survive a `#` inside the value — tokens and passwords contain one often
+    // enough that stripping from the first `#` corrupts them.
+    const quote = raw[0];
+    if (quote === '"' || quote === "'") {
+      const close = raw.indexOf(quote, 1);
+      out[key] = close === -1 ? raw.slice(1) : raw.slice(1, close);
+    } else {
+      out[key] = raw.replace(/\s+#.*$/, '').trim();
+    }
   }
+
+  return out;
 }
 
 const boolish = z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1');
