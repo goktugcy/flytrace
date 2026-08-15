@@ -341,6 +341,27 @@ jobs:
       cancel-in-progress: false
     environment: production
     steps:
+      - name: Check deploy secrets
+        # Without this a missing secret becomes `ssh "@"`, which prints ssh's
+        # usage text and exit 255 — a failure that says nothing about the cause.
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          missing=""
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_HOST_KEY; do
+            [ -n "${!name:-}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository or environment secrets:$missing"
+            echo "::error::Add them under Settings → Secrets and variables → Actions."
+            echo "::error::If they are Environment secrets they must live in the 'production' environment."
+            exit 1
+          fi
+          echo "all four deploy secrets are present"
+
       - name: Configure SSH
         run: |
           install -m 700 -d ~/.ssh
@@ -353,15 +374,17 @@ jobs:
 
       - name: Deploy
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
+          # Not USER/HOST: the runner already defines USER, and shadowing a
+          # standard variable makes an empty secret hard to spot.
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           SHA: ${{ github.sha }}
         run: |
           # The heredoc is QUOTED, so nothing expands on the runner; the commit
           # sha travels as an environment variable instead. Mixing the two sides
           # in one unquoted heredoc is how deploy scripts end up running the
           # runner's idea of a path against the server.
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" \
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
             "SHA='$SHA' bash -euo pipefail -s" <<'EOF'
             cd /srv/flytrace
             DC="docker compose -f docker-compose.production.yml --env-file .env.production"
@@ -387,10 +410,10 @@ jobs:
 
       - name: Smoke test
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" bash -euo pipefail <<'EOF'
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" bash -euo pipefail <<'EOF'
             cd /srv/flytrace
             DC="docker compose -f docker-compose.production.yml --env-file .env.production"
             api_host=$(grep '^AUTH_URL=' .env.production | cut -d= -f2- | sed 's#https://##')
