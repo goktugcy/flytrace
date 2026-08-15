@@ -116,12 +116,20 @@ services:
       - --maxmemory-policy
       - noeviction
       # Disable the commands that make an accidental exposure catastrophic.
+      # The command name and its replacement are SEPARATE argv entries. Passing
+      # them as one string ('FLUSHALL ""') makes redis read a single quoted
+      # token and abort at startup with "Bad directive or wrong number of
+      # arguments" — the container then restart-loops and every service that
+      # depends on it never starts.
       - --rename-command
-      - 'FLUSHALL ""'
+      - FLUSHALL
+      - ''
       - --rename-command
-      - 'FLUSHDB ""'
+      - FLUSHDB
+      - ''
       - --rename-command
-      - 'CONFIG ""'
+      - CONFIG
+      - ''
     volumes:
       - redisdata:/data
     networks: [internal]
