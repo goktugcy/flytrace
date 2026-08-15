@@ -264,6 +264,10 @@ services:
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:?NEXT_PUBLIC_WS_URL is required}
         NEXT_PUBLIC_TURNSTILE_ENABLED: ${NEXT_PUBLIC_TURNSTILE_ENABLED:-false}
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        # Inlined into the client bundle, so a style change needs a rebuild.
+        NEXT_PUBLIC_MAP_STYLE: ${NEXT_PUBLIC_MAP_STYLE:-}
+        NEXT_PUBLIC_MAP_STYLE_LIGHT: ${NEXT_PUBLIC_MAP_STYLE_LIGHT:-}
+        NEXT_PUBLIC_MAP_STYLE_DARK: ${NEXT_PUBLIC_MAP_STYLE_DARK:-}
         CSP_MODE: ${CSP_MODE:-enforce}
         APP_VERSION: ${IMAGE_TAG:-dev}
         GIT_SHA: ${GIT_SHA:-unknown}
@@ -284,6 +288,11 @@ services:
       CSP_STYLE_SRC: ${CSP_STYLE_SRC:-}
       CSP_FONT_SRC: ${CSP_FONT_SRC:-}
       CSP_FRAME_SRC: ${CSP_FRAME_SRC:-}
+      # The middleware adds the style's origin to img-src/connect-src at
+      # REQUEST time, so these must exist at runtime as well as at build time.
+      NEXT_PUBLIC_MAP_STYLE: ${NEXT_PUBLIC_MAP_STYLE:-}
+      NEXT_PUBLIC_MAP_STYLE_LIGHT: ${NEXT_PUBLIC_MAP_STYLE_LIGHT:-}
+      NEXT_PUBLIC_MAP_STYLE_DARK: ${NEXT_PUBLIC_MAP_STYLE_DARK:-}
     networks: [edge]
     depends_on:
       api: { condition: service_healthy }

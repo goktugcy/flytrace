@@ -48,7 +48,18 @@ function reportUri(apiUrl: string): string | undefined {
 function webCsp(n: string): string {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL || deriveWsUrl(apiUrl);
-  const mapStyle = process.env.NEXT_PUBLIC_MAP_STYLE || DEFAULT_MAP_STYLE;
+  // Every style the app can load, not just the legacy single variable:
+  // LiveMap picks _LIGHT or _DARK by theme, and a host missing from this
+  // list is blocked by CSP — the map then renders blank with no error
+  // beyond a console violation.
+  const mapStyles = [
+    process.env.NEXT_PUBLIC_MAP_STYLE,
+    process.env.NEXT_PUBLIC_MAP_STYLE_LIGHT,
+    process.env.NEXT_PUBLIC_MAP_STYLE_DARK,
+  ].filter(Boolean);
+  const mapOrigins = mapStyles.length
+    ? [...new Set(mapStyles.flatMap((u) => originOf(u)))]
+    : originOf(DEFAULT_MAP_STYLE);
   const turnstileEnabled =
     process.env.NEXT_PUBLIC_TURNSTILE_ENABLED === 'true' &&
     Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
@@ -59,11 +70,11 @@ function webCsp(n: string): string {
     connectSrc: [
       ...originOf(apiUrl),
       ...originOf(wsUrl),
-      ...originOf(mapStyle),
+      ...mapOrigins,
       ...csv(process.env.CSP_CONNECT_SRC),
       ...turnstileSources,
     ],
-    imgSrc: [...originOf(mapStyle), ...csv(process.env.CSP_IMG_SRC)],
+    imgSrc: [...mapOrigins, ...csv(process.env.CSP_IMG_SRC)],
     scriptSrc: [
       `'nonce-${n}'`,
       ...devScriptSources,

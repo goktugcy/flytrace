@@ -59,13 +59,18 @@ const WS_BASE = API_BASE.replace(/^http/, 'ws');
 // offline fallback so the map always renders even when tile CDNs are blocked by
 // ad/privacy extensions. NEXT_PUBLIC_MAP_STYLE_{LIGHT,DARK} override each style;
 // NEXT_PUBLIC_MAP_STYLE (legacy) overrides both.
+// `||`, not `??`: the container build declares these as empty ARGs, so they
+// arrive as "" rather than undefined. `??` treats "" as a real value, MapLibre
+// is handed an empty style URL, and the basemap silently never loads — the
+// aircraft and airspace layers still draw, so it looks like a styling problem
+// rather than a missing style. An empty string is not a usable URL here.
 const REMOTE_STYLE_DARK =
-  process.env.NEXT_PUBLIC_MAP_STYLE_DARK ??
-  process.env.NEXT_PUBLIC_MAP_STYLE ??
+  process.env.NEXT_PUBLIC_MAP_STYLE_DARK ||
+  process.env.NEXT_PUBLIC_MAP_STYLE ||
   'https://tiles.openfreemap.org/styles/dark';
 const REMOTE_STYLE_LIGHT =
-  process.env.NEXT_PUBLIC_MAP_STYLE_LIGHT ??
-  process.env.NEXT_PUBLIC_MAP_STYLE ??
+  process.env.NEXT_PUBLIC_MAP_STYLE_LIGHT ||
+  process.env.NEXT_PUBLIC_MAP_STYLE ||
   'https://tiles.openfreemap.org/styles/liberty';
 const remoteStyleFor = (dark: boolean): string => (dark ? REMOTE_STYLE_DARK : REMOTE_STYLE_LIGHT);
 const WORLD_GEOJSON_URL = '/geo/world.json';
