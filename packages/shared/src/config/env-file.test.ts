@@ -36,6 +36,18 @@ describe('parseEnvFile', () => {
     expect(parseEnvFile('A=')).toEqual({ A: '' });
   });
 
+  test('an empty value followed by a comment stays empty', () => {
+    // The `.env.example` shape: `KEY=        # what to put here`. Returning the
+    // comment made a cookie domain or an encryption key silently become the
+    // words describing it, and the "is it set?" fallbacks never fired.
+    expect(parseEnvFile('A=        # optional; falls back to AUTH_SECRET')).toEqual({ A: '' });
+    expect(parseEnvFile('A=#no-space-either')).toEqual({ A: '' });
+  });
+
+  test('a value that genuinely starts with # must be quoted', () => {
+    expect(parseEnvFile('A="#literal-hash"')).toEqual({ A: '#literal-hash' });
+  });
+
   test('ignores comments and blank lines', () => {
     expect(parseEnvFile('# heading\n\nA=1\n   \nB=2')).toEqual({ A: '1', B: '2' });
   });

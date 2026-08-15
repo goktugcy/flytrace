@@ -65,7 +65,13 @@ export function parseEnvFile(contents: string): Record<string, string> {
       const close = raw.indexOf(quote, 1);
       out[key] = close === -1 ? raw.slice(1) : raw.slice(1, close);
     } else {
-      out[key] = raw.replace(/\s+#.*$/, '').trim();
+      // `#` starts a comment when it opens the value or follows whitespace.
+      // Anchoring on `^` matters: `KEY=   # note` is an EMPTY value, but the
+      // whitespace is gone by now, so a `\s+#` rule would miss it and hand back
+      // the comment as the value — which is how a cookie domain or an
+      // encryption key silently becomes the words describing it.
+      // A value that genuinely begins with `#` must be quoted.
+      out[key] = raw.replace(/(^|\s)#.*$/, '').trim();
     }
   }
 
