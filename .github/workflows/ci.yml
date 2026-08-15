@@ -251,9 +251,17 @@ jobs:
             -e POSTGRES_USER=flytrace -e POSTGRES_PASSWORD=flytrace -e POSTGRES_DB=flytrace \
             postgis/postgis:16-3.4
           docker run -d --name ci-redis --network ft-ci redis:7-alpine
+          pg_ready=0
           for i in $(seq 1 30); do
-            docker exec ci-pg pg_isready -U flytrace -d flytrace && break || sleep 2
+            if docker run --rm --network ft-ci -e PGPASSWORD=flytrace \
+              postgis/postgis:16-3.4 \
+              pg_isready -h ci-pg -U flytrace -d flytrace; then
+              pg_ready=1
+              break
+            fi
+            sleep 2
           done
+          test "$pg_ready" -eq 1 || { echo "Postgres did not become ready in time"; docker logs ci-pg; exit 1; }
 
           echo "── the dedicated migration job runs once, before any app ──"
           docker run --rm --network ft-ci \
