@@ -1,30 +1,5 @@
-import { buildCsp } from '@flytrace/shared/security';
+import { webCsp } from '@/lib/csp';
 import { type NextRequest, NextResponse } from 'next/server';
-
-const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
-const DEFAULT_API_URL = 'http://localhost:3001';
-const DEFAULT_MAP_STYLE = 'https://tiles.openfreemap.org/styles/dark';
-const DEFAULT_CSP_REPORT_PATH = '/api/v1/security/csp-report';
-
-function csv(value: string | undefined): string[] {
-  return (value ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function originOf(value: string | undefined): string[] {
-  if (!value) return [];
-  try {
-    return [new URL(value).origin];
-  } catch {
-    return [];
-  }
-}
-
-function deriveWsUrl(apiUrl: string): string {
-  return apiUrl.replace(/^http/, 'ws');
-}
 
 function nonce(): string {
   const bytes = new Uint8Array(16);
@@ -36,56 +11,6 @@ function cspHeaderName(mode: string | undefined): string | null {
   if (mode === 'report-only') return 'Content-Security-Policy-Report-Only';
   if (mode === 'enforce') return 'Content-Security-Policy';
   return null;
-}
-
-function reportUri(apiUrl: string): string | undefined {
-  const configured = process.env.CSP_REPORT_URI || DEFAULT_CSP_REPORT_PATH;
-  if (/^https?:\/\//i.test(configured)) return configured;
-  if (configured.startsWith('/')) return `${new URL(apiUrl).origin}${configured}`;
-  return configured;
-}
-
-function webCsp(n: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL;
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || deriveWsUrl(apiUrl);
-  // Every style the app can load, not just the legacy single variable:
-  // LiveMap picks _LIGHT or _DARK by theme, and a host missing from this
-  // list is blocked by CSP — the map then renders blank with no error
-  // beyond a console violation.
-  const mapStyles = [
-    process.env.NEXT_PUBLIC_MAP_STYLE,
-    process.env.NEXT_PUBLIC_MAP_STYLE_LIGHT,
-    process.env.NEXT_PUBLIC_MAP_STYLE_DARK,
-  ].filter(Boolean);
-  const mapOrigins = mapStyles.length
-    ? [...new Set(mapStyles.flatMap((u) => originOf(u)))]
-    : originOf(DEFAULT_MAP_STYLE);
-  const turnstileEnabled =
-    process.env.NEXT_PUBLIC_TURNSTILE_ENABLED === 'true' &&
-    Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
-  const turnstileSources = turnstileEnabled ? [TURNSTILE_ORIGIN] : [];
-  const devScriptSources = process.env.NODE_ENV === 'production' ? [] : ["'unsafe-eval'"];
-
-  return buildCsp({
-    connectSrc: [
-      ...originOf(apiUrl),
-      ...originOf(wsUrl),
-      ...mapOrigins,
-      ...csv(process.env.CSP_CONNECT_SRC),
-      ...turnstileSources,
-    ],
-    imgSrc: [...mapOrigins, ...csv(process.env.CSP_IMG_SRC)],
-    scriptSrc: [
-      `'nonce-${n}'`,
-      ...devScriptSources,
-      ...csv(process.env.CSP_SCRIPT_SRC),
-      ...turnstileSources,
-    ],
-    styleSrc: csv(process.env.CSP_STYLE_SRC),
-    fontSrc: csv(process.env.CSP_FONT_SRC),
-    frameSrc: [...csv(process.env.CSP_FRAME_SRC), ...turnstileSources],
-    reportUri: reportUri(apiUrl),
-  });
 }
 
 export function middleware(req: NextRequest) {
