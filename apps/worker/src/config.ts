@@ -48,29 +48,38 @@ const workerSchema = z.object({
         .filter(Boolean),
     ),
   /** Base URL per provider key, JSON map (compliance/legal basis; §8.9). */
-  WORKER_PROVIDER_STATUS_URLS: z
-    .string()
-    .default('{}')
-    .transform((v, ctx) => {
-      try {
-        return JSON.parse(v) as Record<string, string>;
-      } catch {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
-        return z.NEVER;
-      }
-    }),
+  // emptyToUndefined first: a container materialises an unset variable as "",
+  // and "" is not parseable JSON. Without it the worker refuses to boot the
+  // moment compose passes the key through with no value.
+  WORKER_PROVIDER_STATUS_URLS: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .default('{}')
+      .transform((v, ctx) => {
+        try {
+          return JSON.parse(v) as Record<string, string>;
+        } catch {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
+          return z.NEVER;
+        }
+      }),
+  ),
   /** Per-provider priority for airline-IATA conflicts (higher wins), JSON map. */
-  WORKER_PROVIDER_PRIORITY: z
-    .string()
-    .default('{}')
-    .transform((v, ctx) => {
-      try {
-        return JSON.parse(v) as Record<string, number>;
-      } catch {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
-        return z.NEVER;
-      }
-    }),
+  WORKER_PROVIDER_PRIORITY: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .default('{}')
+      .transform((v, ctx) => {
+        try {
+          return JSON.parse(v) as Record<string, number>;
+        } catch {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object' });
+          return z.NEVER;
+        }
+      }),
+  ),
   WORKER_PROVIDER_FETCH_SCOPE: z.enum(['watched', 'all']).default('watched'),
   AERODATABOX_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   AERODATABOX_MARKETPLACE: z.preprocess(
