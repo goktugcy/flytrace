@@ -10,7 +10,7 @@ import { ErrorState } from '@/components/ui/states';
 import { contiguousTrailToAnchor } from '@/lib/flight-trail';
 import { useT } from '@/lib/i18n';
 import { saveLiveFlightDetail } from '@/lib/live-detail-cache';
-import { type FocusTarget, readFocusFromUrl, registerMapFocus } from '@/lib/map-focus';
+import { type FocusTarget, readFocusFromUrl, registerMapFocus, tryFocus } from '@/lib/map-focus';
 import { cn } from '@/lib/utils';
 import { WeatherFieldController, type WeatherMetric } from '@/lib/weather-field';
 import { translateWeatherCondition, translateWeatherSeverity } from '@/lib/weather-i18n';
@@ -22,6 +22,8 @@ import {
   Layers,
   LocateFixed,
   Plane,
+  PlaneLanding,
+  PlaneTakeoff,
   RadioTower,
   Thermometer,
   TowerControl,
@@ -586,6 +588,26 @@ interface AirportPhoto {
   source: string;
 }
 
+/** One aircraft observed taking off from, or landing at, the selected airport. */
+interface AirportMovement {
+  flightId: string;
+  icao24: string | null;
+  callsign: string | null;
+  runwayRef: string | null;
+  /** Position at the moment of the transition; the fallback when it is no longer live. */
+  lat: number | null;
+  lon: number | null;
+  occurredAt: string;
+}
+
+interface AirportMovements {
+  departures: AirportMovement[];
+  arrivals: AirportMovement[];
+  windowHours: number;
+  /** False when the airport has no imported OSM geometry, so nothing can be classified. */
+  hasGeometry: boolean;
+}
+
 interface AirportDetail {
   id: string;
   iata: string | null;
@@ -850,6 +872,10 @@ export function LiveMap() {
     'idle',
   );
   const [selAirport, setSelAirport] = useState<AirportDetail | null>(null);
+  const [movements, setMovements] = useState<AirportMovements | null>(null);
+  const [movementsStatus, setMovementsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
   const [selectedAirportStatus, setSelectedAirportStatus] = useState<
     'idle' | 'loading' | 'ready' | 'error'
   >('idle');
@@ -1760,6 +1786,8 @@ export function LiveMap() {
       setSel(null);
       setRoute(null);
       setSelAirport(null);
+      setMovements(null);
+      setMovementsStatus('idle');
       setSelectedAirportStatus('loading');
       try {
         const res = await fetch(`${API_BASE}/api/v1/airports/id/${encodeURIComponent(id)}`);
@@ -1768,6 +1796,27 @@ export function LiveMap() {
         if (seq !== airportDetailSeqRef.current) return;
         setSelAirport(data);
         setSelectedAirportStatus('ready');
+
+        // Loaded after the header, and allowed to fail on its own: an airport
+        // with no ground geometry has no movements, and that must not blank the
+        // card that did load fine.
+        if (data.icao) {
+          setMovementsStatus('loading');
+          void fetch(`${API_BASE}/api/v1/airport/${encodeURIComponent(data.icao)}/movements`)
+            .then(async (r) => {
+              if (!r.ok) throw new Error(`movements ${r.status}`);
+              return ((await r.json()) as { data: AirportMovements }).data;
+            })
+            .then((m) => {
+              if (seq !== airportDetailSeqRef.current) return;
+              setMovements(m);
+              setMovementsStatus('ready');
+            })
+            .catch(() => {
+              if (seq !== airportDetailSeqRef.current) return;
+              setMovementsStatus('error');
+            });
+        }
       } catch {
         if (seq !== airportDetailSeqRef.current) return;
         setSelAirport(null);
@@ -2900,6 +2949,23 @@ export function LiveMap() {
                 />
               </div>
 
+              <MovementsSection
+                status={movementsStatus}
+                data={movements}
+                onPick={(m) => {
+                  // The same bridge the search box uses: it flies to the live
+                  // aircraft when we still track it, and otherwise falls back to
+                  // where it left the ground.
+                  tryFocus({
+                    flightId: m.flightId,
+                    icao24: m.icao24,
+                    callsign: m.callsign,
+                    lat: m.lat,
+                    lon: m.lon,
+                  });
+                }}
+              />
+
               <div className="mt-4 flex flex-wrap gap-2">
                 {selAirport.iata && (
                   <Link
@@ -2933,6 +2999,117 @@ export function LiveMap() {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Relative age, e.g. "12 dk" — a board is about recency, not clock times. */
+function sinceLabel(iso: string): string {
+  const min = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  if (!Number.isFinite(min)) return '—';
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  return `${h}h ${min % 60}m`;
+}
+
+/**
+ * Aircraft observed leaving or touching down at the selected airport.
+ *
+ * These are OBSERVED movements, not a schedule: ADS-B carries no route, so the
+ * only honest source is the ground state machine watching aircraft cross the
+ * runway. That also bounds what can be shown — an airport with no imported
+ * geometry classifies nothing, and the empty state says so rather than
+ * implying the airport is quiet.
+ */
+function MovementsSection({
+  status,
+  data,
+  onPick,
+}: {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  data: AirportMovements | null;
+  onPick: (m: AirportMovement) => void;
+}) {
+  const t = useT();
+
+  if (status === 'loading' || status === 'idle') {
+    return (
+      <div className="mt-4 space-y-1.5">
+        <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+        <div className="h-7 animate-pulse rounded bg-muted" />
+        <div className="h-7 animate-pulse rounded bg-muted" />
+      </div>
+    );
+  }
+  if (status === 'error' || !data) {
+    return <p className="mt-4 text-xs text-muted-foreground">{t('map.airport.movements.error')}</p>;
+  }
+
+  const total = data.departures.length + data.arrivals.length;
+  if (total === 0) {
+    return (
+      <p className="mt-4 text-xs text-muted-foreground">
+        {data.hasGeometry
+          ? t('map.airport.movements.empty').replace('{h}', String(data.windowHours))
+          : t('map.airport.movements.noGeometry')}
+      </p>
+    );
+  }
+
+  const row = (m: AirportMovement, kind: 'dep' | 'arr') => (
+    <button
+      key={`${kind}-${m.flightId}`}
+      type="button"
+      onClick={() => onPick(m)}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-secondary/60"
+    >
+      {kind === 'dep' ? (
+        <PlaneTakeoff className="size-3.5 shrink-0 text-muted-foreground" />
+      ) : (
+        <PlaneLanding className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+      <span className="min-w-0 flex-1 truncate font-medium">
+        {m.callsign?.trim() || m.icao24?.toUpperCase() || '—'}
+      </span>
+      {m.runwayRef && (
+        <span className="shrink-0 text-muted-foreground">
+          {t('map.airport.runway')} {m.runwayRef}
+        </span>
+      )}
+      <span className="shrink-0 tabular-nums text-muted-foreground">
+        {sinceLabel(m.occurredAt)}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-baseline justify-between">
+        <p className="text-xs font-medium">{t('map.airport.movements')}</p>
+        <p className="text-[10px] text-muted-foreground">{t('map.airport.movements.hint')}</p>
+      </div>
+
+      {data.departures.length > 0 && (
+        <div className="mt-1.5">
+          <p className="px-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t('map.airport.departures')} · {data.departures.length}
+          </p>
+          <div className="mt-0.5 max-h-32 overflow-y-auto">
+            {data.departures.map((m) => row(m, 'dep'))}
+          </div>
+        </div>
+      )}
+
+      {data.arrivals.length > 0 && (
+        <div className="mt-2">
+          <p className="px-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t('map.airport.arrivals')} · {data.arrivals.length}
+          </p>
+          <div className="mt-0.5 max-h-32 overflow-y-auto">
+            {data.arrivals.map((m) => row(m, 'arr'))}
           </div>
         </div>
       )}

@@ -171,5 +171,41 @@ export function createAirportOpsRoutes(ctx: AppContext): Hono<AppEnv> {
     return ok(c, { operations: await groundEvents.recentForAirport(airport.id, limit) });
   });
 
+  /**
+   * Aircraft that actually took off from, or landed at, this airport.
+   *
+   * Derived from observed ground transitions, not from a schedule: ADS-B
+   * telemetry carries no route, so `flights.origin_airport_id` is empty unless a
+   * commercial provider fills it. What the tracker CAN see is an aircraft
+   * leaving the runway here, and that is what this reports.
+   *
+   * Each row carries icao24 and the position at the moment of the transition,
+   * so the client can point the map at the aircraft — at its live position if it
+   * is still being tracked, otherwise at where it left the ground.
+   */
+  app.get('/airport/:icao/movements', async (c) => {
+    const airport = await requireAirport(c.req.param('icao'));
+    const limit = Math.min(Number(c.req.query('limit') ?? 20) || 20, 100);
+    const hours = Math.min(Number(c.req.query('hours') ?? 6) || 6, 48);
+    const sinceMs = hours * 60 * 60 * 1000;
+
+    const [departures, arrivals] = await Promise.all([
+      groundEvents.movementsForAirport(airport.id, 'departure', { sinceMs, limit }),
+      groundEvents.movementsForAirport(airport.id, 'arrival', { sinceMs, limit }),
+    ]);
+
+    return ok(c, {
+      icao: airport.icao,
+      windowHours: hours,
+      departures,
+      arrivals,
+      // Takeoff/landing detection needs RUNWAY geometry specifically — an
+      // airport with only aprons or terminals imported classifies nothing.
+      // Reporting it lets the client explain an empty list instead of implying
+      // the airport is quiet.
+      hasGeometry: (await ground.byAirportId(airport.id)).some((g) => g.kind === 'runway'),
+    });
+  });
+
   return app;
 }
